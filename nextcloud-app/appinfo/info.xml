@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<info xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://apps.nextcloud.com/schema/apps/info.xsd">
+    <id>apple_photos_connector</id>
+    <name>Apple Photos Connector</name>
+    <summary>Import Apple Photos originals and synchronize albums</summary>
+    <description>Registers Apple Photos sources, tracks original uploads through WebDAV, and synchronizes albums with Nextcloud Photos in a separate step. Files and missing source memberships are not automatically deleted.</description>
+    <version>0.8.0</version>
+    <commands>
+        <command>OCA\ApplePhotosConnector\Command\AlbumTestResolveCommand</command>
+        <command>OCA\ApplePhotosConnector\Command\AlbumTestAddMembershipCommand</command>
+        <command>OCA\ApplePhotosConnector\Command\AlbumSyncCommand</command>
+    </commands>
+    <licence>agpl</licence>
+    <author>Frank Kettenbeil</author>
+    <namespace>ApplePhotosConnector</namespace>
+    <category>multimedia</category>
+    <dependencies>
+        <php min-version="8.2"/>
+        <nextcloud min-version="34" max-version="34"/>
+    </dependencies>
+</info>

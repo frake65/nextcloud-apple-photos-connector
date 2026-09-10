@@ -1,0 +1,9 @@
+{
+  "name": "apple-photos-connector/nextcloud-app",
+  "description": "Source registration and asset inventory for Nextcloud",
+  "type": "project",
+  "license": "AGPL-3.0-or-later",
+  "require": {"php": ">=8.2"},
+  "autoload": {"psr-4": {"OCA\\ApplePhotosConnector\\": "lib/"}},
+  "scripts": {"test": "php tests/run.php", "lint": "php tests/lint.php"}
+}

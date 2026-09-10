@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Durable upload reservation request 0.3.0",
+  "type": "object",
+  "required": ["sourceId", "runId", "uploadId", "bytes", "sha256"],
+  "properties": {
+    "sourceId": {"type": "string", "format": "uuid"},
+    "runId": {"type": "string", "format": "uuid"},
+    "uploadId": {"type": "string", "format": "uuid"},
+    "bytes": {"type": "integer", "minimum": 0},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

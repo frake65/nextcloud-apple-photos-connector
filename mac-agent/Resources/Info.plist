@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleExecutable</key>
+	<string>MacAgent</string>
+	<key>CFBundleIdentifier</key>
+	<string>de.applephotosconnector.macagent</string>
+	<key>CFBundleName</key>
+	<string>Nextcloud APC</string>
+	<key>CFBundleGetInfoString</key>
+	<string>Nextcloud APC — Autor: Frank Kettenbeil</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>© 2026 Frank Kettenbeil</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.7.4</string>
+	<key>CFBundleVersion</key>
+	<string>3</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Der Connector inventarisiert Fotos und Videos und exportiert auf deinen Upload-Befehl Originalressourcen nach Nextcloud. Die Mediathek wird nicht verändert.</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>de</string>
+		<string>fr</string>
+		<string>pt</string>
+		<string>nl</string>
+		<string>es</string>
+	</array>
+</dict>
+</plist>

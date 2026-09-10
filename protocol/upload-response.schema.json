@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Upload acknowledgement response 0.3.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["runId", "uploadId", "status", "summary"],
+  "properties": {
+    "runId": {"type": "string", "format": "uuid"},
+    "uploadId": {"type": "string", "format": "uuid"},
+    "status": {"enum": ["uploaded", "failed"]},
+    "summary": {
+      "type": "object", "additionalProperties": false, "required": ["uploaded", "failed"],
+      "properties": {"uploaded": {"type": "integer", "minimum": 0}, "failed": {"type": "integer", "minimum": 0}}
+    }
+  }
+}

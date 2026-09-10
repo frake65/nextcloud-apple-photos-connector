@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Apple Photos Connector inventory controller error v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["error"],
+  "properties": {
+    "error": {"type": "string"},
+    "runId": {"type": "string", "format": "uuid"}
+  }
+}

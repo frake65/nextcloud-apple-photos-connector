@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Apple Photos Connector inventory request v1",
+  "type": "object",
+  "required": ["source", "assets"],
+  "properties": {
+    "source": {
+      "type": "object",
+      "required": ["sourceId", "name"],
+      "properties": {
+        "sourceId": {"type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"},
+        "name": {"type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[^\\u0000]+$", "x-maxBytes": 255},
+        "createdAt": {"$ref": "#/$defs/date"}
+      }
+    },
+    "assets": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "type": "object",
+        "required": ["localIdentifier", "mediaType"],
+        "properties": {
+          "localIdentifier": {"type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^[^\\u0000]+$", "x-maxBytes": 4096},
+          "cloudIdentifier": {"type": ["string", "null"], "minLength": 1, "maxLength": 16384, "pattern": "^[^\\u0000]+$", "x-maxBytes": 16384},
+          "filename": {"type": ["string", "null"], "minLength": 1, "maxLength": 4096, "pattern": "^[^\\u0000]+$", "x-maxBytes": 4096},
+          "mediaType": {"enum": ["image", "video", "audio", "unknown"]},
+          "creationDate": {"$ref": "#/$defs/date"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "date": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,6})?(?:Z|[+-]\\d{2}:\\d{2})$"
+    }
+  }
+}

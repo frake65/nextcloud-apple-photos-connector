@@ -1,0 +1,11 @@
+.DS_Store
+.build/
+**/.build/
+*.log
+dist-test*/
+DerivedData/
+.swiftpm/
+xcuserdata/
+*.xcuserstate
+mac-agent/dist/
+mac-agent/.build/

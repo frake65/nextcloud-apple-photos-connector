@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Upload acknowledgement 0.3.0",
+  "type": "object",
+  "required": ["sourceId", "runId", "uploadId", "status"],
+  "properties": {
+    "sourceId": {"type": "string", "format": "uuid"},
+    "runId": {"type": "string", "format": "uuid"},
+    "uploadId": {"type": "string", "format": "uuid"},
+    "status": {"enum": ["uploaded", "failed"]},
+    "path": {"type": ["string", "null"]}
+  },
+  "allOf": [{
+    "if": {"properties": {"status": {"const": "uploaded"}}},
+    "then": {"required": ["path"], "properties": {"path": {"type": "string", "pattern": "^Photos/Apple Photos Connector/[^/]+$"}}}
+  }]
+}

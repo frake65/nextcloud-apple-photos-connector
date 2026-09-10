@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Durable upload reservation response 0.3.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["assetId", "path", "bytes", "sha256", "state"],
+  "properties": {
+    "assetId": {"type": "string", "pattern": "^[1-9][0-9]*$"},
+    "path": {"type": "string", "pattern": "^Photos/Apple Photos Connector/[^/]+$"},
+    "bytes": {"type": "integer", "minimum": 0},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "state": {"enum": ["missing", "present"]}
+  }
+}
