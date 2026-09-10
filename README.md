@@ -1,35 +1,82 @@
-# Apple Photos Connector
+# Nextcloud Apple Photos Connector
 
-Überträgt Originalfotos und -videos aus Apple Fotos nach Nextcloud und gleicht Alben in einem separaten Vorgang ab. Der Server verwaltet die maßgebliche Import-Historie. Dateien werden nicht automatisch gelöscht; fehlende Quelldaten entfernen keine Album-Mitgliedschaften.
+English | [Deutsch](README.de.md)
 
-## Projektaufbau
+## What is it?
 
-| Verzeichnis | Inhalt | Einstieg |
-| --- | --- | --- |
-| `mac-agent/` | SwiftUI-App, PhotoKit-Scan, Originalexport und WebDAV-Upload | [Client-Dokumentation](mac-agent/README.md) |
-| `nextcloud-app/` | PHP-App, Inventar, Upload-Ziele und Album-Abgleich | [Server-Dokumentation](nextcloud-app/README.md) |
-| `protocol/` | API-Beschreibung und JSON-Schemas | [Protokoll](protocol/README.md) |
+A safe, non-destructive Apple Photos importer for Nextcloud with incremental uploads, album preservation and stable asset identities.
 
-Stand des Quellcodes am 10. September 2026: Client-Bundle-Version 0.7.4, Server-App-Metadaten 0.8.0, API v1. Diese Angaben stammen aus den Quelldateien und bestätigen nicht den Versionsstand vorhandener Binärdateien.
+## Key principles
 
-## Ausgangszustand
+- PhotoKit is read locally by the macOS agent.
+- The server keeps the authoritative import history.
+- Selection determines inventory; the server determines transfer.
+- Stable Asset Identity is used instead of filenames.
+- Multiple Sources remain isolated.
+- Existing Nextcloud files are never overwritten automatically.
+- Missing Apple Photos assets do not delete Nextcloud files or album memberships.
+- WebDAV carries binary files; Photos database internals are not required.
 
-Für den aktuellen Stand wird die Server-App vollständig frisch eingerichtet: Connector-Tabellen, Import-Historie, Reservierungen und Album-Zuordnungen beginnen leer. Upgrade-Pfade und Datenübernahmen aus früheren Entwicklungsständen sind nicht Bestandteil der Dokumentation. Siehe [Serverinstallation](nextcloud-app/README.md) und [Client-Neustart](mac-agent/README.md#verbindung-zum-frisch-eingerichteten-server).
+## Architecture
 
-## Ablauf
+| Component | Responsibility |
+| --- | --- |
+| `mac-agent/` | SwiftUI app, PhotoKit selection, inventory, original export and WebDAV transport |
+| `nextcloud-app/` | PHP app, inventory history, upload targets, tickets and album membership |
+| `protocol/` | JSON schemas and the shared API contract |
 
-1. Die macOS-App mit Nextcloud verbinden und Zugriff auf Apple Fotos erteilen.
-2. Die gesamte Mediathek oder ausgewählte Alben als Importumfang festlegen.
-3. Inventar senden; der Server fordert benötigte Originale an.
-4. Upload-Ziel reservieren, Original bedingt per WebDAV übertragen und bestätigen. Wiederholungen verwenden gespeicherte Reservierungen und lokale Bestätigungsquittungen.
-5. Alben separat inventarisieren und abgleichen. Nur bereits importierte Dateien können in Nextcloud-Alben aufgenommen werden.
+Album Membership and file transfer are separate operations. Album names are not identities; Source and Asset identities remain stable across retries.
 
-Cloud-Identifier haben Vorrang vor lokalen Identitäten. Datei- und Albumnamen sind keine Identifikatoren. Unterschiedliche Benutzer und Sources werden getrennt behandelt.
+## Current status
 
-## Entwicklung und Artefakte
+APC 0.8.0 is a development milestone. The current local verification includes one successful manual flow:
 
-Die [Projektregeln](AGENTS.md) gelten für alle Module. `ChatGPT.md` enthält einen früheren UI-Arbeitsauftrag, keine aktuelle Funktionsreferenz.
+Apple Photos → PhotoKit selection → Stable Identity → Inventory → upload ticket → original export → Prepare → WebDAV PUT → Complete → file at the configured Nextcloud Target Root.
 
-`mac-agent/dist/` enthält vorhandene Release-Artefakte. `mac-agent/.build/` und `.build/` sind lokale Build-/Cache-Verzeichnisse. Alte experimentelle `mac-agent/dist-test*`-Bundles wurden bei der Dokumentationspflege entfernt; Quellcode, Tests und Release-Artefakte bleiben erhalten.
+Automated verification: Swift **60/60 PASS** and PHP/SQLite tests **PASS**. This is not a claim of production readiness. Multi-Source operation, album synchronization, re-inventory and retarget behavior remain documented and tested locally, while broader deployment validation is still required.
 
-PHP-Syntaxprüfung und eigenständige SQLite-Tests liefen am 10. September 2026 erfolgreich. Das ist kein Nachweis für eine echte Nextcloud-Installation; die vollständige aktuelle Schema-Initialisierung ist lokal nicht abgedeckt. Swift- und Integrationstests wurden bei dieser Dokumentationspflege nicht ausgeführt.
+## Albums
+
+Album inventory and synchronization are supported as a separate step. Membership is source-aware and idempotent. Missing source data is not treated as a delete request, and folders are not created as Photos albums.
+
+## Requirements
+
+- macOS 14 or newer
+- Xcode/Swift 6 for development
+- Nextcloud with the APC server app and HTTPS
+- A Nextcloud App Password for the client
+- Apple Photos access granted to the macOS app
+
+## Installation
+
+The repository contains the client, server app and protocol reference. Follow [server documentation](nextcloud-app/README.md), [macOS documentation](mac-agent/README.md) and [protocol documentation](protocol/README.md). Use a fresh Connector state for development validation; upgrade paths from earlier experiments are outside this milestone.
+
+## Development
+
+```sh
+cd mac-agent
+CONFIGURATION=debug bash build-app.sh
+CLANG_MODULE_CACHE_PATH="$PWD/.build/clang-module-cache" swift test --disable-sandbox
+```
+
+The PHP/SQLite suite runs with `php nextcloud-app/tests/run.php`. No command above requires a live server.
+
+## Documentation
+
+- [macOS agent](mac-agent/README.md)
+- [Nextcloud app](nextcloud-app/README.md)
+- [Protocol](protocol/README.md)
+- [Upload flow](protocol/uploads.md)
+
+Historical development and test reports remain in `docs/`; they are not normative API documentation.
+
+## Roadmap
+
+- Broader manual validation across multiple Sources and libraries
+- More complete Photos album interoperability validation
+- Packaging, distribution and installation documentation
+- Upstream discussion of a generic external-photo-source abstraction
+
+## Project status
+
+The project is an active development prototype. The documented safeguards and local tests are part of the current design; deployment, migration and operational support require additional validation.
