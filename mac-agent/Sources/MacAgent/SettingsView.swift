@@ -108,6 +108,8 @@ struct ConnectorSettingsView: View {
         } message: {
             Text(L10n.text("disconnectConfirmationMessage"))
         }
+        .background(SettingsWindowObserver())
+        .onAppear { SettingsWindowLifecycle.shared.prepareToOpen() }
     }
     private func applyTargetPath(_ path: String) {
         targetPath = path

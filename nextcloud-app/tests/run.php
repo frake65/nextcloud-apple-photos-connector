@@ -39,4 +39,6 @@ require __DIR__ . '/ticket-lifecycle.php';
 retargetScenarios();
 ticketLifecycleScenarios();
 retargetRaceScenario();
+require __DIR__ . '/historical-reservations.php';
+historicalReservationScenarios();
 echo "All standalone SQLite tests passed.\n";

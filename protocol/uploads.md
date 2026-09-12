@@ -91,7 +91,7 @@ Ein neues Ziel wird nur serverseitig für einen fehlenden oder nachweislich wied
 
 ## Aktuelle Client-Erweiterungen
 
-Der Client verarbeitet höchstens drei Upload-Aufträge parallel. `uploads/prepare` erhält zusätzlich `folder`: den konfigurierten Basisordner mit Jahres-/Monatsunterordner. Der Server liefert den verbindlichen vollständigen Zielpfad zurück; die oben gezeigten JSON-Pfade sind vereinfachte Beispiele. Bestehende Reservierungen werden bei einem neuen Ordnerwunsch nicht automatisch verlegt.
+Der Client verarbeitet höchstens drei Upload-Aufträge parallel. `uploads/prepare` erhält zusätzlich `folder`: den konfigurierten Basisordner mit Jahres-/Monatsunterordner. Der Server liefert den verbindlichen vollständigen Zielpfad zurück; die oben gezeigten JSON-Pfade sind vereinfachte Beispiele. Aktive Tickets und nachweislich recoverbare vorhandene Dateien behalten ihre Reservierung. Eine historische, fehlende Reservierung aus einem abgeschlossenen oder fehlgeschlagenen Lauf darf einen abweichenden neuen Ordnerwunsch nicht dauerhaft überschreiben; in diesem Fall wird ein neues Ziel reserviert, während das alte Target als Historie erhalten bleibt.
 
 Validierungsfehler können neben `error` ein maschinenlesbares `code` enthalten: `invalid_folder`, `content_changed`, `invalid_ticket`, `target_conflict`, `invalid_request` oder `unknown`. Die älteren JSON-Schemas bilden nicht alle aktuellen Erweiterungen ab.
 

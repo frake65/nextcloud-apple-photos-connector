@@ -3,6 +3,7 @@ declare(strict_types=1);
 namespace OCA\ApplePhotosConnector\Service;
 
 use OCA\ApplePhotosConnector\Db\InventoryRepository;
+use OCA\ApplePhotosConnector\Db\ImportRun;
 
 class UploadTargetService {
     public function __construct(private InventoryRepository $repository, private UploadedFileLocator $files, private ?UploadTicketPolicy $policy = null) {}
@@ -45,13 +46,24 @@ class UploadTargetService {
             if ($current && (!InventoryRepository::canRetarget($ticket) || $this->files->exists($user, $current['path']))) {
                 throw new \InvalidArgumentException('Retarget no longer authorized');
             }
-            // First reservation wins for this asset/current generation, also across runs.
-            // Newer reservations replace only conflicted pending paths, never historical current rows.
+            // Keep live bindings and recoverable files across runs, but do not
+            // let an inactive, missing reservation override a new destination.
+            // Selection is read-only: create folders only for the chosen target.
             $target = null;
             foreach ($this->repository->uploads($user, $source) as $other) {
                 if ((int)$other['asset_id'] !== $assetId || $other['target_id'] === null
                     || !InventoryRepository::sameTarget($current, $other['base_target_id'])) { continue; }
                 $candidate = $this->repository->target($user, $source, $assetId, (int)$other['target_id']);
+                $this->checkIdentity($candidate, $bytes, $sha256);
+                $active = $other['status'] === 'pending' && !$policy->expired((string)$other['created_at']);
+                if ($other['run_id'] !== $runId && !$active && dirname($candidate['path']) !== $folder) {
+                    if (!$this->files->exists($user, $candidate['path'])) { continue; }
+                    // A lost PUT/ACK may leave the original at the old path.
+                    // Unknown identity must abort; proven foreign content is
+                    // preserved but cannot pin this run to the old folder.
+                    $actual = $this->files->identity($user, $candidate['path']);
+                    if ($actual['bytes'] !== $bytes || !hash_equals($sha256, $actual['sha256'])) { continue; }
+                }
                 if (!$target || (int)$candidate['id'] > (int)$target['id']) { $target = $candidate; }
             }
             $filename = $ticket['filename'];
@@ -59,16 +71,16 @@ class UploadTargetService {
             if ($target) {
                 $this->checkIdentity($target, $bytes, $sha256);
                 $filename = $target['filename'];
-                // An existing reservation cannot be moved by changing the client setting.
+                // The selected live/recoverable reservation keeps its destination.
                 $folder = dirname($target['path']);
                 if (!$this->files->exists($user, $target['path'])) {
                     $this->files->ensureFolder($user, $folder);
-                    $this->bind($user, $uploadId, (int)$target['id']);
+                    $this->bind($user, $ticket, (int)$target['id']);
                     return $this->response($target, 'missing');
                 }
                 $actual = $this->files->identity($user, $target['path']);
                 if ($actual['bytes'] === $bytes && hash_equals($sha256, $actual['sha256'])) {
-                    $this->bind($user, $uploadId, (int)$target['id']);
+                    $this->bind($user, $ticket, (int)$target['id']);
                     return $this->response($target, 'present');
                 }
                 $attempt = (int)$target['attempt'] + 1;
@@ -80,15 +92,21 @@ class UploadTargetService {
                 $values = ['user_id' => $user, 'source_id' => $source, 'asset_id' => $assetId, 'filename' => $filename,
                     'path' => $path, 'path_key' => hash('sha256', $path), 'attempt' => $attempt, 'bytes' => $bytes, 'sha256' => $sha256];
                 $id = $this->repository->insertTarget($values);
-                $this->bind($user, $uploadId, $id);
+                $this->bind($user, $ticket, $id);
                 return $this->response($values, 'missing');
             }
             throw new \InvalidArgumentException('No free upload target');
         });
     }
 
-    private function bind(string $user, string $uploadId, int $targetId): void {
-        $this->repository->updateOwned('apc_uploads', $user, 'upload_id', $uploadId, ['target_id' => $targetId]);
+    private function bind(string $user, array $ticket, int $targetId): void {
+        $values = ['target_id' => $targetId];
+        if ($ticket['status'] === 'failed') {
+            // A successful prepare restarts this attempt. Protect the binding
+            // from competing runs while the client performs PUT/confirmation.
+            $values += ['status' => 'pending', 'created_at' => ImportRun::now()];
+        }
+        $this->repository->updateOwned('apc_uploads', $user, 'upload_id', $ticket['upload_id'], $values);
     }
 
     private function checkIdentity(array $target, int $bytes, string $sha256): void {

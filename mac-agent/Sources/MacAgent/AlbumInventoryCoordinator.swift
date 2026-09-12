@@ -9,6 +9,7 @@ actor AlbumInventoryCoordinator {
     struct SyncError: Decodable { let type: String?; let message: String? }
     private let transport: any DAVTransport = NetworkTransport()
     func run(scanner: PhotoLibraryScanner, connection: ConnectorConnection) async throws -> String {
+        try await SettingsWorkGate.shared.checkpoint()
         let document: AlbumInventoryDocument
         do { document = try await scanner.scanAlbums() } catch { throw UploadError.diagnostic("PhotoKit-Albumscan fehlgeschlagen: \(error)") }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -37,6 +38,7 @@ actor AlbumInventoryCoordinator {
         return "Album-Inventar: \(document.albums.count) Collections, \(cloud) mit Cloud-Identifier, \(document.albums.count - cloud) ohne, \(parents) Parent-Beziehungen, \(memberships) Memberships; Server: \(reply.count ?? document.albums.count) gespeichert."
     }
     func sync(scanner: PhotoLibraryScanner, connection: ConnectorConnection) async throws -> SyncResult {
+        try await SettingsWorkGate.shared.checkpoint()
         let sourceId = try await scanner.currentSourceId().uuidString.lowercased()
         let body = try JSONEncoder().encode(["sourceId": sourceId])
         var request = connection.request(path: ["index.php","apps","apple_photos_connector","api","v1","albums","sync"], method: "POST")

@@ -1,5 +1,6 @@
 import Foundation
 import Photos
+import InventoryCore
 
 /// Exports only the primary original resource. Live Photo companions and edits are out of scope.
 protocol PhotoOriginalExporting: Sendable {
@@ -13,6 +14,7 @@ actor PhotoOriginalExporter: PhotoOriginalExporting {
     }
 
     func export(localIdentifier: String) async throws -> Export {
+        try await SettingsWorkGate.shared.checkpoint()
         let fetched = PHAsset.fetchAssets(withLocalIdentifiers: [localIdentifier], options: nil)
         guard let asset = fetched.firstObject else { throw ExportError.unavailable }
         let type: PHAssetResourceType

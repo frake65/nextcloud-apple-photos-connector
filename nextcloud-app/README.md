@@ -48,6 +48,12 @@ Für den Prototyp wird das bestehende Inventar einer Source einmal pro Lauf gele
 
 Upload-Recovery verwendet dauerhaft gespeicherte Ziele. `POST /api/v1/uploads/prepare` reserviert bzw. prüft den Zielpfad anhand Byteanzahl und SHA-256. Derselbe Asset-Datensatz behält seinen Pfad über Runs und Client-Neustarts. Bestehende fremde Dateien werden übersprungen; unklare Prüfergebnisse führen zum Abbruch statt zu einem weiteren Dateinamen. Die Bestätigung prüft die tatsächlichen Bytes erneut. Details und Schemas im [Upload-Protokoll](../protocol/uploads.md).
 
+Beim Erzeugen eines Deployment-Archivs auf macOS müssen AppleDouble-Metadateien deaktiviert werden. Andernfalls können Dateien wie `._InventoryController.php` in die Nextcloud-App gelangen und als PHP-Klassen interpretiert werden. Beispiel:
+
+```sh
+COPYFILE_DISABLE=1 tar -czf /tmp/apple_photos_connector-deploy.tar.gz -C nextcloud-app .
+```
+
 ## Tests und statische Prüfungen
 
 Ohne Nextcloud, mit PHP 8.2+ und PDO SQLite:

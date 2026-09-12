@@ -41,6 +41,7 @@ actor PhotoLibraryScanner {
     }
 
     func scan() async throws -> Result {
+        try await SettingsWorkGate.shared.checkpoint()
         var status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         logger.info("photos.scan.authorization.status=\(String(describing: status.rawValue), privacy: .public)")
         if status == .notDetermined {
@@ -54,6 +55,7 @@ actor PhotoLibraryScanner {
         default: throw ScanError.unavailable
         }
 
+        try await SettingsWorkGate.shared.checkpoint()
         let source = try PhotoSourceStore.applicationStore().loadOrCreate()
         let options = PHFetchOptions()
         options.includeHiddenAssets = true
@@ -124,9 +126,11 @@ actor PhotoLibraryScanner {
     }
 
     func scanAlbums() async throws -> AlbumInventoryDocument {
+        try await SettingsWorkGate.shared.checkpoint()
         var status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         if status == .notDetermined { status = await PHPhotoLibrary.requestAuthorization(for: .readWrite) }
         guard status == .authorized || status == .limited else { throw ScanError.denied }
+        try await SettingsWorkGate.shared.checkpoint()
         let source = try PhotoSourceStore.applicationStore().loadOrCreate()
         var result: [AlbumInventory] = []
         let allAlbums = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil)

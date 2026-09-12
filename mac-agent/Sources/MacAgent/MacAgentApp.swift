@@ -127,6 +127,7 @@ private final class VisualLibraryModel: ObservableObject {
     private let logger = Logger(subsystem: "de.applephotosconnector.macagent", category: "PhotoGrid")
     private let persistentLogger: DebugFileLogger
     private var selectionSourceId: String?
+    private var identitiesByLocal: [String: String] = [:]
 
     init() {
         let defaults = UserDefaults(suiteName: ConnectionPreferences.preferencesSuite) ?? .standard
@@ -150,7 +151,14 @@ private final class VisualLibraryModel: ObservableObject {
         persistentLogger.log(message)
     }
 
-    func load() async {
+    private let loadRequests = CoalescingWorkRequest()
+
+    func requestLoad() {
+        loadRequests.request { [weak self] in await self?.load() }
+    }
+
+    private func load() async {
+        do { try await SettingsWorkGate.shared.checkpoint() } catch { return }
         log("visual_library.load.start")
         guard !loading else { log("gallery.load.skipped reason=already_loading"); return }
         loading = true
@@ -167,6 +175,7 @@ private final class VisualLibraryModel: ObservableObject {
             log("photos.fetch.skipped authorization=\(status.rawValue)")
             return
         }
+        do { try await SettingsWorkGate.shared.checkpoint() } catch { return }
         authorizationMessage = nil
         log("photos.fetch.authorization=\(authorizationName(status))")
         log("photos.fetch.authorization=\(authorizationName(status))")
@@ -182,6 +191,16 @@ private final class VisualLibraryModel: ObservableObject {
             // is intentionally excluded from the user-facing import picker.
             if asset.mediaType == .image || asset.mediaType == .video { values.append(asset) }
         }
+        // Cache identities once per inventory. Rendering and selection must not
+        // start fresh PhotoKit mapping calls while Settings is open.
+        identitiesByLocal = Dictionary(uniqueKeysWithValues: values.map { asset in
+            let mapping = PHPhotoLibrary.shared().cloudIdentifierMappings(forLocalIdentifiers: [asset.localIdentifier])[asset.localIdentifier]
+            let identity: String
+            if case .success(let cloud) = mapping, let encoded = CloudIdentifierCodec.encode(cloud) {
+                identity = "cloud:\(encoded)"
+            } else { identity = "local:\(asset.localIdentifier)" }
+            return (asset.localIdentifier, identity)
+        })
         assets = values
         log("photos.ui.count=\(assets.count)")
         log("photos.fetch.end")
@@ -205,9 +224,7 @@ private final class VisualLibraryModel: ObservableObject {
     }
 
     func assetIdentity(_ asset: PHAsset) -> String {
-        let mapping = PHPhotoLibrary.shared().cloudIdentifierMappings(forLocalIdentifiers: [asset.localIdentifier])[asset.localIdentifier]
-        if case .success(let cloud) = mapping, let encoded = CloudIdentifierCodec.encode(cloud) { return "cloud:\(encoded)" }
-        return "local:\(asset.localIdentifier)"
+        identitiesByLocal[asset.localIdentifier] ?? "local:\(asset.localIdentifier)"
     }
 
     func toggleAlbum(_ album: AlbumInventory) {
@@ -277,6 +294,7 @@ private struct InventoryView: View {
                 model.debugLog = []
                 model.logUploadEvent("upload.ui.requested selectedAssets=\(visual.selectedAssetIDs.count) selectedAlbums=\(visual.selectedAlbumIDs.count)")
                 model.logUploadEvent("upload.ui.reinventory=\(retransferMissing)")
+                guard !model.scanning else { return }
                 let selectionSnapshot = Set(visual.selectedAssetIDs)
                 model.logUploadEvent("upload.snapshot assets=\(selectionSnapshot.count) albums=\(visual.selectedAlbumIDs.count)")
                 if let failure = model.importGuardFailure() {
@@ -292,7 +310,15 @@ private struct InventoryView: View {
                 model.uploadTask = Task {
                     defer { model.scanning = false; model.uploadInProgress = false }
                     do {
+                        try await SettingsWorkGate.shared.checkpoint()
+                        // A pending start must validate the settings that exist
+                        // after resumption, before capturing its run snapshot.
+                        if let failure = model.importGuardFailure() {
+                            throw UploadError.diagnostic(failure)
+                        }
                         let connection = try model.loadConnection()
+                        let targetRoot = TargetDirectoryPreferences().path
+                        let runRetransferMissing = retransferMissing
                         guard !selectionSnapshot.isEmpty else {
                             model.logUploadEvent("upload.start.skipped reason=empty-selection")
                             throw NSError(domain: "ApplePhotosConnector", code: 1, userInfo: [NSLocalizedDescriptionKey: "Bitte mindestens ein Foto oder Album auswählen."])
@@ -305,10 +331,10 @@ private struct InventoryView: View {
                         }
                         model.json = result.json
                         var uploadJSON = result.json
-                        uploadJSON = try InventoryJSON.filteringByStableIdentity(uploadJSON, allowed: visual.selectedAssetIDs).json
+                        uploadJSON = try InventoryJSON.filteringByStableIdentity(uploadJSON, allowed: selectionSnapshot).json
                         model.debugLog.append("Photo inventory ready · assets=\(result.summary.totalAssets) · endpoint=/index.php/apps/apple_photos_connector/api/v1/inventory")
-                        model.debugLog.append("Inventory request pending · retransferMissing=\(UserDefaults(suiteName: ConnectionPreferences.preferencesSuite)?.bool(forKey: UploadPreferences.retransferMissingKey) ?? false)")
-                        let summary = try await model.uploader.run(json: uploadJSON, connection: connection, retransferMissing: retransferMissing, progress: { progress in
+                        model.debugLog.append("Inventory request pending · retransferMissing=\(runRetransferMissing)")
+                        let summary = try await model.uploader.run(json: uploadJSON, connection: connection, targetRoot: targetRoot, retransferMissing: runRetransferMissing, progress: { progress in
                             Task { @MainActor in model.uploadProgress = progress }
                         }, debug: { message in
                             Task { @MainActor in
@@ -376,6 +402,10 @@ private struct InventoryView: View {
                         Task {
                             defer { albumSyncRunning = false }
                             do {
+                                try await SettingsWorkGate.shared.checkpoint()
+                                if let failure = model.importGuardFailure() {
+                                    throw UploadError.diagnostic(failure)
+                                }
                                 let connection = try model.loadConnection()
                                 _ = try await model.albums.run(scanner: model.scanner, connection: connection)
                                 let result = try await model.albums.sync(scanner: model.scanner, connection: connection)
@@ -400,12 +430,14 @@ private struct InventoryView: View {
             persistentDebugLogger = DebugFileLogger(enabled: debugMode)
             model.refreshPreferences()
             let guardFailure = model.importGuardFailure()
-            // Local PhotoKit browsing depends only on Photos authorization,
-            // not on the Nextcloud upload guard or target validation.
-            Task { await visual.load() }
             if guardFailure != nil {
+                // Fetching the Photos library is CPU-intensive.  On a first
+                // launch, put the Settings window ahead of that work so the
+                // user can enter connection credentials without contention.
+                SettingsWindowLifecycle.shared.prepareToOpen()
                 DispatchQueue.main.async { openSettings() }
             }
+            visual.requestLoad()
         }
         .onChange(of: debugMode) { _, enabled in
             persistentDebugLogger = DebugFileLogger(enabled: enabled)
@@ -423,8 +455,8 @@ private struct InventoryView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .connectionStateChanged)) { _ in
             model.refreshPreferences()
-            persistentDebugLogger?.log("gallery.load.requested reason=connection_state_changed")
-            Task { await visual.load() }
+            persistentDebugLogger?.log("gallery.load.deferred reason=connection_state_changed")
+            visual.requestLoad()
         }
         .tint(.nextcloudBlue)
         .padding(20)
@@ -603,6 +635,7 @@ private struct AssetThumbnail: View {
         }
         .frame(height: 92).clipShape(RoundedRectangle(cornerRadius: 6))
         .task {
+            do { try await SettingsWorkGate.shared.checkpoint() } catch { return }
             logger.info("photos.thumbnail.request")
             let options = PHImageRequestOptions()
             options.deliveryMode = .fastFormat

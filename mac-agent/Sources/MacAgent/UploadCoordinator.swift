@@ -44,6 +44,9 @@ actor UploadCoordinator {
         let uploadId: String
         let path: String
     }
+    enum RunError: Error { case alreadyRunning }
+    private var running = false
+    private let gate: SettingsWorkGate
     private let exporter: any PhotoOriginalExporting
     private let transport: any DAVTransport
     private let receiptURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -51,7 +54,8 @@ actor UploadCoordinator {
 
     private func debugLog(_ message: String) { debugSink?(message) }
     private var debugSink: (@Sendable (String) -> Void)?
-    init(exporter: any PhotoOriginalExporting = PhotoOriginalExporter(), transport: any DAVTransport = NetworkTransport()) {
+    init(exporter: any PhotoOriginalExporting = PhotoOriginalExporter(), transport: any DAVTransport = NetworkTransport(), gate: SettingsWorkGate = .shared) {
+        self.gate = gate
         self.exporter = exporter
         self.transport = transport
     }
@@ -109,13 +113,14 @@ actor UploadCoordinator {
     }
 
     private func uploadAsset(index: Int, entry: InventoryReply.Entry, assetsData: Data, sourceId: String,
-                             connection: ConnectorConnection, runId: String, debug: (@Sendable (String) -> Void)?) async -> SingleUploadResult {
+                             connection: ConnectorConnection, targetRoot: String, runId: String, debug: (@Sendable (String) -> Void)?) async -> SingleUploadResult {
         var currentFilename: String?
         do {
             guard let assets = try JSONSerialization.jsonObject(with: assetsData) as? [[String: Any]],
                   let local = assets[index]["localIdentifier"] as? String,
                   let filename = assets[index]["filename"] as? String else { throw UploadError.invalidFilename }
             currentFilename = filename
+            try await gate.checkpoint()
             debug?("upload.export.start")
             let resource = try await exporter.export(localIdentifier: local)
             debug?("upload.export.success")
@@ -126,10 +131,11 @@ actor UploadCoordinator {
             let calendar = Calendar(identifier: .gregorian)
             let year = calendar.component(.year, from: resolution.date)
             let month = calendar.component(.month, from: resolution.date)
-            let baseFolder = TargetDirectoryPreferences().path
+            let baseFolder = targetRoot
             let targets = Targets(owner: self, sourceId: sourceId.lowercased(), runId: runId, uploadId: entry.upload!.uploadId,
                                   folder: "\(baseFolder)/\(String(format: "%04d", year))/\(String(format: "%02d", month))",
                                   connection: connection, debug: debug)
+            try await gate.checkpoint()
             let path = try await WebDAVUploader(connection: connection, transport: transport, debug: debug)
                 .upload(file: resource.url, filename: filename, assetId: entry.upload!.assetId, targets: targets, targetRoot: baseFolder)
             debug?("upload.put.success")
@@ -149,7 +155,13 @@ actor UploadCoordinator {
         }
     }
 
-    func run(json: String, connection: ConnectorConnection, retransferMissing: Bool? = nil, progress: (@Sendable (Progress) -> Void)? = nil, debug: (@Sendable (String) -> Void)? = nil) async throws -> RunSummary {
+    func run(json: String, connection: ConnectorConnection, targetRoot: String? = nil, retransferMissing: Bool? = nil, progress: (@Sendable (Progress) -> Void)? = nil, debug: (@Sendable (String) -> Void)? = nil) async throws -> RunSummary {
+        guard !running else { throw RunError.alreadyRunning }
+        running = true
+        defer { running = false }
+        try await gate.checkpoint()
+        let targetRoot = targetRoot ?? TargetDirectoryPreferences().path
+        let retransferMissing = retransferMissing ?? (UserDefaults(suiteName: ConnectionPreferences.preferencesSuite)?.bool(forKey: UploadPreferences.retransferMissingKey) ?? false)
         debugSink = debug
         debug?("upload.coordinator.entered")
         var receipts = FileManager.default.fileExists(atPath: receiptURL.path)
@@ -169,12 +181,12 @@ actor UploadCoordinator {
             debug?("upload.outcome=failed reason=empty-inventory")
             throw UploadError.invalidResponse
         }
-        let retransferMissing = retransferMissing ?? (UserDefaults(suiteName: ConnectionPreferences.preferencesSuite)?.bool(forKey: UploadPreferences.retransferMissingKey) ?? false)
         inventoryDocument["retransferMissing"] = retransferMissing
         debug?("reinventory.enabled=\(retransferMissing)")
         let requestData = try JSONSerialization.data(withJSONObject: inventoryDocument)
         debug?("inventory.request.start")
         debug?("POST inventory · payloadBytes=\(requestData.count) · retransferMissing=\(retransferMissing)")
+        try await gate.checkpoint()
         let inventoryData = try await post(inventoryDocument, endpoint: "inventory", connection: connection)
         debug?("Response inventory · status=200 · responseBytes=\(inventoryData.count)")
         debug?("inventory.response.decode.start")
@@ -217,19 +229,35 @@ actor UploadCoordinator {
         var nextJob = 0
         let assetsData = try JSONSerialization.data(withJSONObject: assets)
         await withTaskGroup(of: UploadOutcome.self) { group in
+            var active = 0
             func scheduleNext() {
                 guard nextJob < jobs.count else { return }
                 let job = jobs[nextJob]
                 nextJob += 1
+                active += 1
                 group.addTask { [self] in
                     let outcome = await uploadAsset(index: job.index, entry: job.entry, assetsData: assetsData,
-                        sourceId: sourceId, connection: connection, runId: reply.runId, debug: debug)
+                        sourceId: sourceId, connection: connection, targetRoot: targetRoot, runId: reply.runId, debug: debug)
                     return UploadOutcome(job: job, result: outcome)
                 }
             }
-            for _ in 0..<min(Self.maxConcurrentUploads, jobs.count) { scheduleNext() }
-            while let outcome = await group.next() {
-                scheduleNext()
+            while nextJob < jobs.count || active > 0 {
+                // Drain completed jobs (and persist receipts) even while paused.
+                // Only an empty group waits for resumption, then refills once.
+                if active == 0 {
+                    do { try await gate.checkpoint() }
+                    catch { group.cancelAll(); break }
+                }
+                while active < Self.maxConcurrentUploads && nextJob < jobs.count
+                    && !gate.isPaused && !Task.isCancelled {
+                    scheduleNext()
+                }
+                guard active > 0 else {
+                    if Task.isCancelled { break }
+                    continue
+                }
+                guard let outcome = await group.next() else { break }
+                active -= 1
                 let ticket = outcome.job.entry.upload!
                 switch outcome.result {
                 case let .success(path, filename):
@@ -268,6 +296,7 @@ actor UploadCoordinator {
                 }
             }
         }
+        try Task.checkCancellation()
         let newCount = reply.assets.filter { $0.state == "new" }.count
         let knownCount = reply.assets.filter { $0.state == "known" }.count
         debug?("Inventory decoded · assets=\(reply.assets.count) · new=\(newCount) · known=\(knownCount) · uploadTickets=\(totalUploads)")
