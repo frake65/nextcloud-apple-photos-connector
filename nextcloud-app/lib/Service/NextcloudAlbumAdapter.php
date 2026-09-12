@@ -21,7 +21,17 @@ final class NextcloudAlbumAdapter {
         $key=AlbumIdentity::key($album['cloudIdentifier']??null,$album['localIdentifier']); $existing=$this->maps->find($userId,$sourceId,$key);
         if($existing){
             if($existing['nextcloud_album_id'] === null) throw new \RuntimeException('Album mapping is pending; refusing to create a second Photos album');
-            $info=$this->albumMapper->get((int)$existing['nextcloud_album_id']); if($info===null || $info->getUserId()!==$userId) throw new \RuntimeException('Mapped album is not owned by user'); return $existing;
+            $info=$this->albumMapper->get((int)$existing['nextcloud_album_id']);
+            if($info!==null && $info->getUserId()===$userId) return $existing;
+            // The old Photos album is either gone or belongs to another user.
+            // Create a new album for this user and repair only this user's APC row.
+            $replacement=$this->albumMapper->create($userId,(string)$album['name']);
+            $replacementId=(int)$replacement->getId();
+            if (!$this->maps->rebindNextcloudAlbumId((int)$existing['id'],$userId,$sourceId,$key,(int)$existing['nextcloud_album_id'],$replacementId)) {
+                throw new \RuntimeException('Album mapping changed while repairing it');
+            }
+            $existing['nextcloud_album_id']=$replacementId;
+            return $existing;
         }
         // Reserve the logical identity before the external Photos write. A failed
         // mapping write can therefore never cause an indistinguishable retry.

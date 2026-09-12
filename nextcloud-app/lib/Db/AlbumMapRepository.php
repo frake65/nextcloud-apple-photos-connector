@@ -22,4 +22,20 @@ final class AlbumMapRepository {
         $q->update('apc_nextcloud_album_map')->set('nextcloud_album_id',$q->createNamedParameter($nextcloudAlbumId))
             ->where($q->expr()->eq('id',$q->createNamedParameter($id)))->executeStatement();
     }
+
+    /** Rebind one logical Apple album without changing its identity or owner. */
+    public function rebindNextcloudAlbumId(int $id, string $userId, string $sourceId, string $sourceAlbumKey, int $expectedAlbumId, int $nextcloudAlbumId): bool {
+        $q=$this->db->getQueryBuilder();
+        $q->update('apc_nextcloud_album_map')
+            ->set('nextcloud_album_id',$q->createNamedParameter($nextcloudAlbumId))
+            ->set('updated_at',$q->createNamedParameter(gmdate('c')))
+            ->where(
+                $q->expr()->eq('id',$q->createNamedParameter($id)),
+                $q->expr()->eq('user_id',$q->createNamedParameter($userId)),
+                $q->expr()->eq('source_id',$q->createNamedParameter($sourceId)),
+                $q->expr()->eq('source_album_key',$q->createNamedParameter($sourceAlbumKey)),
+                $q->expr()->eq('nextcloud_album_id',$q->createNamedParameter($expectedAlbumId))
+            );
+        return $q->executeStatement() === 1;
+    }
 }
