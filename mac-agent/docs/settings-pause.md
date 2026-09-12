@@ -26,8 +26,9 @@ There is no periodic import timer in the current agent.
 Checkpoints protect gallery loading, asset and album inventory, album inventory
 submission/sync, upload-run admission, inventory requests, new exports, and new
 WebDAV upload steps. Photo authorization may suspend, so scans check again after
-it returns. Thumbnail requests also wait. Gallery identity mappings are cached
-per inventory so rendering and selection do not start new PhotoKit lookups.
+it returns. Thumbnail requests also wait. Gallery identity mappings are resolved
+lazily on a background actor with checkpoints and a bounded cache; see
+[Lazy gallery](lazy-gallery.md).
 
 An admitted operation is allowed to finish; opening Settings never cancels it.
 A synchronous inventory batch can finish. An export already in progress can
@@ -50,16 +51,15 @@ coordinator reads default target/retry values only once when omitted by a caller
 Later Settings edits affect a later run, not the remainder of the active run.
 No additional credentials are persisted or logged.
 
-## MainActor limitation
+## MainActor and gallery work
 
-Gallery enumeration and initial cloud-identity mapping still execute on the
-MainActor. Caching removes repeated PhotoKit mapping from view rendering, but
-does not move the initial inventory off the UI actor. A synchronous batch that
-started before opening Settings can therefore delay window presentation until
-it returns. Once the window lifecycle activates the pause, no new protected
-step is admitted. Moving gallery data acquisition to a background actor with a
-well-defined transferable result remains separate concurrency work; this change
-does not introduce unchecked transfers of PhotoKit objects.
+The gallery keeps its indexable PhotoKit fetch on a background actor. It no longer
+enumerates the library or maps every identity on the MainActor at startup.
+Explicit selection resolution checks the gate between blocks of at most 128
+assets. Thumbnail workers also check admission; disappearing cells cancel their
+requests independently of Settings. The UI receives small value records, not
+PhotoKit assets. Selection persistence and UI state publication remain on the
+MainActor. See [Lazy gallery](lazy-gallery.md) for lifecycle and memory limits.
 
 ## Tests and manual verification
 

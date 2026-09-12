@@ -115,153 +115,215 @@ private final class InventoryModel: ObservableObject {
 }
 
 @MainActor
-private final class VisualLibraryModel: ObservableObject {
-    @Published var assets: [PHAsset] = []
-    @Published var albums: [AlbumInventory] = []
+final class VisualLibraryModel: ObservableObject {
+    @Published private(set) var assetCount = 0
+    @Published private(set) var generation = UUID()
+    @Published private(set) var albumDetails: [GalleryAlbum] = []
     @Published var selectedAssetIDs: Set<String> = []
     @Published var selectedAlbumIDs: Set<String> = []
+    @Published private(set) var selectedPhotos = 0
+    @Published private(set) var selectedVideos = 0
     @Published var loading = false
+    @Published private(set) var selectionBusy = false
     @Published var authorizationMessage: String?
-    @Published var diagnosticLog: [String] = []
-    let imageManager = PHCachingImageManager()
-    private let logger = Logger(subsystem: "de.applephotosconnector.macagent", category: "PhotoGrid")
-    private let persistentLogger: DebugFileLogger
+    let library: any GalleryLibraryProviding
+    let thumbnails: GalleryThumbnailLoader
+    private let gate: SettingsWorkGate
     private var selectionSourceId: String?
-    private var identitiesByLocal: [String: String] = [:]
+    private(set) var loadedAlbums = false
+    private var selectionTask: Task<Void, Never>?
+    private let loadRequests: CoalescingWorkRequest
+    private let albumRequests: CoalescingWorkRequest
 
-    init() {
-        let defaults = UserDefaults(suiteName: ConnectionPreferences.preferencesSuite) ?? .standard
-        persistentLogger = DebugFileLogger(enabled: defaults.bool(forKey: UploadPreferences.debugModeKey))
+    init(library: any GalleryLibraryProviding = GalleryLibrary(),
+         thumbnails: GalleryThumbnailLoader = GalleryThumbnailLoader(),
+         gate: SettingsWorkGate = .shared) {
+        self.library = library; self.thumbnails = thumbnails; self.gate = gate
+        loadRequests = CoalescingWorkRequest(gate: gate)
+        albumRequests = CoalescingWorkRequest(gate: gate)
     }
 
-    private func authorizationName(_ status: PHAuthorizationStatus) -> String {
-        switch status {
-        case .authorized: return "authorized"
-        case .limited: return "limited"
-        case .denied: return "denied"
-        case .restricted: return "restricted"
-        case .notDetermined: return "notDetermined"
-        @unknown default: return "unknown"
-        }
+    var albums: [AlbumInventory] { albumDetails.map(\.inventory) }
+    var selectedAlbums: [AlbumInventory] {
+        albums.filter { selectedAlbumIDs.contains(PhotoSelectionIdentity.album($0)) }
     }
-
-    private func log(_ message: String) {
-        diagnosticLog.append(message)
-        logger.info("\(message, privacy: .public)")
-        persistentLogger.log(message)
+    var selectedMembershipCount: Int {
+        albumDetails.filter { selectedAlbumIDs.contains(PhotoSelectionIdentity.album($0.inventory)) }
+            .reduce(0) { $0 + $1.photos + $1.videos }
     }
-
-    private let loadRequests = CoalescingWorkRequest()
 
     func requestLoad() {
         loadRequests.request { [weak self] in await self?.load() }
     }
 
     private func load() async {
-        do { try await SettingsWorkGate.shared.checkpoint() } catch { return }
-        log("visual_library.load.start")
-        guard !loading else { log("gallery.load.skipped reason=already_loading"); return }
-        loading = true
-        defer { loading = false }
-        var status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-        log("photos.authorization.status=\(authorizationName(status))")
-        if status == .notDetermined {
-            status = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
-            log("photos.authorization.status=\(authorizationName(status))")
-        }
-        guard PhotoKitBrowsingEligibility.allows(authorized: status == .authorized || status == .limited) else {
-            log("gallery.load.skipped reason=authorization_\(authorizationName(status))")
-            authorizationMessage = status == .restricted ? "Der Fotozugriff ist eingeschränkt." : "Bitte erlaube den Fotozugriff in den Systemeinstellungen."
-            log("photos.fetch.skipped authorization=\(status.rawValue)")
-            return
-        }
-        do { try await SettingsWorkGate.shared.checkpoint() } catch { return }
+        do {
+            try await gate.checkpoint()
+            loading = true
+            defer { loading = false }
+            var status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+            if status == .notDetermined { status = await PHPhotoLibrary.requestAuthorization(for: .readWrite) }
+            guard status == .authorized || status == .limited else {
+                authorizationMessage = status == .restricted ? "Der Fotozugriff ist eingeschränkt." : "Bitte erlaube den Fotozugriff in den Systemeinstellungen."
+                return
+            }
+            try await openSource()
+        } catch is CancellationError { }
+        catch { authorizationMessage = "Galerie konnte nicht geladen werden: \(error.localizedDescription)" }
+    }
+
+    // Separate entry point also lets tests exercise the real load path without
+    // requesting Photos permission. It performs no cell/identity/image work.
+    func openSource(persisted: PhotoSelectionState? = nil) async throws {
+        await selectionTask?.value
+        if let albumTask { _ = try? await albumTask.value }
+        try await gate.checkpoint()
+        let count = try await library.open()
+        assetCount = count
+        generation = UUID()
+        thumbnails.clearCache()
         authorizationMessage = nil
-        log("photos.fetch.authorization=\(authorizationName(status))")
-        log("photos.fetch.authorization=\(authorizationName(status))")
-        log("photos.fetch.start")
-        let fetched = PHAsset.fetchAssets(with: nil)
-        log("photos.fetch.count=\(fetched.count)")
-        log("photos.fetch.success")
-        var values: [PHAsset] = []
-        values.reserveCapacity(fetched.count)
-        for index in 0..<fetched.count {
-            let asset = fetched.object(at: index)
-            // Audio remains supported internally by the inventory format, but
-            // is intentionally excluded from the user-facing import picker.
-            if asset.mediaType == .image || asset.mediaType == .video { values.append(asset) }
-        }
-        // Cache identities once per inventory. Rendering and selection must not
-        // start fresh PhotoKit mapping calls while Settings is open.
-        identitiesByLocal = Dictionary(uniqueKeysWithValues: values.map { asset in
-            let mapping = PHPhotoLibrary.shared().cloudIdentifierMappings(forLocalIdentifiers: [asset.localIdentifier])[asset.localIdentifier]
-            let identity: String
-            if case .success(let cloud) = mapping, let encoded = CloudIdentifierCodec.encode(cloud) {
-                identity = "cloud:\(encoded)"
-            } else { identity = "local:\(asset.localIdentifier)" }
-            return (asset.localIdentifier, identity)
-        })
-        assets = values
-        log("photos.ui.count=\(assets.count)")
-        log("photos.fetch.end")
-        log("thumbnails.requested=0")
-        log("albums.fetch.start")
-        if let document = try? await PhotoLibraryScanner().scanAlbums() {
-            albums = document.albums
-            log("albums.fetch.count=\(document.albums.count)")
-            log("albums.ui.count=\(albums.count)")
-        }
-        log("albums.fetch.end")
-        if let source = try? PhotoSourceStore.applicationStore().loadOrCreate() {
+        loadedAlbums = false
+        albumDetails = []
+        if let persisted { restore(persisted) }
+        else if selectionSourceId == nil {
+            let source = try PhotoSourceStore.applicationStore().loadOrCreate()
             selectionSourceId = source.sourceId.uuidString
-            let persisted = PhotoSelectionPreferences.load(sourceId: source.sourceId.uuidString, defaults: UserDefaults(suiteName: ConnectionPreferences.preferencesSuite) ?? .standard)
-            let assetIds = Dictionary(uniqueKeysWithValues: assets.map { ($0.localIdentifier, assetIdentity($0)) })
-            let restored = PhotoSelectionRestorer.reconcile(persisted, assetIdentitiesByLocal: assetIds, albums: albums)
-            selectedAssetIDs = restored.assetIdentities
-            selectedAlbumIDs = restored.albumIdentities
-            PhotoSelectionPreferences.save(restored, sourceId: source.sourceId.uuidString, defaults: UserDefaults(suiteName: ConnectionPreferences.preferencesSuite) ?? .standard)
+            restore(PhotoSelectionPreferences.load(sourceId: source.sourceId.uuidString, defaults: UserDefaults(suiteName: ConnectionPreferences.preferencesSuite) ?? .standard))
+        }
+        GalleryDebug.log("gallery.initial.ready count=\(count)")
+        // Resolve only an existing selection, after publishing the gallery.
+        // Never reconcile against the partial set of displayed cells.
+        if !selectedAssetIDs.isEmpty || !selectedAlbumIDs.isEmpty {
+            performSelection { model in
+                if !model.selectedAlbumIDs.isEmpty {
+                    try await model.ensureAlbums()
+                    for album in model.selectedAlbums {
+                        let members = try await model.library.albumAssets(album.localIdentifier)
+                        model.selectedAssetIDs.formUnion(members.identities)
+                    }
+                }
+                try await model.refreshSelectionCounts()
+            }
         }
     }
 
-    func assetIdentity(_ asset: PHAsset) -> String {
-        identitiesByLocal[asset.localIdentifier] ?? "local:\(asset.localIdentifier)"
+    func restore(_ state: PhotoSelectionState) {
+        selectedAssetIDs = state.assetIdentities
+        selectedAlbumIDs = state.albumIdentities
+    }
+
+    func requestAlbums() {
+        albumRequests.request { [weak self] in
+            guard let self else { return }
+            do { try await ensureAlbums() }
+            catch is CancellationError { }
+            catch { authorizationMessage = "Alben konnten nicht geladen werden: \(error.localizedDescription)" }
+        }
+    }
+
+    private var albumTask: Task<[GalleryAlbum], Error>?
+    private func ensureAlbums() async throws {
+        if loadedAlbums { return }
+        let requestedGeneration = generation
+        let task: Task<[GalleryAlbum], Error>
+        if let existing = albumTask { task = existing }
+        else {
+            let library = library
+            task = Task { try await library.albumCatalog() }
+            albumTask = task
+        }
+        do {
+            let details = try await task.value
+            guard requestedGeneration == generation else { return }
+            albumDetails = details
+            loadedAlbums = true
+            albumTask = nil
+        } catch { albumTask = nil; throw error }
+    }
+
+    private func performSelection(_ operation: @escaping @MainActor (VisualLibraryModel) async throws -> Void) {
+        guard !selectionBusy else { return }
+        selectionBusy = true
+        selectionTask = Task {
+            defer { selectionBusy = false; selectionTask = nil }
+            do {
+                try await gate.checkpoint()
+                try await operation(self)
+                saveSelection()
+            } catch is CancellationError { }
+            catch { authorizationMessage = "Auswahl konnte nicht aufgelöst werden: \(error.localizedDescription)" }
+        }
+    }
+
+    func toggleAsset(_ asset: GalleryAsset) {
+        performSelection { model in
+            if model.selectedAssetIDs.contains(asset.identity) || model.selectedAssetIDs.contains("local:\(asset.localIdentifier)") {
+                model.selectedAssetIDs.remove(asset.identity)
+                model.selectedAssetIDs.remove("local:\(asset.localIdentifier)")
+                if asset.isVideo { model.selectedVideos = max(0, model.selectedVideos - 1) }
+                else { model.selectedPhotos = max(0, model.selectedPhotos - 1) }
+            }
+            else {
+                model.selectedAssetIDs.insert(asset.identity)
+                if asset.isVideo { model.selectedVideos += 1 } else { model.selectedPhotos += 1 }
+            }
+        }
     }
 
     func toggleAlbum(_ album: AlbumInventory) {
-        guard album.kind == "album" else { return }
-        let identity = PhotoSelectionIdentity.album(album)
-        if selectedAlbumIDs.contains(identity) {
-            selectedAlbumIDs.remove(identity)
-        } else {
-            selectedAlbumIDs.insert(identity)
+        performSelection { model in
+            let members = try await model.library.albumAssets(album.localIdentifier)
+            let identity = PhotoSelectionIdentity.album(album)
+            if model.selectedAlbumIDs.contains(identity) {
+                model.selectedAlbumIDs.remove(identity)
+                model.selectedAssetIDs.subtract(members.identities)
+            } else {
+                model.selectedAlbumIDs.insert(identity)
+                model.selectedAssetIDs.formUnion(members.identities)
+            }
+            try await model.refreshSelectionCounts()
         }
-        let albumAssets = Set(album.assetIdentities.compactMap { local in
-            assets.first(where: { $0.localIdentifier == local }).map(assetIdentity)
-        })
-        if selectedAlbumIDs.contains(identity) { selectedAssetIDs.formUnion(albumAssets) }
-        else { selectedAssetIDs.subtract(albumAssets) }
+    }
+
+    func selectAll() {
+        performSelection { model in
+            let all = try await model.library.resolveAll()
+            model.selectedAssetIDs = all.identities
+            model.selectedPhotos = all.photos
+            model.selectedVideos = all.videos
+        }
+    }
+
+    func clearSelection() {
+        guard !selectionBusy else { return }
+        selectedAssetIDs.removeAll(); selectedAlbumIDs.removeAll()
+        selectedPhotos = 0; selectedVideos = 0
         saveSelection()
     }
 
-    func toggleAsset(_ asset: PHAsset) {
-        let identity = assetIdentity(asset)
-        if selectedAssetIDs.contains(identity) { selectedAssetIDs.remove(identity) }
-        else { selectedAssetIDs.insert(identity) }
-        saveSelection()
+    private func refreshSelectionCounts() async throws {
+        let selected = try await library.resolveSelection(selectedAssetIDs)
+        // Missing/inaccessible identities remain selected. The unchanged upload
+        // scanner will explicitly reject an incomplete snapshot.
+        selectedAssetIDs = selected.identities
+        selectedPhotos = selected.photos
+        selectedVideos = selected.videos
+    }
+
+    func uploadSnapshot() -> Set<String> { selectedAssetIDs }
+
+    func resolveUploadSnapshot(_ frozen: Set<String>) async throws -> Set<String> {
+        // A local fallback may have gained a cloud identity since selection.
+        // Resolve the frozen membership, never the subsequently edited UI set.
+        try await library.resolveSelection(frozen).identities
     }
 
     func saveSelection() {
         guard let source = selectionSourceId else { return }
         PhotoSelectionPreferences.save(PhotoSelectionState(assetIdentities: selectedAssetIDs, albumIdentities: selectedAlbumIDs), sourceId: source, defaults: UserDefaults(suiteName: ConnectionPreferences.preferencesSuite) ?? .standard)
     }
-    func selectAll() { selectedAssetIDs = Set(assets.map { assetIdentity($0) }); saveSelection() }
-    func clearSelection() { selectedAssetIDs.removeAll(); selectedAlbumIDs.removeAll(); saveSelection() }
-
-    var selectedAlbums: [AlbumInventory] {
-        albums.filter { selectedAlbumIDs.contains(PhotoSelectionIdentity.album($0)) }
-    }
 }
-
 private struct InventoryView: View {
     @StateObject private var model = InventoryModel()
     @StateObject private var visual = VisualLibraryModel()
@@ -294,8 +356,8 @@ private struct InventoryView: View {
                 model.debugLog = []
                 model.logUploadEvent("upload.ui.requested selectedAssets=\(visual.selectedAssetIDs.count) selectedAlbums=\(visual.selectedAlbumIDs.count)")
                 model.logUploadEvent("upload.ui.reinventory=\(retransferMissing)")
-                guard !model.scanning else { return }
-                let selectionSnapshot = Set(visual.selectedAssetIDs)
+                guard !model.scanning, !visual.selectionBusy else { return }
+                let selectionSnapshot = visual.uploadSnapshot()
                 model.logUploadEvent("upload.snapshot assets=\(selectionSnapshot.count) albums=\(visual.selectedAlbumIDs.count)")
                 if let failure = model.importGuardFailure() {
                     model.logUploadEvent("upload.start.skipped reason=guard")
@@ -323,6 +385,7 @@ private struct InventoryView: View {
                             model.logUploadEvent("upload.start.skipped reason=empty-selection")
                             throw NSError(domain: "ApplePhotosConnector", code: 1, userInfo: [NSLocalizedDescriptionKey: "Bitte mindestens ein Foto oder Album auswählen."])
                         }
+                        let selectionSnapshot = try await visual.resolveUploadSnapshot(selectionSnapshot)
                         let result = try await model.scanner.scan(candidates: selectionSnapshot)
                         model.logUploadEvent("inventory.candidates assets=\(result.summary.totalAssets)")
                         guard result.summary.totalAssets == selectionSnapshot.count else {
@@ -345,7 +408,7 @@ private struct InventoryView: View {
                         model.status = uploadSummary(summary)
                     } catch { model.status = "Error: \(L10n.text("upload"))" }
                 }
-            }.disabled(model.scanning)
+            }.disabled(model.scanning || visual.selectionBusy || visual.loading)
             if let progress = model.uploadProgress {
                 GroupBox(L10n.text("uploadProgress")) {
                     VStack(alignment: .leading, spacing: 6) {
@@ -369,26 +432,27 @@ private struct InventoryView: View {
             if visualMode == 0 {
                 PhotoThumbnailGrid(model: visual)
             } else {
-                AlbumGrid(model: visual)
+                AlbumGrid(model: visual).id(visual.generation)
             }
             if let message = visual.authorizationMessage {
                 Text(message).foregroundStyle(.red).fontWeight(.semibold)
-            } else if !visual.loading && visualMode == 0 && visual.assets.isEmpty {
+            } else if !visual.loading && visualMode == 0 && visual.assetCount == 0 {
                 Text(L10n.text("noPhotos")).foregroundStyle(.secondary)
             }
-            let visibleAlbumCount = visual.albums.filter { $0.kind == "album" }.count
-            Text("Fotos: \(visual.assets.count) · Alben: \(visibleAlbumCount) · Ausgewählt: \(visual.selectedAssetIDs.count)")
+            let visibleAlbumCount = visual.loadedAlbums ? String(visual.albums.count) : "—"
+            Text("Fotos: \(visual.assetCount) · Alben: \(visibleAlbumCount) · Ausgewählt: \(visual.selectedAssetIDs.count)")
                 .font(.callout).foregroundStyle(.secondary)
             HStack {
-                Button(L10n.text("selectAll")) { visual.selectAll() }
-                Button(L10n.text("clearSelection")) { visual.clearSelection() }
+                Button(L10n.text("selectAll")) { visual.selectAll() }.disabled(visual.selectionBusy || visual.loading)
+                Button(L10n.text("clearSelection")) { visual.clearSelection() }.disabled(visual.selectionBusy)
+                if visual.selectionBusy { ProgressView().controlSize(.small) }
                 Spacer()
             }
             GroupBox {
                 VStack(alignment: .leading, spacing: 8) {
                     let selected = visual.selectedAlbums
                     Text("\(L10n.text("albums")): \(selected.isEmpty ? "—" : selected.map(\.name).joined(separator: ", "))")
-                    let membershipCount = selected.reduce(0) { $0 + $1.assetIdentities.count }
+                    let membershipCount = visual.selectedMembershipCount
                     Text(L10n.format("membershipsNotice", membershipCount, L10n.text("notDeletedNotice")))
                         .foregroundStyle(.secondary)
                     Button(L10n.text("albumSync")) {
@@ -479,9 +543,8 @@ private struct InventoryView: View {
     }
 
     private var uploadButtonTitle: String {
-        let selected = visual.assets.filter { visual.selectedAssetIDs.contains(visual.assetIdentity($0)) }
-        let photos = selected.filter { $0.mediaType == .image }.count
-        let videos = selected.filter { $0.mediaType == .video }.count
+        let photos = visual.selectedPhotos
+        let videos = visual.selectedVideos
         let albums = visual.selectedAlbums.count
         var parts = [L10n.text("upload")]
         if photos > 0 { parts.append("\(photos) Fotos") }
@@ -551,21 +614,42 @@ private struct PhotoThumbnailGrid: View {
     var body: some View {
         ScrollView {
             LazyVGrid(columns: columns, spacing: 8) {
-                ForEach(model.assets, id: \.localIdentifier) { asset in
-                    let identity = model.assetIdentity(asset)
-                    Button {
-                        model.toggleAsset(asset)
-                    } label: {
-                        AssetThumbnail(asset: asset, manager: model.imageManager)
-                            .overlay(alignment: .topTrailing) {
-                                if model.selectedAssetIDs.contains(identity) {
-                                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.white, .blue).padding(4)
-                                }
-                            }
-                    }.buttonStyle(.plain)
+                ForEach(0..<model.assetCount, id: \.self) { index in
+                    GalleryCell(model: model, index: index)
                 }
-            }.padding(4)
+            }.padding(4).id(model.generation)
         }.frame(minHeight: 180)
+    }
+}
+
+private struct GalleryCell: View {
+    @ObservedObject var model: VisualLibraryModel
+    let index: Int
+    @State private var asset: GalleryAsset?
+
+    var body: some View {
+        Group {
+            if let asset {
+                Button { model.toggleAsset(asset) } label: {
+                    AssetThumbnail(asset: asset, loader: model.thumbnails)
+                        .overlay(alignment: .topTrailing) {
+                            if model.selectedAssetIDs.contains(asset.identity) || model.selectedAssetIDs.contains("local:\(asset.localIdentifier)") {
+                                Image(systemName: "checkmark.circle.fill").foregroundStyle(.white, .blue).padding(4)
+                            }
+                        }
+                }.buttonStyle(.plain).disabled(model.selectionBusy || model.loading).id(asset.localIdentifier)
+            } else {
+                RoundedRectangle(cornerRadius: 6).fill(.secondary.opacity(0.2)).frame(height: 92)
+            }
+        }
+        .task {
+            do {
+                let value = try await model.library.cell(at: index)
+                try Task.checkCancellation()
+                asset = value
+            } catch { }
+        }
+        .onDisappear { asset = nil }
     }
 }
 
@@ -576,33 +660,24 @@ private struct AlbumGrid: View {
     var body: some View {
         ScrollView {
             LazyVGrid(columns: columns, spacing: 10) {
-                ForEach(model.albums.filter { $0.kind == "album" }, id: \.localIdentifier) { album in
+                ForEach(model.albumDetails, id: \.inventory.localIdentifier) { detail in
+                    let album = detail.inventory
                     let identity = PhotoSelectionIdentity.album(album)
-                    Button {
-                        model.toggleAlbum(album)
-                    } label: {
+                    Button { model.toggleAlbum(album) } label: {
                         VStack(alignment: .leading, spacing: 4) {
-                            if let local = album.assetIdentities.first,
-                               let asset = model.assets.first(where: { $0.localIdentifier == local }) {
-                                AssetThumbnail(asset: asset, manager: model.imageManager)
-                            } else {
-                                RoundedRectangle(cornerRadius: 6).fill(.secondary.opacity(0.2)).frame(height: 92)
-                            }
+                            AlbumCover(model: model, local: detail.cover)
                             Text(album.name).lineLimit(1)
-                            let albumAssets = album.assetIdentities.compactMap { local in model.assets.first { $0.localIdentifier == local } }
-                            let imageCount = albumAssets.filter { $0.mediaType == .image }.count
-                            let videoCount = albumAssets.filter { $0.mediaType == .video }.count
-                            Text(mediaSummary(images: imageCount, videos: videoCount))
+                            Text(mediaSummary(images: detail.photos, videos: detail.videos))
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         .padding(6)
                         .background(model.selectedAlbumIDs.contains(identity) ? Color.nextcloudBlue.opacity(0.25) : Color.clear)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
-                    }
-                    .buttonStyle(.plain)
+                    }.buttonStyle(.plain).disabled(model.selectionBusy || model.loading)
                 }
             }.padding(4)
         }.frame(minHeight: 180)
+        .onAppear { model.requestAlbums() }
     }
 
     private func mediaSummary(images: Int, videos: Int) -> String {
@@ -613,47 +688,55 @@ private struct AlbumGrid: View {
     }
 }
 
+private struct AlbumCover: View {
+    @ObservedObject var model: VisualLibraryModel
+    let local: String?
+    @State private var asset: GalleryAsset?
+    var body: some View {
+        Group {
+            if let asset { AssetThumbnail(asset: asset, loader: model.thumbnails) }
+            else { RoundedRectangle(cornerRadius: 6).fill(.secondary.opacity(0.2)).frame(height: 92) }
+        }
+        .task(id: local) {
+            asset = nil
+            guard let local else { return }
+            do {
+                let value = try await model.library.asset(local: local)
+                try Task.checkCancellation()
+                asset = value
+            } catch { }
+        }
+        .onDisappear { asset = nil }
+    }
+}
+
 private struct AssetThumbnail: View {
-    let asset: PHAsset
-    let manager: PHCachingImageManager
+    let asset: GalleryAsset
+    let loader: GalleryThumbnailLoader
     @State private var image: NSImage?
-    private let logger = Logger(subsystem: "de.applephotosconnector.macagent", category: "PhotoGrid")
 
     var body: some View {
         Group {
             if let image {
                 ZStack(alignment: .bottomLeading) {
                     Image(nsImage: image).resizable().scaledToFill()
-                    if asset.mediaType == .video {
-                        Label(Self.duration(asset.duration), systemImage: "play.fill")
+                    if asset.isVideo {
+                        Label(MediaPresentation.durationString(asset.duration), systemImage: "play.fill")
                             .font(.caption2).padding(4).foregroundStyle(.white)
                             .background(.black.opacity(0.65)).clipShape(RoundedRectangle(cornerRadius: 4)).padding(4)
                     }
                 }
-            }
-            else { RoundedRectangle(cornerRadius: 6).fill(.secondary.opacity(0.2)).overlay { ProgressView() } }
+            } else { RoundedRectangle(cornerRadius: 6).fill(.secondary.opacity(0.2)).overlay { ProgressView() } }
         }
         .frame(height: 92).clipShape(RoundedRectangle(cornerRadius: 6))
-        .task {
-            do { try await SettingsWorkGate.shared.checkpoint() } catch { return }
-            logger.info("photos.thumbnail.request")
-            let options = PHImageRequestOptions()
-            options.deliveryMode = .fastFormat
-            options.resizeMode = .fast
-            options.isNetworkAccessAllowed = false
-            await withCheckedContinuation { continuation in
-                manager.requestImage(for: asset, targetSize: CGSize(width: 180, height: 180), contentMode: .aspectFill, options: options) { value, _ in
-                    image = value
-                    if value == nil { logger.info("photos.thumbnail.failure") }
-                    else { logger.info("photos.thumbnail.success") }
-                    logger.info("thumbnails.completed")
-                    continuation.resume()
-                }
-            }
+        .task(id: asset.localIdentifier) {
+            image = nil
+            do {
+                let value = try await loader.image(local: asset.localIdentifier)
+                try Task.checkCancellation()
+                image = value?.image
+            } catch { }
         }
-    }
-
-    private static func duration(_ seconds: TimeInterval) -> String {
-        MediaPresentation.durationString(seconds)
+        .onDisappear { image = nil }
     }
 }

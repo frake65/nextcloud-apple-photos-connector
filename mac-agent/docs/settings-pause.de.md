@@ -28,9 +28,9 @@ Im aktuellen Agenten gibt es keinen periodischen Import-Timer.
 Checkpoints schützen Galerie-Laden, Foto- und Albuminventarisierung,
 Albuminventar-Übermittlung/Sync, Upload-Laufstart, Inventar-Requests, neue Exporte
 und neue WebDAV-Upload-Schritte. Weil die Foto-Freigabe asynchron warten kann,
-prüfen Scans danach erneut. Auch Thumbnail-Requests warten. Identitätsmappings
-werden pro Inventar zwischengespeichert, damit Darstellung und Auswahl keine
-neuen PhotoKit-Abfragen auslösen.
+prüfen Scans danach erneut. Auch Thumbnail-Requests warten. Galerie-Identitäten
+werden bedarfsgerecht auf einem Hintergrund-Actor mit Checkpoints und begrenztem
+Cache aufgelöst; siehe [Lazy-Galerie](lazy-gallery.de.md).
 
 Eine zugelassene Operation darf enden; das Öffnen bricht sie niemals ab.
 Ein synchroner Inventarisierungsabschnitt darf fertiglaufen. Ein laufender
@@ -55,17 +55,16 @@ Ziel/Retry vom Aufrufer nicht übergeben, liest der Koordinator die Standardwert
 nur einmal. Spätere Einstellungsänderungen gelten erst für einen späteren Lauf.
 Zugangsdaten werden weder zusätzlich gespeichert noch zusätzlich protokolliert.
 
-## MainActor-Einschränkung
+## MainActor und Galeriearbeit
 
-Galerie-Aufzählung und initiale Cloud-Identitätsmappings laufen weiterhin auf dem
-MainActor. Der Cache vermeidet wiederholte PhotoKit-Mappings beim Darstellen,
-verschiebt die initiale Inventarisierung aber nicht vom UI-Actor. Ein vor dem
-Öffnen begonnener synchroner Abschnitt kann die Fensterdarstellung daher bis zu
-seinem Ende verzögern. Sobald der Fenster-Lifecycle die Pause aktiviert, wird
-kein neuer geschützter Schritt zugelassen. Die Verlagerung auf einen
-Hintergrund-Actor mit klar übertragbarem Ergebnis bleibt eine separate
-Concurrency-Aufgabe; diese Änderung führt keine ungeprüften Transfers von
-PhotoKit-Objekten ein.
+Die Galerie hält ihren indexierbaren PhotoKit-Fetch auf einem Hintergrund-Actor.
+Beim Start werden weder die Bibliothek aufgezählt noch sämtliche Identitäten
+auf dem MainActor aufgelöst. Explizite Auswahlauflösung prüft das Gate zwischen
+Blöcken von höchstens 128 Assets. Thumbnail-Worker prüfen ebenfalls die Freigabe;
+verschwindende Zellen brechen Requests unabhängig von Settings ab. Die UI erhält
+kleine Werttypen statt PhotoKit-Assets. Auswahlpersistenz und Veröffentlichung
+von UI-State bleiben auf dem MainActor. Details zu Lifecycle und Speichergrenzen
+stehen unter [Lazy-Galerie](lazy-gallery.de.md).
 
 ## Tests und manuelle Prüfung
 
