@@ -10,7 +10,13 @@ final class GalleryImage: @unchecked Sendable {
 }
 
 protocol GalleryThumbnailProviding: Sendable {
-    func image(local: String) async throws -> GalleryImage?
+    func image(local: String, targetSize: CGSize) async throws -> GalleryImage?
+}
+
+enum GalleryThumbnailSizing {
+    static func pixelTargetSize(points: CGSize, scale: CGFloat) -> CGSize {
+        CGSize(width: max(1, ceil(points.width * scale)), height: max(1, ceil(points.height * scale)))
+    }
 }
 
 /// One request's callback/cancellation race, including cancellation before
@@ -21,6 +27,7 @@ final class PhotoKitImageRequest: @unchecked Sendable {
     private var finished = false
     private var cancelled = false
     private var requestID: PHImageRequestID?
+    private var degradedImage: GalleryImage?
     private let cancelRequest: @Sendable (PHImageRequestID) -> Void
 
     init(cancelRequest: @escaping @Sendable (PHImageRequestID) -> Void) { self.cancelRequest = cancelRequest }
@@ -35,14 +42,19 @@ final class PhotoKitImageRequest: @unchecked Sendable {
         let shouldCancel = lock.withLock { requestID = id; return cancelled }
         if shouldCancel { cancelRequest(id) }
     }
-    func complete(_ value: GalleryImage?) {
-        let callback = lock.withLock {
-            guard !finished else { return Optional<CheckedContinuation<GalleryImage?, Error>>.none }
+    func update(_ value: GalleryImage?, isDegraded: Bool) {
+        let result: (CheckedContinuation<GalleryImage?, Error>, GalleryImage?)? = lock.withLock {
+            guard !finished else { return nil }
+            if isDegraded {
+                degradedImage = value
+                return nil
+            }
             finished = true
             defer { continuation = nil }
-            return continuation
+            guard let continuation else { return nil }
+            return (continuation, value ?? degradedImage)
         }
-        callback?.resume(returning: value)
+        result?.0.resume(returning: result?.1 ?? nil)
     }
     func cancel() {
         let (callback, id) = lock.withLock {
@@ -61,7 +73,7 @@ actor PhotoKitGalleryThumbnails: GalleryThumbnailProviding {
     private let gate: SettingsWorkGate
     init(gate: SettingsWorkGate = .shared) { self.gate = gate }
 
-    func image(local: String) async throws -> GalleryImage? {
+    func image(local: String, targetSize: CGSize) async throws -> GalleryImage? {
         try await gate.checkpoint()
         guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [local], options: nil).firstObject else { return nil }
         let request = PhotoKitImageRequest { [manager] id in manager.cancelImageRequest(id) }
@@ -69,11 +81,12 @@ actor PhotoKitGalleryThumbnails: GalleryThumbnailProviding {
             try await withCheckedThrowingContinuation { continuation in
                 guard request.install(continuation) else { return }
                 let options = PHImageRequestOptions()
-                options.deliveryMode = .fastFormat
+                options.deliveryMode = .opportunistic
                 options.resizeMode = .fast
                 options.isNetworkAccessAllowed = false
-                request.setID(manager.requestImage(for: asset, targetSize: CGSize(width: 180, height: 180), contentMode: .aspectFill, options: options) { image, _ in
-                    request.complete(image.map(GalleryImage.init))
+                request.setID(manager.requestImage(for: asset, targetSize: targetSize, contentMode: .aspectFill, options: options) { image, info in
+                    let degraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
+                    request.update(image.map(GalleryImage.init), isDegraded: degraded)
                 })
             }
         } onCancel: { request.cancel() }
@@ -87,6 +100,8 @@ final class GalleryThumbnailLoader {
     private struct Job {
         let id: UUID
         let local: String
+        let targetPixels: CGSize
+        let cacheKey: NSString
         let continuation: CheckedContinuation<GalleryImage?, Error>
     }
     private let provider: any GalleryThumbnailProviding
@@ -108,13 +123,15 @@ final class GalleryThumbnailLoader {
 
     func clearCache() { cacheGeneration = UUID(); cache.removeAllObjects() }
 
-    func image(local: String) async throws -> GalleryImage? {
+    func image(local: String, targetSize: CGSize = CGSize(width: 98, height: 92), scale: CGFloat = 1) async throws -> GalleryImage? {
         try Task.checkCancellation()
-        if let cached = cache.object(forKey: local as NSString) { return cached }
+        let pixels = GalleryThumbnailSizing.pixelTargetSize(points: targetSize, scale: scale)
+        let key = "\(local)|\(Int(pixels.width))x\(Int(pixels.height))" as NSString
+        if let cached = cache.object(forKey: key) { return cached }
         let id = UUID()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                queue.append(Job(id: id, local: local, continuation: continuation))
+                queue.append(Job(id: id, local: local, targetPixels: pixels, cacheKey: key, continuation: continuation))
                 pump()
             }
         } onCancel: { Task { @MainActor in self.cancel(id) } }
@@ -138,10 +155,10 @@ final class GalleryThumbnailLoader {
             active[job.id] = Task {
                 do {
                     try await gate.checkpoint()
-                    GalleryDebug.log("gallery.thumbnail.start active=\(active.count)")
-                    let value = try await provider.image(local: job.local)
+                    GalleryDebug.log("gallery.thumbnail.start active=\(active.count) targetPixels=\(Int(job.targetPixels.width))x\(Int(job.targetPixels.height))")
+                    let value = try await provider.image(local: job.local, targetSize: job.targetPixels)
                     try Task.checkCancellation()
-                    if let value, generation == cacheGeneration { cache.setObject(value, forKey: job.local as NSString, cost: 180 * 180 * 4) }
+                    if let value, generation == cacheGeneration { cache.setObject(value, forKey: job.cacheKey, cost: Int(job.targetPixels.width * job.targetPixels.height * 4)) }
                     continuations.removeValue(forKey: job.id)?.resume(returning: value)
                 } catch {
                     continuations.removeValue(forKey: job.id)?.resume(throwing: error)

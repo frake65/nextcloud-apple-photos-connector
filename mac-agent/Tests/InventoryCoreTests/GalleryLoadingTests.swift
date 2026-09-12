@@ -46,7 +46,7 @@ private actor ControlledThumbnails: GalleryThumbnailProviding {
     private(set) var cancellations: [String] = []
     let cooperative: Bool
     init(cooperative: Bool = true) { self.cooperative = cooperative }
-    func image(local: String) async throws -> GalleryImage? {
+    func image(local: String, targetSize: CGSize) async throws -> GalleryImage? {
         try Task.checkCancellation()
         starts.append(local)
         return try await withTaskCancellationHandler {
@@ -241,8 +241,8 @@ final class GalleryLoadingTests: XCTestCase {
                 XCTAssertTrue(request.install(continuation))
                 request.cancel()
                 request.setID(42)
-                request.complete(nil)
-                request.complete(nil)
+                request.update(nil, isDegraded: false)
+                request.update(nil, isDegraded: false)
             }
         }
         do { _ = try await task.value; XCTFail("Cancelled callback returned") } catch is CancellationError { }
@@ -252,8 +252,8 @@ final class GalleryLoadingTests: XCTestCase {
         let image: GalleryImage? = try await withCheckedThrowingContinuation { continuation in
             XCTAssertTrue(completed.install(continuation))
             completed.setID(43)
-            completed.complete(nil)
-            completed.complete(nil)
+            completed.update(nil, isDegraded: false)
+            completed.update(nil, isDegraded: false)
         }
         XCTAssertNil(image)
     }
@@ -278,6 +278,11 @@ final class GalleryLoadingTests: XCTestCase {
             }
             XCTFail("Pre-cancelled request returned")
         } catch is CancellationError { }
+    }
+
+    func testThumbnailPixelTargetUsesDisplayScale() {
+        XCTAssertEqual(GalleryThumbnailSizing.pixelTargetSize(points: CGSize(width: 98, height: 92), scale: 1), CGSize(width: 98, height: 92))
+        XCTAssertEqual(GalleryThumbnailSizing.pixelTargetSize(points: CGSize(width: 98, height: 92), scale: 2), CGSize(width: 196, height: 184))
     }
 
     func testAlbumRequestsDuringPauseAreCoalescedWithoutLoadingMembers() async throws {

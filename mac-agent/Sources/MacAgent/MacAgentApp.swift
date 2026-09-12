@@ -617,7 +617,9 @@ private struct PhotoThumbnailGrid: View {
                 ForEach(0..<model.assetCount, id: \.self) { index in
                     GalleryCell(model: model, index: index)
                 }
-            }.padding(4).id(model.generation)
+            }
+            .padding(4)
+            .id(model.generation)
         }.frame(minHeight: 180)
     }
 }
@@ -630,16 +632,34 @@ private struct GalleryCell: View {
     var body: some View {
         Group {
             if let asset {
+                let selected = model.selectedAssetIDs.contains(asset.identity) || model.selectedAssetIDs.contains("local:\(asset.localIdentifier)")
+                GeometryReader { geometry in
                 Button { model.toggleAsset(asset) } label: {
-                    AssetThumbnail(asset: asset, loader: model.thumbnails)
-                        .overlay(alignment: .topTrailing) {
-                            if model.selectedAssetIDs.contains(asset.identity) || model.selectedAssetIDs.contains("local:\(asset.localIdentifier)") {
-                                Image(systemName: "checkmark.circle.fill").foregroundStyle(.white, .blue).padding(4)
-                            }
+                    ZStack(alignment: .topTrailing) {
+                        AssetThumbnail(asset: asset, loader: model.thumbnails)
+                            .frame(width: geometry.size.width, height: 92)
+                            .clipped()
+                        if selected {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.white, .blue)
+                                .padding(6)
+                                .zIndex(1)
                         }
-                }.buttonStyle(.plain).disabled(model.selectionBusy || model.loading).id(asset.localIdentifier)
+                    }
+                    .contentShape(Rectangle())
+                    .frame(width: geometry.size.width, height: 92)
+                }
+                .buttonStyle(.plain)
+                .disabled(model.selectionBusy || model.loading)
+                .zIndex(selected ? 1 : 0)
+                .id(asset.localIdentifier)
+                .frame(width: geometry.size.width, height: 92)
+                }
+                .frame(height: 92)
             } else {
-                RoundedRectangle(cornerRadius: 6).fill(.secondary.opacity(0.2)).frame(height: 92)
+                RoundedRectangle(cornerRadius: 6).fill(.secondary.opacity(0.2))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 92)
             }
         }
         .task {
@@ -714,6 +734,8 @@ private struct AssetThumbnail: View {
     let asset: GalleryAsset
     let loader: GalleryThumbnailLoader
     @State private var image: NSImage?
+    @State private var pointSize = CGSize(width: 98, height: 92)
+    @Environment(\.displayScale) private var displayScale
 
     var body: some View {
         Group {
@@ -728,15 +750,29 @@ private struct AssetThumbnail: View {
                 }
             } else { RoundedRectangle(cornerRadius: 6).fill(.secondary.opacity(0.2)).overlay { ProgressView() } }
         }
-        .frame(height: 92).clipShape(RoundedRectangle(cornerRadius: 6))
-        .task(id: asset.localIdentifier) {
+        .frame(maxWidth: .infinity, minHeight: 92, maxHeight: 92)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .background {
+            GeometryReader { proxy in
+                Color.clear.preference(key: GalleryThumbnailSizeKey.self, value: proxy.size)
+            }
+        }
+        .onPreferenceChange(GalleryThumbnailSizeKey.self) { size in
+            if size.width > 0, size.height > 0 { pointSize = size }
+        }
+        .task(id: "\(asset.localIdentifier)-\(pointSize.width)-\(pointSize.height)-\(displayScale)") {
             image = nil
             do {
-                let value = try await loader.image(local: asset.localIdentifier)
+                let value = try await loader.image(local: asset.localIdentifier, targetSize: pointSize, scale: displayScale)
                 try Task.checkCancellation()
                 image = value?.image
             } catch { }
         }
         .onDisappear { image = nil }
     }
+}
+
+private struct GalleryThumbnailSizeKey: PreferenceKey {
+    static let defaultValue = CGSize(width: 98, height: 92)
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
 }
