@@ -99,6 +99,96 @@ dc2a8fa Unify photo and album import workflow
 0dd6a96 Preserve photo capture time on upload
 ```
 
+## PhotoKit Library Change Observation – Phase 1 + 2
+
+Implementiert in Commit:
+
+```text
+54d294c Observe PhotoKit library changes incrementally
+```
+
+### Funktion
+
+Die laufende macOS-App beobachtet Änderungen der Apple-Fotomediathek über
+`PHPhotoLibraryChangeObserver`, `PHChange` und
+`PHFetchResultChangeDetails`. Der bestehende `PHFetchResult<PHAsset>` der
+Lazy Gallery wird weiterverwendet.
+
+Bei inkrementellen Änderungen werden neue, entfernte und geänderte Assets
+erkannt. `fetchResultAfterChanges` wird übernommen; nur betroffene
+Cache-Einträge werden invalidiert. Neue Assets werden weiterhin lazy über
+`cell(at:)` materialisiert. Es erfolgt weder ein vollständiger Gallery-Rebuild
+noch ein globales Leeren des Thumbnail-/Gallery-Caches.
+
+Bei nicht inkrementellen Änderungen wird der Zustand als stale beziehungsweise
+Full-Refresh markiert. Im Change-Callback wird die Mediathek nicht vollständig
+materialisiert.
+
+### Change Coordinator
+
+Die neue Komponente
+`mac-agent/Sources/MacAgent/PhotoLibraryChangeCoordinator.swift` implementiert
+`PHPhotoLibraryChangeObserver`, registriert und deregistriert sich bei
+`PHPhotoLibrary.shared()` und berücksichtigt, dass PhotoKit-Callbacks nicht auf
+dem MainActor erfolgen müssen. UI- und App-State werden kontrolliert auf dem
+MainActor aktualisiert.
+
+### State
+
+`PhotoLibraryChangeState` enthält:
+
+- `revision`
+- `galleryIsStale`
+- `albumsAreStale`
+- `requiresFullRefresh`
+- betroffene `changedAssetIDs` und `removedAssetIDs`
+
+### Selection und Upload
+
+- `manuallySelectedAssetIDs` werden durch Library-Changes nicht automatisch gelöscht.
+- `selectedAlbumIDs` werden nicht automatisch gelöscht.
+- Lazy- oder unvollständige Gallery-Daten führen weiterhin nicht zu destruktiver Selection-Bereinigung.
+- Ein bereits gestarteter Upload arbeitet unverändert mit seinem eingefrorenen Snapshot.
+- PhotoKit-Änderungen verändern keinen laufenden Upload und starten keinen automatischen Upload.
+
+### Alben
+
+Phase 1 + 2 implementiert noch keine detaillierte Album-Membership-Beobachtung.
+Albumdaten können als stale markiert werden. Für spätere Phasen offen bleiben
+die gezielte Beobachtung des Albumkatalogs, neue oder gelöschte Alben,
+Membership-Add/Remove und gezielte Re-Fetches relevanter Alben. Eine permanente
+Beobachtung aller Album-Asset-Fetches wird nicht eingeführt.
+
+### iCloud / Realtests
+
+Die Implementierung wurde mit einer echten Apple-Fotomediathek und Änderungen
+während laufender App getestet. Erfolgreich bestätigt wurden:
+
+- ein neues Foto erscheint während laufender App ohne Neustart,
+- Änderungen werden ohne App-Neustart erkannt,
+- das Entfernen eines Fotos wird während laufender App verarbeitet,
+- die Galerie bleibt stabil,
+- die bestehende Auswahl bleibt erhalten,
+- kein unerwünschter vollständiger Gallery-Rebuild erfolgt.
+
+Damit ist die reale PhotoKit-/iCloud-Change-Observation bestätigt.
+
+### Tests
+
+Aktueller Stand: **93 Tests, 0 Fehler**.
+
+Die neuen Tests decken eingefügte, entfernte und geänderte Assets,
+nicht inkrementelle Änderungen, gezielte Cache-Invalidierung, unveränderte
+Cache-Einträge, Revisionserhöhung, unveränderte Selection und einen
+unveränderten eingefrorenen Upload-Snapshot ab.
+
+### Status
+
+Phase 1 + 2: abgeschlossen.
+
+Nächster möglicher Schritt: Phase 3 – gezielte Erkennung von Änderungen des
+Albumkatalogs.
+
 ## Offene Grenze
 
 Die Auswahl wird im aktuellen Browsermodell gehalten; eine separate persistent gespeicherte PhotoKit-Auswahl über einen App-Neustart hinweg ist nicht Bestandteil dieses Dokuments. Der aktuelle Ablauf bricht bei leerer Auswahl sicher ab, statt die gesamte Mediathek zu importieren.
