@@ -132,6 +132,7 @@ final class VisualLibraryModel: ObservableObject {
     private let gate: SettingsWorkGate
     private var selectionSourceId: String?
     private var manuallySelectedAssetIDs: Set<String> = []
+    private var successfullyUploadedAssetIDs: Set<String> = []
     private var albumMembers: [String: Set<String>] = [:]
     private(set) var loadedAlbums = false
     private var selectionTask: Task<Void, Never>?
@@ -218,6 +219,7 @@ final class VisualLibraryModel: ObservableObject {
         authorizationMessage = nil
         loadedAlbums = false
         albumDetails = []
+        successfullyUploadedAssetIDs.removeAll()
         if let persisted { restore(persisted) }
         else if selectionSourceId == nil {
             let source = try PhotoSourceStore.applicationStore().loadOrCreate()
@@ -331,7 +333,7 @@ final class VisualLibraryModel: ObservableObject {
 
     func clearSelection() {
         guard !selectionBusy else { return }
-        manuallySelectedAssetIDs.removeAll(); selectedAssetIDs.removeAll(); selectedAlbumIDs.removeAll(); albumMembers.removeAll()
+        manuallySelectedAssetIDs.removeAll(); selectedAssetIDs.removeAll(); selectedAlbumIDs.removeAll(); albumMembers.removeAll(); successfullyUploadedAssetIDs.removeAll()
         selectedPhotos = 0; selectedVideos = 0
         saveSelection()
     }
@@ -344,7 +346,8 @@ final class VisualLibraryModel: ObservableObject {
     }
 
     private func rebuildEffectiveSelection() {
-        selectedAssetIDs = manuallySelectedAssetIDs.union(albumMembers.values.reduce(into: Set<String>()) { $0.formUnion($1) })
+        let effective = manuallySelectedAssetIDs.union(albumMembers.values.reduce(into: Set<String>()) { $0.formUnion($1) })
+        selectedAssetIDs = effective.subtracting(successfullyUploadedAssetIDs)
     }
 
     private func refreshEffectiveSelectionCounts() async throws {
@@ -357,6 +360,11 @@ final class VisualLibraryModel: ObservableObject {
     }
 
     func uploadSnapshot() -> Set<String> { selectedAssetIDs }
+    func markSuccessfullyUploaded(_ identity: String) {
+        successfullyUploadedAssetIDs.insert(identity)
+        rebuildEffectiveSelection()
+        Task { try? await refreshEffectiveSelectionCounts() }
+    }
 
     func resolveUploadSnapshot(_ frozen: Set<String>) async throws -> Set<String> {
         // A local fallback may have gained a cloud identity since selection.
@@ -397,7 +405,12 @@ private struct InventoryView: View {
             }
             UploadTargetSummaryView(server: model.server, user: model.user, targetPath: model.targetPath)
             Divider()
-            Button(uploadButtonTitle) {
+            Button(model.scanning ? "Upload abbrechen" : uploadButtonTitle) {
+                if model.scanning {
+                    print("CANCELLED stage=button")
+                    model.uploadTask?.cancel()
+                    return
+                }
                 model.debugLog = []
                 model.logUploadEvent("upload.ui.requested selectedAssets=\(visual.selectedAssetIDs.count) selectedAlbums=\(visual.selectedAlbumIDs.count)")
                 model.logUploadEvent("upload.ui.reinventory=\(retransferMissing)")
@@ -415,7 +428,7 @@ private struct InventoryView: View {
                 model.uploadInProgress = true
                 model.status = L10n.text("uploadRunning")
                 model.uploadTask = Task {
-                    defer { model.scanning = false; model.uploadInProgress = false }
+                    defer { model.scanning = false; model.uploadTask = nil }
                     do {
                         try await SettingsWorkGate.shared.checkpoint()
                         // A pending start must validate the settings that exist
@@ -449,6 +462,8 @@ private struct InventoryView: View {
                                 model.debugLog.append(message)
                                 model.logUploadEvent(message)
                             }
+                        }, onUploaded: { identity in
+                            Task { @MainActor in visual.markSuccessfullyUploaded(identity) }
                         })
                         var albumSummary: AlbumInventoryCoordinator.SyncResult?
                         if !visual.selectedAlbumIDs.isEmpty {
@@ -457,9 +472,42 @@ private struct InventoryView: View {
                                 selectedAlbumIDs: visual.selectedAlbumIDs, selectedAssetIDs: selectionSnapshot)
                         }
                         model.status = uploadSummary(summary, albums: albumSummary)
-                    } catch { model.status = "Error: \(L10n.text("upload"))" }
+                        if summary.failed == 0 {
+                            model.uploadInProgress = false
+                        }
+                    } catch is CancellationError {
+                        print("CANCELLED stage=task")
+                        if let progress = model.uploadProgress {
+                            model.uploadProgress = progress.markingOpenUnfinished()
+                        }
+                        model.status = "Import durch Benutzer abgebrochen"
+                        // Keep the sheet visible for technical errors so the
+                        // per-file failure remains inspectable.
+                    } catch {
+                        if case let UploadError.http(status) = error {
+                            print("ERROR stage=inventory type=http status=\(status)")
+                            if (500...599).contains(status) {
+                                model.status = "Nextcloud-Server ist vorübergehend nicht verfügbar."
+                            } else if status == 401 || status == 403 {
+                                model.status = "Anfrage an Nextcloud wurde abgelehnt."
+                            } else {
+                                model.status = "Anfrage an Nextcloud wurde abgelehnt."
+                            }
+                        } else {
+                            print("ERROR stage=import error=\(error.localizedDescription)")
+                        }
+                        let nsError = error as NSError
+                        if !(error is UploadError) && nsError.domain == NSURLErrorDomain &&
+                            (nsError.code == NSURLErrorTimedOut || nsError.code == NSURLErrorCannotConnectToHost ||
+                             nsError.code == NSURLErrorNetworkConnectionLost || nsError.code == NSURLErrorNotConnectedToInternet) {
+                            model.status = "Nextcloud-Server nicht erreichbar."
+                        } else if !(error is UploadError) {
+                            model.status = "Error: \(L10n.text("upload"))"
+                        }
+                        model.uploadInProgress = false
+                    }
                 }
-            }.disabled(model.scanning || visual.selectionBusy || visual.loading)
+            }.disabled((!model.scanning && (visual.selectionBusy || visual.loading)))
             if let progress = model.uploadProgress {
                 GroupBox(L10n.text("uploadProgress")) {
                     VStack(alignment: .leading, spacing: 6) {
@@ -647,6 +695,23 @@ private struct UploadProgressSheet: View {
                 Text(progress.filename.map { "Datei: \($0)" } ?? "Upload wird vorbereitet …")
                 Text(L10n.format("uploadsProgressFormat", progress.completed, progress.total))
                     .foregroundStyle(.secondary)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(progress.items) { item in
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack {
+                                    Text(item.filename).fontWeight(.medium)
+                                    Spacer()
+                                Text(Self.statusText(item.status))
+                                        .foregroundStyle(item.status == .failed ? .red : .secondary)
+                                }
+                                Text("Quelle: \(item.source)").font(.caption).foregroundStyle(.secondary)
+                                if let target = item.target { Text("Ziel: \(target)").font(.caption).foregroundStyle(.secondary) }
+                                if let error = item.error { Text(error).font(.caption).foregroundStyle(.red) }
+                            }
+                        }
+                    }
+                }.frame(maxHeight: 220)
             } else { ProgressView(); Text(L10n.text("preparingUploads")) }
             if debugEnabled { GroupBox(L10n.text("debug")) {
                 ScrollView {
@@ -657,8 +722,18 @@ private struct UploadProgressSheet: View {
                 }
                 .frame(minHeight: 100, maxHeight: 220)
             } }
-            HStack { Spacer(); Button(L10n.text("cancelUpload"), role: .cancel) { cancel(); dismiss() } }
+            HStack {
+                Spacer()
+                if progress.map({ $0.completed >= $0.total }) == true || progress?.failed == true {
+                    Button("Schließen") { dismiss() }
+                } else {
+                    Button(L10n.text("cancelUpload"), role: .cancel) { cancel() }
+                }
+            }
         }.padding(24).frame(width: 380)
+    }
+    private static func statusText(_ status: UploadCoordinator.DisplayStatus) -> String {
+        status.label
     }
 }
 

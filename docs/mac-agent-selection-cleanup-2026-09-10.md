@@ -312,6 +312,7 @@ Unit-Tests abgesichert; es gibt keinen Hinweis auf einen bekannten Fehler.
 - `PHCollectionList`-/Ordneränderungen werden nicht separat beobachtet.
 - PhotoKit-Membership-Changes lösen keine automatische Server-Synchronisation aus.
 - PhotoKit-Membership-Changes lösen keinen automatischen Upload aus.
+- Finalen Nextcloud-Zielpfad während des laufenden Uploads im Upload-Fenster anzeigen. Die bisherige Live-Propagation von `UploadTarget.path` in das SwiftUI-Progress-Modell war im Realbetrieb nicht zuverlässig. Dies ist kein Blocker für den Upload.
 
 ## Offene Grenze
 

@@ -90,6 +90,9 @@ function uploadScenarios(\OCA\ApplePhotosConnector\Db\InventoryRepository $repo)
     $known = $inventory->ingest($user, $source, [$asset]);
     check($known['assets'][0]['state'] === 'known' && $known['assets'][0]['upload'] === null, 'successful upload is never requested again');
     unset($files->files[$path]);
+    $missingDefault = $inventory->ingest($user, $source, [$asset]);
+    check($missingDefault['assets'][0]['state'] === 'new' && $missingDefault['assets'][0]['upload'] !== null,
+        'deleted mapped file is recoverable without retransfer flag');
     $missing = $inventory->ingest($user, $source, [$asset], true);
     check($missing['assets'][0]['state'] === 'new' && $missing['assets'][0]['upload'] !== null,
         'retransfer flag requests a new upload when the previously mapped file is missing');
@@ -99,8 +102,8 @@ function uploadScenarios(\OCA\ApplePhotosConnector\Db\InventoryRepository $repo)
     check($missingTarget['state'] === 'missing' && dirname($missingTarget['path']) === dirname($path) && $missingTarget['path'] !== $path,
         'missing current reserves a new target in the same folder while preserving history');
     $stillKnown = $inventory->ingest($user, $source, [$asset]);
-    check($stillKnown['assets'][0]['state'] === 'known' && $stillKnown['assets'][0]['upload'] === null,
-        'retransfer flag remains opt-in and disabled behavior stays additive');
+    check($stillKnown['assets'][0]['state'] === 'new' && $stillKnown['assets'][0]['upload'] !== null,
+        'unacknowledged recovery remains uploadable');
     $before = $repo->assets($user, $source['sourceId']);
     $inventory->ingest($user, $source, []);
     check($before === $repo->assets($user, $source['sourceId']) && !array_key_exists($path, $files->files), 'empty follow-up scan leaves file reference and file untouched');

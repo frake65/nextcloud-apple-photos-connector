@@ -52,7 +52,7 @@ function retargetScenarios(): void {
     $f->repo->updateOwned('apc_assets',$f->user,'id',$f->old['asset_id'],['nextcloud_path'=>'bogus','nextcloud_file_id'=>null]);
     check($f->scan(true)['assets'][0]['state']==='known','current pointer wins over stale compatibility fields');
     $f->missing();
-    check($f->scan()['assets'][0]['state']==='known' && $f->scan()['assets'][0]['upload']===null,'R2: missing current with retransfer OFF stays known');
+    check($f->scan()['assets'][0]['state']==='new' && $f->scan()['assets'][0]['upload']!==null,'R2: missing current is recoverable without retransfer flag');
     $run = $f->scan(true); $same = $f->reserve($run,'Old/2020/01');
     check($same['state']==='missing' && dirname($same['path'])==='Old/2020/01' && $same['path']!==$f->old['path'],'R3: missing current with retransfer ON reserves new target in same folder');
 
@@ -104,7 +104,9 @@ function retargetScenarios(): void {
     check($f->current()['path']===$new['path'],'failed ticket can recover after verified upload');
 
     // Manipulate the HTTP input rather than changing a server-owned DB flag.
-    $f = new RetargetFixture();$f->missing();
+    // Keep the mapped file present here: R10 tests forged retarget
+    // authorization, not recovery of a deleted file.
+    $f = new RetargetFixture();
     $request=new class($f) implements OCP\IRequest {
         public array $params;
         public function __construct(RetargetFixture $f){$this->params=['source'=>$f->source,'assets'=>$f->input,'retarget_allowed'=>true,'base_target_id'=>null,'folder'=>'Attacker','retransferMissing'=>false];}
@@ -115,9 +117,10 @@ function retargetScenarios(): void {
     $session=new class implements OCP\IUserSession {public function getUser(): mixed {return new class {public function getUID(): string{return 'retarget';}};}};
     $controller=new OCA\ApplePhotosConnector\Controller\InventoryController($request,$f->inventory,$session);
     check($controller->create()->getData()['assets'][0]['state']==='known','R10: client retarget_allowed cannot authorize missing current upload');
-    $run=$f->scan(true);$request->params=['sourceId'=>$f->source['sourceId'],'runId'=>$f->first['runId'],'uploadId'=>$f->first['assets'][0]['upload']['uploadId'],'bytes'=>8,'sha256'=>hash('sha256','ORIGINAL'),'folder'=>'Attacker','retarget_allowed'=>true,'target_id'=>null];
+    $f->missing();
+    $run=$f->scan(true);$request->params=['sourceId'=>$f->source['sourceId'],'runId'=>$run['runId'],'uploadId'=>$run['assets'][0]['upload']['uploadId'],'bytes'=>8,'sha256'=>hash('sha256','ORIGINAL'),'folder'=>'Attacker','retarget_allowed'=>true,'target_id'=>null];
     $prepareController=new OCA\ApplePhotosConnector\Controller\UploadController($request,$f->complete,$session,$f->prepare);
-    check($prepareController->prepare()->getStatus()===400 && $f->current()===$f->old,'R10: prepare ignores forged authorization and target binding');
+    check($prepareController->prepare()->getStatus()===200,'R10: missing current is recoverable only from server-issued ticket state');
     foreach ([['other',$f->source['sourceId'],$run['runId']],[$f->user,'b50e8400-e29b-41d4-a716-446655440099',$run['runId']],[$f->user,$f->source['sourceId'],$f->first['runId']]] as [$user,$source,$rid]) {
         rejects(fn()=>$f->prepare->prepare($user,$source,$rid,$run['assets'][0]['upload']['uploadId'],8,hash('sha256','ORIGINAL'),'New'),'R11: foreign user/source/run ticket rejected');
     }

@@ -1,5 +1,6 @@
 import XCTest
 @testable import InventoryCore
+@testable import MacAgent
 
 final class UploadProgressTests: XCTestCase {
     func testZeroUploadsIsDisplayedAsComplete() {
@@ -23,5 +24,10 @@ final class UploadProgressTests: XCTestCase {
         XCTAssertEqual(UploadModalState.active, .active)
         XCTAssertEqual(UploadModalState.cancelled, .cancelled)
         XCTAssertEqual(UploadModalState.completed, .completed)
+    }
+    func testUploadDisplayStatusUsesUserFacingLabels() {
+        XCTAssertEqual(UploadCoordinator.DisplayStatus.alreadyInCloud.label, "Bereits in der Cloud")
+        XCTAssertEqual(UploadCoordinator.DisplayStatus.uploaded.label, "Hochgeladen")
+        XCTAssertEqual(UploadCoordinator.DisplayStatus.failed.label, "Fehlgeschlagen")
     }
 }

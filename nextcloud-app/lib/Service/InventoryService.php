@@ -75,7 +75,10 @@ class InventoryService {
                     }
                 }
                 $current = $this->repository->getCurrentTarget($user, $sourceId, (int)$row['id']);
-                $retarget = $current !== null && $retransferMissing && !$this->files->exists($user, $current['path']);
+                // A persisted mapping is authoritative only while its file
+                // still exists. A deleted file must remain recoverable even
+                // when the optional retransfer flag is not set.
+                $retarget = $current !== null && !$this->files->exists($user, $current['path']);
                 $uploaded = $current !== null && !$retarget;
                 $upload = null;
                 if (!$uploaded) {

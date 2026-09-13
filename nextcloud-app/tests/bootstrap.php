@@ -8,7 +8,7 @@ spl_autoload_register(static function (string $class): void {
 });
 
 final class TestNullUserFolder {
-    public function nodeExists(string $path): bool { return false; }
+    public function nodeExists(string $path): bool { return str_contains($path, '/fixture-'); }
     public function get(string $path): mixed { throw new \RuntimeException('test target is absent'); }
 }
 final class TestNullRootFolder implements \OCP\Files\IRootFolder {

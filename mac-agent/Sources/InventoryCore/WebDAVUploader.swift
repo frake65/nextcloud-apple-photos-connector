@@ -20,13 +20,22 @@ public final class NetworkTransport: NSObject, DAVTransport, URLSessionTaskDeleg
     public func send(_ request: URLRequest, file: URL?) async throws -> DAVResponse {
         let config = URLSessionConfiguration.ephemeral
         config.httpCookieStorage = nil
+        config.timeoutIntervalForRequest = 10
+        config.timeoutIntervalForResource = file == nil ? 30 : 1800
         let session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
         defer { session.finishTasksAndInvalidate() }
+        var request = request
+        request.timeoutInterval = file == nil ? 10 : 1800
         let result: (Data, URLResponse)
         if let file { result = try await session.upload(for: request, fromFile: file) }
         else { result = try await session.data(for: request) }
         guard let response = result.1 as? HTTPURLResponse else { throw UploadError.invalidResponse }
         var headers: [String: String] = [:]; for (key, value) in response.allHeaderFields { headers[String(describing: key)] = String(describing: value) }
+        // WebDAV commonly answers MKCOL for an already existing directory
+        // with 405. The caller explicitly treats that as successful/idempotent.
+        // Preserve all other HTTP errors for normal error handling.
+        let expectedExistingDirectory = request.httpMethod == "MKCOL" && response.statusCode == 405
+        guard response.statusCode < 400 || expectedExistingDirectory else { throw UploadError.http(response.statusCode) }
         return DAVResponse(status: response.statusCode, data: result.0, headers: headers)
     }
 }
