@@ -314,4 +314,56 @@ final class GalleryLoadingTests: XCTestCase {
         XCTAssertEqual(after, 1)
         XCTAssertTrue(model.uploadSnapshot().isEmpty)
     }
+
+    func testGalleryChangeDeltaTracksInsertedAsset() {
+        let delta = GalleryChangeDelta(insertedIndexes: IndexSet(integer: 3), removedAssetIDs: [], changedAssetIDs: [], isIncremental: true, newCount: 11)
+        XCTAssertTrue(delta.insertedIndexes.contains(3))
+        XCTAssertTrue(delta.isIncremental)
+        XCTAssertEqual(delta.newCount, 11)
+    }
+
+    func testGalleryChangeDeltaTracksRemovedAsset() {
+        let delta = GalleryChangeDelta(insertedIndexes: [], removedAssetIDs: ["asset-2"], changedAssetIDs: [], isIncremental: true, newCount: 9)
+        XCTAssertEqual(delta.removedAssetIDs, ["asset-2"])
+    }
+
+    func testGalleryChangeDeltaTracksChangedAsset() {
+        let delta = GalleryChangeDelta(insertedIndexes: [], removedAssetIDs: [], changedAssetIDs: ["asset-4"], isIncremental: true, newCount: 10)
+        XCTAssertEqual(delta.changedAssetIDs, ["asset-4"])
+    }
+
+    func testNonIncrementalGalleryChangeIsMarkedForFullRefresh() {
+        let delta = GalleryChangeDelta(insertedIndexes: [], removedAssetIDs: [], changedAssetIDs: [], isIncremental: false, newCount: 100_000)
+        XCTAssertFalse(delta.isIncremental)
+        XCTAssertEqual(delta.newCount, 100_000)
+    }
+
+    func testOnlyAffectedGalleryCacheEntriesAreInvalidated() {
+        let remaining = GalleryChangeDelta.invalidatedCacheKeys(["asset-1", "asset-2", "asset-3"], removed: ["asset-2"], changed: ["asset-3"])
+        XCTAssertEqual(remaining, ["asset-1"])
+    }
+
+    func testGalleryChangeStateRevisionIncrements() {
+        let first = PhotoLibraryChangeState()
+        let change = GalleryChangeResult(requiresFullRefresh: false, changedAssetIDs: ["asset-1"], removedAssetIDs: [])
+        let second = PhotoLibraryChangeState.applying(change, to: first)
+        let third = PhotoLibraryChangeState.applying(change, to: second)
+        XCTAssertEqual(second.revision, 1)
+        XCTAssertEqual(third.revision, 2)
+    }
+
+    func testGalleryChangeStateDoesNotAlterSelectionState() {
+        let selection = PhotoSelectionState(manuallySelectedAssetIDs: ["cloud:asset-1"], selectedAlbumIDs: ["cloud:album-1"])
+        let change = GalleryChangeResult(requiresFullRefresh: true, changedAssetIDs: [], removedAssetIDs: ["asset-1"])
+        _ = PhotoLibraryChangeState.applying(change, to: PhotoLibraryChangeState())
+        XCTAssertEqual(selection.manuallySelectedAssetIDs, ["cloud:asset-1"])
+        XCTAssertEqual(selection.selectedAlbumIDs, ["cloud:album-1"])
+    }
+
+    func testFrozenUploadSnapshotIsIndependentOfGalleryChanges() {
+        let snapshot: Set<String> = ["cloud:asset-1", "cloud:asset-2"]
+        let change = GalleryChangeResult(requiresFullRefresh: false, changedAssetIDs: [], removedAssetIDs: ["asset-1"])
+        _ = PhotoLibraryChangeState.applying(change, to: PhotoLibraryChangeState())
+        XCTAssertEqual(snapshot, ["cloud:asset-1", "cloud:asset-2"])
+    }
 }

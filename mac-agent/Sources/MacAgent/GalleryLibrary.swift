@@ -23,14 +23,43 @@ struct GallerySelection: Sendable {
     var videos = 0
 }
 
+struct GalleryChangeResult: Sendable {
+    let requiresFullRefresh: Bool
+    let changedAssetIDs: Set<String>
+    let removedAssetIDs: Set<String>
+}
+
+struct GalleryChangeDelta: Sendable, Equatable {
+    let insertedIndexes: IndexSet
+    let removedAssetIDs: Set<String>
+    let changedAssetIDs: Set<String>
+    let isIncremental: Bool
+    let newCount: Int
+}
+
+extension GalleryChangeDelta {
+    static func invalidatedCacheKeys(_ keys: Set<String>, removed: Set<String>, changed: Set<String>) -> Set<String> {
+        keys.subtracting(removed.union(changed))
+    }
+}
+
 protocol GalleryLibraryProviding: Sendable {
     func open() async throws -> Int
+    func currentCount() async -> Int
     func cell(at index: Int) async throws -> GalleryAsset
     func resolveAll() async throws -> GallerySelection
     func resolveSelection(_ identities: Set<String>) async throws -> GallerySelection
     func albumCatalog() async throws -> [GalleryAlbum]
     func albumAssets(_ local: String) async throws -> GallerySelection
     func asset(local: String) async throws -> GalleryAsset?
+    func apply(change: PHChange) async -> GalleryChangeResult
+}
+
+extension GalleryLibraryProviding {
+    func currentCount() async -> Int { 0 }
+    func apply(change: PHChange) async -> GalleryChangeResult {
+        GalleryChangeResult(requiresFullRefresh: true, changedAssetIDs: [], removedAssetIDs: [])
+    }
 }
 
 enum GalleryDebug {
@@ -64,6 +93,23 @@ actor GalleryLibrary: GalleryLibraryProviding {
         let count = fetched?.count ?? 0
         GalleryDebug.log("gallery.fetch.count=\(count)")
         return count
+    }
+
+    func currentCount() async -> Int { fetched?.count ?? 0 }
+
+    func apply(change: PHChange) async -> GalleryChangeResult {
+        guard let old = fetched, let details = change.changeDetails(for: old) else {
+            return GalleryChangeResult(requiresFullRefresh: true, changedAssetIDs: [], removedAssetIDs: [])
+        }
+        let removed = Set(details.removedObjects.map(\.localIdentifier))
+        let changed = Set(details.changedObjects.map(\.localIdentifier))
+        let nonIncremental = !details.hasIncrementalChanges
+        fetched = details.fetchResultAfterChanges
+        for id in removed { cache.removeValue(forKey: id) }
+        for id in changed { cache.removeValue(forKey: id) }
+        return GalleryChangeResult(requiresFullRefresh: nonIncremental,
+                                   changedAssetIDs: changed,
+                                   removedAssetIDs: removed)
     }
 
     func cell(at index: Int) async throws -> GalleryAsset {

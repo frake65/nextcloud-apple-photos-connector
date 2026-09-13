@@ -126,6 +126,7 @@ final class VisualLibraryModel: ObservableObject {
     @Published var loading = false
     @Published private(set) var selectionBusy = false
     @Published var authorizationMessage: String?
+    @Published private(set) var libraryChangeState = PhotoLibraryChangeState()
     let library: any GalleryLibraryProviding
     let thumbnails: GalleryThumbnailLoader
     private let gate: SettingsWorkGate
@@ -136,6 +137,7 @@ final class VisualLibraryModel: ObservableObject {
     private var selectionTask: Task<Void, Never>?
     private let loadRequests: CoalescingWorkRequest
     private let albumRequests: CoalescingWorkRequest
+    private var changeCoordinator: PhotoLibraryChangeCoordinator?
 
     init(library: any GalleryLibraryProviding = GalleryLibrary(),
          thumbnails: GalleryThumbnailLoader = GalleryThumbnailLoader(),
@@ -143,6 +145,21 @@ final class VisualLibraryModel: ObservableObject {
         self.library = library; self.thumbnails = thumbnails; self.gate = gate
         loadRequests = CoalescingWorkRequest(gate: gate)
         albumRequests = CoalescingWorkRequest(gate: gate)
+        changeCoordinator = PhotoLibraryChangeCoordinator(library: library) { [weak self] change in
+            self?.apply(libraryChange: change)
+        }
+    }
+
+    private func apply(libraryChange change: GalleryChangeResult) {
+        libraryChangeState = PhotoLibraryChangeState.applying(change, to: libraryChangeState)
+        generation = UUID()
+        loadedAlbums = false
+        albumDetails = []
+        albumTask = nil
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            assetCount = await library.currentCount()
+        }
     }
 
     var albums: [AlbumInventory] { albumDetails.map(\.inventory) }
