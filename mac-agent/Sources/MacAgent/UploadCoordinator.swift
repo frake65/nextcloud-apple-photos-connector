@@ -2,7 +2,10 @@ import Foundation
 import InventoryCore
 
 actor UploadCoordinator {
-    struct RunSummary: Sendable { let uploadedImages: Int; let uploadedVideos: Int; let uploadedOther: Int }
+    struct RunSummary: Sendable {
+        let uploadedImages: Int; let uploadedVideos: Int; let uploadedOther: Int
+        let alreadyInCloudImages: Int; let alreadyInCloudVideos: Int; let alreadyInCloudOther: Int
+    }
     struct Progress: Sendable { let completed: Int; let total: Int; let filename: String?; let failed: Bool }
     static let maxConcurrentUploads = 3
     private struct UploadJob: Sendable { let index: Int; let entry: InventoryReply.Entry }
@@ -223,6 +226,9 @@ actor UploadCoordinator {
         var uploadedImages = 0
         var uploadedVideos = 0
         var uploadedOther = 0
+        var alreadyInCloudImages = 0
+        var alreadyInCloudVideos = 0
+        var alreadyInCloudOther = 0
         var failed = 0
         progress?(Progress(completed: 0, total: totalUploads, filename: nil, failed: false))
 
@@ -299,9 +305,17 @@ actor UploadCoordinator {
         try Task.checkCancellation()
         let newCount = reply.assets.filter { $0.state == "new" }.count
         let knownCount = reply.assets.filter { $0.state == "known" }.count
+        for (index, entry) in reply.assets.enumerated() where entry.state == "known" {
+            switch assets[index]["mediaType"] as? String {
+            case "image": alreadyInCloudImages += 1
+            case "video": alreadyInCloudVideos += 1
+            default: alreadyInCloudOther += 1
+            }
+        }
         debug?("Inventory decoded · assets=\(reply.assets.count) · new=\(newCount) · known=\(knownCount) · uploadTickets=\(totalUploads)")
         debug?("upload.counter.uploaded=\(uploaded)")
         debug?("upload.outcome=\(failed > 0 ? "failed" : (uploaded > 0 ? "success" : "nothingToDo"))")
-        return RunSummary(uploadedImages: uploadedImages, uploadedVideos: uploadedVideos, uploadedOther: uploadedOther)
+        return RunSummary(uploadedImages: uploadedImages, uploadedVideos: uploadedVideos, uploadedOther: uploadedOther,
+            alreadyInCloudImages: alreadyInCloudImages, alreadyInCloudVideos: alreadyInCloudVideos, alreadyInCloudOther: alreadyInCloudOther)
     }
 }

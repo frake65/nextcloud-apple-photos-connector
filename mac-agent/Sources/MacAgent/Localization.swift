@@ -10,7 +10,7 @@ enum L10n {
         "settings": ["de":"Einstellungen öffnen …", "en":"Open Settings …", "nl":"Instellingen openen …", "es":"Abrir ajustes …", "fr":"Ouvrir les réglages …"],
         "importStatus": ["de":"Importstatus", "en":"Import status", "nl":"Importstatus", "es":"Estado de importación", "fr":"État de l’importation"],
         "requestPhotoAccess": ["de":"Zugriff auf Apple Photos anfordern", "en":"Request Apple Photos Access", "nl":"Toegang tot Apple Photos aanvragen", "es":"Solicitar acceso a Apple Photos", "fr":"Demander l’accès à Apple Photos", "pt":"Solicitar acesso ao Apple Photos"],
-        "upload": ["de":"Hochladen", "en":"Upload", "fr":"Téléverser", "pt":"Carregar", "nl":"Uploaden", "es":"Subir"],
+        "upload": ["de":"Fotos & Alben übernehmen", "en":"Import Photos & Albums", "fr":"Importer photos et albums", "pt":"Importar fotos e álbuns", "nl":"Foto's en albums overnemen", "es":"Importar fotos y álbumes"],
         "photos": ["de":"Fotos", "en":"Photos", "fr":"Photos", "pt":"Fotos", "nl":"Foto's", "es":"Fotos"],
         "albums": ["de":"Alben", "en":"Albums", "fr":"Albums", "pt":"Álbuns", "nl":"Albums", "es":"Álbumes"],
         "selectAll": ["de":"Alle auswählen", "en":"Select all", "fr":"Tout sélectionner", "pt":"Selecionar tudo", "nl":"Alles selecteren", "es":"Seleccionar todo"],
@@ -91,6 +91,7 @@ enum L10n {
         ,"videoCountOne": ["de":"Video", "en":"video", "fr":"vidéo", "pt":"vídeo", "nl":"video", "es":"vídeo"]
         ,"videoCountMany": ["de":"Videos", "en":"videos", "fr":"vidéos", "pt":"vídeos", "nl":"video's", "es":"vídeos"]
         ,"transferredCount": ["de":"%d %@ übertragen", "en":"%d %@ transferred", "fr":"%d %@ transféré(s)", "pt":"%d %@ transferido(s)", "nl":"%d %@ overgedragen", "es":"%d %@ transferido(s)"]
+        ,"alreadyInCloudCount": ["de":"%d %@ bereits in der Cloud", "en":"%d %@ already in the cloud", "fr":"%d %@ déjà dans le cloud", "pt":"%d %@ já na nuvem", "nl":"%d %@ al in de cloud", "es":"%d %@ ya está en la nube"]
         ,"albumOne": ["de":"Album abgeglichen", "en":"album checked", "fr":"album vérifié", "pt":"álbum verificado", "nl":"album gecontroleerd", "es":"álbum comprobado"]
         ,"albumMany": ["de":"Alben abgeglichen", "en":"albums checked", "fr":"albums vérifiés", "pt":"álbuns verificados", "nl":"albums gecontroleerd", "es":"álbumes comprobados"]
         ,"albumSyncResult": ["de":"Album-Abgleich abgeschlossen · %d %@", "en":"Album sync complete · %d %@", "fr":"Synchronisation terminée · %d %@", "pt":"Sincronização concluída · %d %@", "nl":"Albumsynchronisatie voltooid · %d %@", "es":"Sincronización completada · %d %@"]

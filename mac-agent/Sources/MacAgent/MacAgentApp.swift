@@ -418,7 +418,13 @@ private struct InventoryView: View {
                                 model.logUploadEvent(message)
                             }
                         })
-                        model.status = uploadSummary(summary)
+                        var albumSummary: AlbumInventoryCoordinator.SyncResult?
+                        if !visual.selectedAlbumIDs.isEmpty {
+                            _ = try await model.albums.run(scanner: model.scanner, connection: connection)
+                            albumSummary = try await model.albums.sync(scanner: model.scanner, connection: connection,
+                                selectedAlbumIDs: visual.selectedAlbumIDs, selectedAssetIDs: selectionSnapshot)
+                        }
+                        model.status = uploadSummary(summary, albums: albumSummary)
                     } catch { model.status = "Error: \(L10n.text("upload"))" }
                 }
             }.disabled(model.scanning || visual.selectionBusy || visual.loading)
@@ -461,7 +467,7 @@ private struct InventoryView: View {
                 if visual.selectionBusy { ProgressView().controlSize(.small) }
                 Spacer()
             }
-            GroupBox {
+            if debugMode { GroupBox {
                 VStack(alignment: .leading, spacing: 8) {
                     let selected = visual.selectedAlbums
                     Text("\(L10n.text("albums")): \(selected.isEmpty ? "—" : selected.map(\.name).joined(separator: ", "))")
@@ -500,7 +506,7 @@ private struct InventoryView: View {
                 }
             } label: {
                 Text(L10n.text("albumSyncGroup")).font(.headline)
-            }
+            } }
         }
         .id(language)
         .onAppear {
@@ -568,10 +574,13 @@ private struct InventoryView: View {
     }
 
 
-    private func uploadSummary(_ summary: UploadCoordinator.RunSummary) -> String {
-        var parts: [String] = [L10n.text("uploadComplete")]
+    private func uploadSummary(_ summary: UploadCoordinator.RunSummary, albums: AlbumInventoryCoordinator.SyncResult? = nil) -> String {
+        var parts: [String] = [L10n.text("upload") + " abgeschlossen"]
         if summary.uploadedImages > 0 { parts.append(L10n.format("transferredCount", summary.uploadedImages, L10n.text(summary.uploadedImages == 1 ? "photoCountOne" : "photoCountMany"))) }
         if summary.uploadedVideos > 0 { parts.append(L10n.format("transferredCount", summary.uploadedVideos, L10n.text(summary.uploadedVideos == 1 ? "videoCountOne" : "videoCountMany"))) }
+        if summary.alreadyInCloudImages > 0 { parts.append(L10n.format("alreadyInCloudCount", summary.alreadyInCloudImages, L10n.text(summary.alreadyInCloudImages == 1 ? "photoCountOne" : "photoCountMany"))) }
+        if summary.alreadyInCloudVideos > 0 { parts.append(L10n.format("alreadyInCloudCount", summary.alreadyInCloudVideos, L10n.text(summary.alreadyInCloudVideos == 1 ? "videoCountOne" : "videoCountMany"))) }
+        if let albums { parts.append("\(albums.membershipsCreated + albums.membershipsReused) Albumzuordnungen durchgeführt") }
         return parts.joined(separator: " · ")
     }
 }

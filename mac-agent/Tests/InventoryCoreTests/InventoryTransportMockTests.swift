@@ -43,6 +43,7 @@ final class InventoryTransportMockTests: XCTestCase {
         let spy = CoordinatorSpy(.known); let c = UploadCoordinator(exporter: FakeExporter(failing: false), transport: spy)
         let s = try await c.run(json: inventoryJSON(), connection: try connection(), debug: nil); let counts = await spy.counts()
         XCTAssertEqual(counts.0, 1); XCTAssertEqual(counts.1, 0); XCTAssertEqual(counts.2, 0); XCTAssertEqual(counts.3, 0); XCTAssertEqual(s.uploadedImages, 0)
+        XCTAssertEqual(s.alreadyInCloudImages, 1)
     }
     func testH6InventoryTransportHTTPAndDecodeErrorsFail() async throws {
         for mode in [CoordinatorSpy.Mode.httpError, .invalid] {
