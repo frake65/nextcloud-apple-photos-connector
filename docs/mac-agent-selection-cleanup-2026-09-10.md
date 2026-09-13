@@ -189,6 +189,56 @@ Phase 1 + 2: abgeschlossen.
 Nächster möglicher Schritt: Phase 3 – gezielte Erkennung von Änderungen des
 Albumkatalogs.
 
+## PhotoKit Library Change Observation – Phase 3
+
+### Albumkatalog-Änderungen
+
+Implementiert in Commit:
+
+```text
+363caa7 Observe PhotoKit album catalog changes
+```
+
+Für den Albumkatalog wird ein langlebiger
+`PHFetchResult<PHAssetCollection>` gehalten. Änderungen werden über
+`changeDetails(for:)` ausgewertet und der neue
+`fetchResultAfterChanges` übernommen. Dabei werden stabile lokale
+Album-IDs für folgende Fälle erkannt:
+
+- `insertedAlbumIDs`
+- `removedAlbumIDs`
+- `changedAlbumIDs`
+
+Der Zustand enthält außerdem eine `albumRevision`. Nicht inkrementelle
+Änderungen markieren den Albumzustand vollständig als stale, ohne im
+PhotoKit-Change-Callback einen vollständigen Scan aller Album-Mitgliedschaften
+auszuführen.
+
+`selectedAlbumIDs` und die Fotoauswahl bleiben unverändert. Diese Phase startet
+weder einen automatischen Album-Sync noch einen automatischen Upload und führt
+noch keine detaillierte Album-Membership-Verarbeitung durch. Gallery- und
+Thumbnail-Logik bleiben unverändert.
+
+### Tests und Realtest-Status
+
+Der aktuelle Stand umfasst **95 Tests, 0 Fehler**. Die Tests decken Album-
+Insertions, -Löschungen und -Änderungen, Revisionserhöhung sowie den Erhalt
+der Selection ab.
+
+Die PhotoKit-Change-Observation wurde mit einer echten Apple-Fotomediathek
+getestet. Der Realtest-Status der Albumkatalogänderungen ist separat zu
+bestätigen; die bestehende Galerie-Change-Observation bleibt erfolgreich.
+
+### Offene Punkte / nächste Schritte
+
+- Der sichtbare Albumkatalog wird noch nicht vollständig inkrementell fortgeschrieben.
+- An definierten Checkpoints kann weiterhin ein vollständiger Albumkatalog-Load erfolgen.
+- `PHCollectionList`-/Ordneränderungen werden noch nicht separat beobachtet.
+- Nächste Phase ist die gezielte Beobachtung beziehungsweise Verarbeitung von Album-Mitgliedschaften.
+
 ## Offene Grenze
 
-Die Auswahl wird im aktuellen Browsermodell gehalten; eine separate persistent gespeicherte PhotoKit-Auswahl über einen App-Neustart hinweg ist nicht Bestandteil dieses Dokuments. Der aktuelle Ablauf bricht bei leerer Auswahl sicher ab, statt die gesamte Mediathek zu importieren.
+Die Auswahl wird im aktuellen Browsermodell gehalten; eine separate persistent
+gespeicherte PhotoKit-Auswahl über einen App-Neustart hinweg ist nicht
+Bestandteil dieses Dokuments. Der aktuelle Ablauf bricht bei leerer Auswahl
+sicher ab, statt die gesamte Mediathek zu importieren.
