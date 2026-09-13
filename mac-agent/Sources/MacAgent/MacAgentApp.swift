@@ -145,13 +145,13 @@ final class VisualLibraryModel: ObservableObject {
         self.library = library; self.thumbnails = thumbnails; self.gate = gate
         loadRequests = CoalescingWorkRequest(gate: gate)
         albumRequests = CoalescingWorkRequest(gate: gate)
-        changeCoordinator = PhotoLibraryChangeCoordinator(library: library) { [weak self] change in
-            self?.apply(libraryChange: change)
+        changeCoordinator = PhotoLibraryChangeCoordinator(library: library) { [weak self] change, albums in
+            self?.apply(libraryChange: change, albums: albums)
         }
     }
 
-    private func apply(libraryChange change: GalleryChangeResult) {
-        libraryChangeState = PhotoLibraryChangeState.applying(change, to: libraryChangeState)
+    private func apply(libraryChange change: GalleryChangeResult, albums: AlbumChangeDelta) {
+        libraryChangeState = PhotoLibraryChangeState.applying(change, album: albums, to: libraryChangeState)
         generation = UUID()
         loadedAlbums = false
         albumDetails = []

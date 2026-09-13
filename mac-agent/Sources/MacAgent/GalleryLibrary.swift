@@ -37,6 +37,13 @@ struct GalleryChangeDelta: Sendable, Equatable {
     let newCount: Int
 }
 
+struct AlbumChangeDelta: Sendable, Equatable {
+    let insertedAlbumIDs: Set<String>
+    let removedAlbumIDs: Set<String>
+    let changedAlbumIDs: Set<String>
+    let isIncremental: Bool
+}
+
 extension GalleryChangeDelta {
     static func invalidatedCacheKeys(_ keys: Set<String>, removed: Set<String>, changed: Set<String>) -> Set<String> {
         keys.subtracting(removed.union(changed))
@@ -53,12 +60,16 @@ protocol GalleryLibraryProviding: Sendable {
     func albumAssets(_ local: String) async throws -> GallerySelection
     func asset(local: String) async throws -> GalleryAsset?
     func apply(change: PHChange) async -> GalleryChangeResult
+    func applyAlbumChange(change: PHChange) async -> AlbumChangeDelta
 }
 
 extension GalleryLibraryProviding {
     func currentCount() async -> Int { 0 }
     func apply(change: PHChange) async -> GalleryChangeResult {
         GalleryChangeResult(requiresFullRefresh: true, changedAssetIDs: [], removedAssetIDs: [])
+    }
+    func applyAlbumChange(change: PHChange) async -> AlbumChangeDelta {
+        AlbumChangeDelta(insertedAlbumIDs: [], removedAlbumIDs: [], changedAlbumIDs: [], isIncremental: false)
     }
 }
 
@@ -75,6 +86,7 @@ enum GalleryDebug {
 /// only requested cells/explicit selections become small Sendable records.
 actor GalleryLibrary: GalleryLibraryProviding {
     private var fetched: PHFetchResult<PHAsset>?
+    private var albumCollections: PHFetchResult<PHAssetCollection>?
     private var cache: [String: GalleryAsset] = [:]
     private let gate: SettingsWorkGate
     private let batchSize = 128
@@ -89,10 +101,23 @@ actor GalleryLibrary: GalleryLibraryProviding {
     func open() async throws -> Int {
         try await gate.checkpoint()
         fetched = PHAsset.fetchAssets(with: options())
+        albumCollections = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil)
         cache.removeAll()
         let count = fetched?.count ?? 0
         GalleryDebug.log("gallery.fetch.count=\(count)")
         return count
+    }
+
+    func applyAlbumChange(change: PHChange) async -> AlbumChangeDelta {
+        guard let old = albumCollections, let details = change.changeDetails(for: old) else {
+            return AlbumChangeDelta(insertedAlbumIDs: [], removedAlbumIDs: [], changedAlbumIDs: [], isIncremental: false)
+        }
+        let inserted = Set(details.insertedObjects.map(\.localIdentifier))
+        let removed = Set(details.removedObjects.map(\.localIdentifier))
+        let changed = Set(details.changedObjects.map(\.localIdentifier))
+        albumCollections = details.fetchResultAfterChanges
+        return AlbumChangeDelta(insertedAlbumIDs: inserted, removedAlbumIDs: removed,
+                                changedAlbumIDs: changed, isIncremental: details.hasIncrementalChanges)
     }
 
     func currentCount() async -> Int { fetched?.count ?? 0 }

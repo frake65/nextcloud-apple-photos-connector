@@ -366,4 +366,25 @@ final class GalleryLoadingTests: XCTestCase {
         _ = PhotoLibraryChangeState.applying(change, to: PhotoLibraryChangeState())
         XCTAssertEqual(snapshot, ["cloud:asset-1", "cloud:asset-2"])
     }
+
+    func testAlbumChangeDeltaTracksInsertedRemovedAndChangedAlbums() {
+        let delta = AlbumChangeDelta(insertedAlbumIDs: ["new"], removedAlbumIDs: ["gone"], changedAlbumIDs: ["renamed"], isIncremental: true)
+        XCTAssertEqual(delta.insertedAlbumIDs, ["new"])
+        XCTAssertEqual(delta.removedAlbumIDs, ["gone"])
+        XCTAssertEqual(delta.changedAlbumIDs, ["renamed"])
+        XCTAssertTrue(delta.isIncremental)
+    }
+
+    func testAlbumChangeStateIncrementsRevisionAndPreservesSelections() {
+        let previous = PhotoLibraryChangeState(albumRevision: 4, insertedAlbumIDs: [], removedAlbumIDs: [], changedAlbumIDs: [])
+        let change = GalleryChangeResult(requiresFullRefresh: false, changedAssetIDs: [], removedAssetIDs: [])
+        let albums = AlbumChangeDelta(insertedAlbumIDs: ["new"], removedAlbumIDs: ["gone"], changedAlbumIDs: ["changed"], isIncremental: true)
+        let state = PhotoLibraryChangeState.applying(change, album: albums, to: previous)
+        let selection = PhotoSelectionState(manuallySelectedAssetIDs: ["cloud:asset"], selectedAlbumIDs: ["cloud:album"])
+        XCTAssertEqual(state.albumRevision, 5)
+        XCTAssertEqual(state.insertedAlbumIDs, ["new"])
+        XCTAssertEqual(state.removedAlbumIDs, ["gone"])
+        XCTAssertEqual(state.changedAlbumIDs, ["changed"])
+        XCTAssertEqual(selection.selectedAlbumIDs, ["cloud:album"])
+    }
 }
