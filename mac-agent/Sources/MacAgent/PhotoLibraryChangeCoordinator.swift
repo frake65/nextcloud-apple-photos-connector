@@ -34,10 +34,10 @@ struct PhotoLibraryChangeState: Sendable, Equatable {
 
 final class PhotoLibraryChangeCoordinator: NSObject, PHPhotoLibraryChangeObserver {
     private let library: any GalleryLibraryProviding
-    private let onChange: @MainActor (GalleryChangeResult, AlbumChangeDelta) -> Void
+    private let onChange: @MainActor (GalleryChangeResult, AlbumChangeDelta, [AlbumMembershipDelta]) -> Void
 
     init(library: any GalleryLibraryProviding,
-         onChange: @escaping @MainActor (GalleryChangeResult, AlbumChangeDelta) -> Void) {
+         onChange: @escaping @MainActor (GalleryChangeResult, AlbumChangeDelta, [AlbumMembershipDelta]) -> Void) {
         self.library = library
         self.onChange = onChange
         super.init()
@@ -50,7 +50,8 @@ final class PhotoLibraryChangeCoordinator: NSObject, PHPhotoLibraryChangeObserve
         Task { @MainActor in
             let gallery = await library.apply(change: changeInstance)
             let albums = await library.applyAlbumChange(change: changeInstance)
-            onChange(gallery, albums)
+            let memberships = await library.applyMembershipChanges(change: changeInstance)
+            onChange(gallery, albums, memberships)
         }
     }
 

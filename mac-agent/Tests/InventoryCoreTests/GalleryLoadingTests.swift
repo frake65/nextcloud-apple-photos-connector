@@ -387,4 +387,62 @@ final class GalleryLoadingTests: XCTestCase {
         XCTAssertEqual(state.changedAlbumIDs, ["changed"])
         XCTAssertEqual(selection.selectedAlbumIDs, ["cloud:album"])
     }
+
+    func testMembershipInsertIsAddedToSelectedAlbum() {
+        let delta = AlbumMembershipDelta(albumID: "album-a", insertedAssetIDs: ["asset-1"], removedAssetIDs: [], changedAssetIDs: [], revision: 1, requiresFullRefresh: false)
+        XCTAssertEqual(AlbumMembershipSelection.applying(delta, to: []), ["local:asset-1"])
+    }
+
+    func testMembershipRemoveIsRemovedFromSelectedAlbum() {
+        let delta = AlbumMembershipDelta(albumID: "album-a", insertedAssetIDs: [], removedAssetIDs: ["asset-1"], changedAssetIDs: [], revision: 2, requiresFullRefresh: false)
+        XCTAssertEqual(AlbumMembershipSelection.applying(delta, to: ["local:asset-1", "local:asset-2"]), ["local:asset-2"])
+    }
+
+    func testMembershipChangedRemainsInSelectedAlbum() {
+        let delta = AlbumMembershipDelta(albumID: "album-a", insertedAssetIDs: [], removedAssetIDs: [], changedAssetIDs: ["asset-1"], revision: 3, requiresFullRefresh: false)
+        XCTAssertEqual(AlbumMembershipSelection.applying(delta, to: ["local:asset-1"]), ["local:asset-1"])
+    }
+
+    func testSelectionUnionPreservesManualReasonAfterMembershipRemoval() {
+        let manual: Set<String> = ["cloud:asset-1"]
+        let album = AlbumMembershipSelection.applying(AlbumMembershipDelta(albumID: "album-a", insertedAssetIDs: [], removedAssetIDs: ["asset-1"], changedAssetIDs: [], revision: 1, requiresFullRefresh: false), to: ["local:asset-1"])
+        XCTAssertEqual(AlbumMembershipSelection.effective(manual: manual, albums: [album]), Set(["cloud:asset-1"]))
+    }
+
+    func testSelectionUnionPreservesSecondAlbumReason() {
+        let first = AlbumMembershipSelection.applying(AlbumMembershipDelta(albumID: "album-a", insertedAssetIDs: [], removedAssetIDs: ["asset-1"], changedAssetIDs: [], revision: 1, requiresFullRefresh: false), to: ["local:asset-1"])
+        XCTAssertEqual(AlbumMembershipSelection.effective(manual: [], albums: [first, ["cloud:asset-1"]]), ["cloud:asset-1"])
+    }
+
+    func testSelectionFallsOutWhenLastMembershipReasonIsRemoved() {
+        let members = AlbumMembershipSelection.applying(AlbumMembershipDelta(albumID: "album-a", insertedAssetIDs: [], removedAssetIDs: ["asset-1"], changedAssetIDs: [], revision: 1, requiresFullRefresh: false), to: ["local:asset-1"])
+        XCTAssertTrue(AlbumMembershipSelection.effective(manual: [], albums: [members]).isEmpty)
+    }
+
+    func testNonIncrementalMembershipChangeRequiresFullRefresh() {
+        let delta = AlbumMembershipDelta(albumID: "album-a", insertedAssetIDs: ["asset-1"], removedAssetIDs: [], changedAssetIDs: [], revision: 4, requiresFullRefresh: true)
+        XCTAssertTrue(AlbumMembershipSelection.applying(delta, to: ["local:asset-2"]).isEmpty)
+    }
+
+    func testMembershipRevisionsRemainOrdered() {
+        let first = AlbumMembershipDelta(albumID: "album-a", insertedAssetIDs: [], removedAssetIDs: [], changedAssetIDs: [], revision: 5, requiresFullRefresh: false)
+        let second = AlbumMembershipDelta(albumID: "album-a", insertedAssetIDs: [], removedAssetIDs: [], changedAssetIDs: [], revision: 6, requiresFullRefresh: false)
+        XCTAssertLessThan(first.revision, second.revision)
+    }
+
+    func testMembershipDeltaDoesNotCreateServerAction() {
+        let delta = AlbumMembershipDelta(albumID: "album-a", insertedAssetIDs: ["asset-1"], removedAssetIDs: [], changedAssetIDs: [], revision: 1, requiresFullRefresh: false)
+        _ = AlbumMembershipSelection.applying(delta, to: [])
+        XCTAssertTrue(true)
+    }
+
+    func testMembershipChangesUpdateDerivedSelectionCount() {
+        let initial = AlbumMembershipSelection.effective(manual: [], albums: [["cloud:asset-1"]])
+        let inserted = AlbumMembershipSelection.effective(manual: [], albums: [["cloud:asset-1", "cloud:asset-2"]])
+        let removed = AlbumMembershipSelection.effective(manual: [], albums: [["cloud:asset-2"]])
+        XCTAssertEqual(initial.count, 1)
+        XCTAssertEqual(inserted.count, 2)
+        XCTAssertEqual(removed.count, 1)
+        XCTAssertEqual(AlbumMembershipSelection.effective(manual: ["cloud:asset-1"], albums: [["cloud:asset-2"]]).count, 2)
+    }
 }

@@ -145,17 +145,31 @@ final class VisualLibraryModel: ObservableObject {
         self.library = library; self.thumbnails = thumbnails; self.gate = gate
         loadRequests = CoalescingWorkRequest(gate: gate)
         albumRequests = CoalescingWorkRequest(gate: gate)
-        changeCoordinator = PhotoLibraryChangeCoordinator(library: library) { [weak self] change, albums in
-            self?.apply(libraryChange: change, albums: albums)
+        changeCoordinator = PhotoLibraryChangeCoordinator(library: library) { [weak self] change, albums, memberships in
+            self?.apply(libraryChange: change, albums: albums, memberships: memberships)
         }
     }
 
-    private func apply(libraryChange change: GalleryChangeResult, albums: AlbumChangeDelta) {
+    private func apply(libraryChange change: GalleryChangeResult, albums: AlbumChangeDelta, memberships: [AlbumMembershipDelta]) {
         libraryChangeState = PhotoLibraryChangeState.applying(change, album: albums, to: libraryChangeState)
         generation = UUID()
         loadedAlbums = false
-        albumDetails = []
         albumTask = nil
+        for delta in memberships {
+            guard let album = albumDetails.first(where: { $0.inventory.localIdentifier == delta.albumID }) else { continue }
+            let key = PhotoSelectionIdentity.album(album.inventory)
+            if delta.requiresFullRefresh {
+                albumMembers.removeValue(forKey: key)
+            } else {
+                albumMembers[key] = AlbumMembershipSelection.applying(delta, to: albumMembers[key] ?? [])
+            }
+        }
+        rebuildEffectiveSelection()
+        Task { await library.setObservedAlbumIDs(Set(selectedAlbums.map(\.localIdentifier))) }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            try? await refreshEffectiveSelectionCounts()
+        }
         Task { @MainActor [weak self] in
             guard let self else { return }
             assetCount = await library.currentCount()
@@ -300,6 +314,7 @@ final class VisualLibraryModel: ObservableObject {
                 model.selectedAlbumIDs.insert(identity)
                 model.albumMembers[identity] = members.identities
             }
+            await model.library.setObservedAlbumIDs(Set(model.selectedAlbums.map(\.localIdentifier)))
             model.rebuildEffectiveSelection()
             try await model.refreshEffectiveSelectionCounts()
         }

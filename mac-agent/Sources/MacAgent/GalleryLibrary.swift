@@ -44,6 +44,29 @@ struct AlbumChangeDelta: Sendable, Equatable {
     let isIncremental: Bool
 }
 
+struct AlbumMembershipDelta: Sendable, Equatable {
+    let albumID: String
+    let insertedAssetIDs: Set<String>
+    let removedAssetIDs: Set<String>
+    let changedAssetIDs: Set<String>
+    let revision: UInt64
+    let requiresFullRefresh: Bool
+}
+
+enum AlbumMembershipSelection {
+    static func applying(_ delta: AlbumMembershipDelta, to members: Set<String>) -> Set<String> {
+        guard !delta.requiresFullRefresh else { return [] }
+        return members
+            .subtracting(delta.removedAssetIDs.map { "local:\($0)" })
+            .union(delta.insertedAssetIDs.map { "local:\($0)" })
+            .union(delta.changedAssetIDs.map { "local:\($0)" })
+    }
+
+    static func effective(manual: Set<String>, albums: [Set<String>]) -> Set<String> {
+        manual.union(albums.reduce(into: Set<String>()) { $0.formUnion($1) })
+    }
+}
+
 extension GalleryChangeDelta {
     static func invalidatedCacheKeys(_ keys: Set<String>, removed: Set<String>, changed: Set<String>) -> Set<String> {
         keys.subtracting(removed.union(changed))
@@ -61,6 +84,8 @@ protocol GalleryLibraryProviding: Sendable {
     func asset(local: String) async throws -> GalleryAsset?
     func apply(change: PHChange) async -> GalleryChangeResult
     func applyAlbumChange(change: PHChange) async -> AlbumChangeDelta
+    func setObservedAlbumIDs(_ ids: Set<String>) async
+    func applyMembershipChanges(change: PHChange) async -> [AlbumMembershipDelta]
 }
 
 extension GalleryLibraryProviding {
@@ -71,6 +96,8 @@ extension GalleryLibraryProviding {
     func applyAlbumChange(change: PHChange) async -> AlbumChangeDelta {
         AlbumChangeDelta(insertedAlbumIDs: [], removedAlbumIDs: [], changedAlbumIDs: [], isIncremental: false)
     }
+    func setObservedAlbumIDs(_ ids: Set<String>) async { }
+    func applyMembershipChanges(change: PHChange) async -> [AlbumMembershipDelta] { [] }
 }
 
 enum GalleryDebug {
@@ -87,6 +114,8 @@ enum GalleryDebug {
 actor GalleryLibrary: GalleryLibraryProviding {
     private var fetched: PHFetchResult<PHAsset>?
     private var albumCollections: PHFetchResult<PHAssetCollection>?
+    private var observedAlbumFetches: [String: PHFetchResult<PHAsset>] = [:]
+    private var membershipRevision: UInt64 = 0
     private var cache: [String: GalleryAsset] = [:]
     private let gate: SettingsWorkGate
     private let batchSize = 128
@@ -118,6 +147,33 @@ actor GalleryLibrary: GalleryLibraryProviding {
         albumCollections = details.fetchResultAfterChanges
         return AlbumChangeDelta(insertedAlbumIDs: inserted, removedAlbumIDs: removed,
                                 changedAlbumIDs: changed, isIncremental: details.hasIncrementalChanges)
+    }
+
+    func setObservedAlbumIDs(_ ids: Set<String>) async {
+        observedAlbumFetches = observedAlbumFetches.filter { ids.contains($0.key) }
+        for id in ids where observedAlbumFetches[id] == nil {
+            guard let album = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [id], options: nil).firstObject else { continue }
+            observedAlbumFetches[id] = PHAsset.fetchAssets(in: album, options: options())
+        }
+    }
+
+    func applyMembershipChanges(change: PHChange) async -> [AlbumMembershipDelta] {
+        var result: [AlbumMembershipDelta] = []
+        for (albumID, fetch) in observedAlbumFetches {
+            guard let details = change.changeDetails(for: fetch) else { continue }
+            membershipRevision &+= 1
+            let inserted = Set(details.insertedObjects.map(\.localIdentifier))
+            let removed = Set(details.removedObjects.map(\.localIdentifier))
+            let changed = Set(details.changedObjects.map(\.localIdentifier))
+            observedAlbumFetches[albumID] = details.fetchResultAfterChanges
+            result.append(AlbumMembershipDelta(albumID: albumID,
+                                               insertedAssetIDs: inserted,
+                                               removedAssetIDs: removed,
+                                               changedAssetIDs: changed,
+                                               revision: membershipRevision,
+                                               requiresFullRefresh: !details.hasIncrementalChanges))
+        }
+        return result
     }
 
     func currentCount() async -> Int { fetched?.count ?? 0 }
