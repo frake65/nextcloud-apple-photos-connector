@@ -27,30 +27,38 @@ final class PhotoSelectionTests: XCTestCase {
 
     func testSelectionPersistsIndependentlyOfLegacyScope() {
         let defaults = UserDefaults(suiteName: "APC.PhotoSelectionTests.\(UUID().uuidString)")!
-        let state = PhotoSelectionState(assetIdentities: ["cloud:a"], albumIdentities: ["cloud:album"])
+        let state = PhotoSelectionState(manuallySelectedAssetIDs: ["cloud:a"], selectedAlbumIDs: ["cloud:album"])
         PhotoSelectionPreferences.save(state, sourceId: "SOURCE-A", defaults: defaults)
         XCTAssertEqual(PhotoSelectionPreferences.load(sourceId: "source-a", defaults: defaults), state)
         defaults.set(Data("legacy".utf8), forKey: "nextcloud.importScope.source-a")
         XCTAssertEqual(PhotoSelectionPreferences.load(sourceId: "source-a", defaults: defaults), state)
     }
 
-    func testRestoreKeepsOnlyVisibleAssetsAndAlbumsAndDeduplicatesAlbumAssets() {
+    func testRestorePreservesReasonsUntilLazyResolutionCompletes() {
         let albumA = AlbumInventory(localIdentifier: "album-a", cloudIdentifier: "album-cloud-a", name: "A", kind: "album", assetIdentities: ["local-a", "local-shared"])
         let albumB = AlbumInventory(localIdentifier: "album-b", cloudIdentifier: "album-cloud-b", name: "B", kind: "album", assetIdentities: ["local-b", "local-shared"])
         let visible = ["local-a":"cloud:a", "local-b":"cloud:b", "local-shared":"cloud:shared"]
-        let persisted = PhotoSelectionState(assetIdentities: ["cloud:a", "cloud:stale"], albumIdentities: ["cloud:album-cloud-a", "cloud:album-stale"])
+        let persisted = PhotoSelectionState(manuallySelectedAssetIDs: ["cloud:a", "cloud:stale"], selectedAlbumIDs: ["cloud:album-cloud-a", "cloud:album-stale"])
         let restored = PhotoSelectionRestorer.reconcile(persisted, assetIdentitiesByLocal: visible, albums: [albumA, albumB])
-        XCTAssertEqual(restored.assetIdentities, ["cloud:a", "cloud:shared"])
-        XCTAssertEqual(restored.albumIdentities, ["cloud:album-cloud-a"])
-        let both = PhotoSelectionRestorer.reconcile(PhotoSelectionState(assetIdentities: [], albumIdentities: ["cloud:album-cloud-a", "cloud:album-cloud-b"]), assetIdentitiesByLocal: visible, albums: [albumA, albumB])
-        XCTAssertEqual(both.assetIdentities, ["cloud:a", "cloud:b", "cloud:shared"])
+        XCTAssertEqual(restored.manuallySelectedAssetIDs, ["cloud:a", "cloud:stale"])
+        XCTAssertEqual(restored.selectedAlbumIDs, ["cloud:album-cloud-a", "cloud:album-stale"])
+        let both = PhotoSelectionRestorer.reconcile(PhotoSelectionState(selectedAlbumIDs: ["cloud:album-cloud-a", "cloud:album-cloud-b"]), assetIdentitiesByLocal: visible, albums: [albumA, albumB])
+        XCTAssertTrue(both.manuallySelectedAssetIDs.isEmpty)
+        XCTAssertEqual(both.selectedAlbumIDs, ["cloud:album-cloud-a", "cloud:album-cloud-b"])
     }
 
-    func testAllStaleOrEmptyPersistenceRestoresEmptyState() {
+    func testStalePersistenceIsNotDeletedBeforeExplicitResolution() {
         let album = AlbumInventory(localIdentifier: "album", cloudIdentifier: "album-cloud", name: "A", kind: "album", assetIdentities: ["gone"])
-        let persisted = PhotoSelectionState(assetIdentities: ["cloud:gone"], albumIdentities: ["cloud:gone-album"])
+        let persisted = PhotoSelectionState(manuallySelectedAssetIDs: ["cloud:gone"], selectedAlbumIDs: ["cloud:gone-album"])
         let restored = PhotoSelectionRestorer.reconcile(persisted, assetIdentitiesByLocal: ["live":"cloud:live"], albums: [album])
-        XCTAssertTrue(restored.assetIdentities.isEmpty)
-        XCTAssertTrue(restored.albumIdentities.isEmpty)
+        XCTAssertEqual(restored.manuallySelectedAssetIDs, ["cloud:gone"])
+        XCTAssertEqual(restored.selectedAlbumIDs, ["cloud:gone-album"])
+    }
+
+    func testLegacySelectionKeysMigrateToManualAndAlbumReasons() throws {
+        let data = try JSONSerialization.data(withJSONObject: ["assetIdentities": ["cloud:a"], "albumIdentities": ["cloud:album"]])
+        let state = try JSONDecoder().decode(PhotoSelectionState.self, from: data)
+        XCTAssertEqual(state.manuallySelectedAssetIDs, ["cloud:a"])
+        XCTAssertEqual(state.selectedAlbumIDs, ["cloud:album"])
     }
 }

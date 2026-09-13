@@ -12,6 +12,7 @@ require __DIR__ . '/albums.php';
 require __DIR__ . '/album-controller.php';
 require __DIR__ . '/adapter.php';
 require __DIR__ . '/membership-command.php';
+require __DIR__ . '/album-selection.php';
 require __DIR__ . '/namespace.php';
 
 $pdo = new PDO('sqlite::memory:');
@@ -33,6 +34,7 @@ albumScenarios();
 albumControllerScenarios($pdo);
 adapterScenarios(new OCA\ApplePhotosConnector\Db\AlbumMapRepository(new TestHarness\Connection($pdo)));
 membershipCommandScenarios();
+albumSelectionScenarios();
 check(true, "F12: existing PHP regression suite passes on fresh schema");
 require __DIR__ . '/retarget.php';
 require __DIR__ . '/ticket-lifecycle.php';

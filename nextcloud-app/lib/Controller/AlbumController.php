@@ -9,7 +9,9 @@ class AlbumController extends Controller {
  public function sync(): JSONResponse {
   $u=$this->session->getUser(); if(!$u||!str_starts_with(strtolower($this->request->getHeader('Authorization')),'basic ')) return new JSONResponse(['error'=>'Authentication required'],401);
   $p=$this->request->getParams(); $sid=$p['sourceId']??null; if(!is_string($sid)||!$this->orchestrator) return new JSONResponse(['error'=>'Invalid album sync request'],400);
-  try { $r=$this->orchestrator->sync(strtolower($sid),$u->getUID()); return new JSONResponse(['status'=>$r['errors']?'partial':'completed','summary'=>['albumsSeen'=>$r['albums_seen'],'albumsCreated'=>$r['albums_created'],'albumsReused'=>$r['albums_reused'],'foldersSkipped'=>$r['folders_skipped'],'membershipsSeen'=>$r['memberships_seen'],'membershipsCreated'=>$r['memberships_created'],'membershipsReused'=>$r['memberships_reused'],'membershipsSkippedNotImported'=>$r['memberships_skipped_not_imported'],'errors'=>$r['errors']]]); }
+  $albumIds=$p['selectedAlbumIDs']??null; $assetIds=$p['selectedAssetIDs']??null;
+  if($albumIds!==null&&!is_array($albumIds)||$assetIds!==null&&!is_array($assetIds)) return new JSONResponse(['error'=>'Invalid album selection'],400);
+  try { $r=$this->orchestrator->sync(strtolower($sid),$u->getUID(),$albumIds===null?null:array_values(array_filter($albumIds,'is_string')),$assetIds===null?null:array_values(array_filter($assetIds,'is_string'))); return new JSONResponse(['status'=>$r['errors']?'partial':'completed','summary'=>['albumsSeen'=>$r['albums_seen'],'albumsCreated'=>$r['albums_created'],'albumsReused'=>$r['albums_reused'],'foldersSkipped'=>$r['folders_skipped'],'membershipsSeen'=>$r['memberships_seen'],'membershipsCreated'=>$r['memberships_created'],'membershipsReused'=>$r['memberships_reused'],'membershipsSkippedNotImported'=>$r['memberships_skipped_not_imported'],'errors'=>$r['errors']]]); }
   catch(\InvalidArgumentException $e){return new JSONResponse(['error'=>$e->getMessage()],400);} catch(\Throwable $e){return new JSONResponse(['error'=>'Album sync failed'],500);}
  }
  #[NoAdminRequired]

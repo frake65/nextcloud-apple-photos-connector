@@ -119,7 +119,7 @@ final class VisualLibraryModel: ObservableObject {
     @Published private(set) var assetCount = 0
     @Published private(set) var generation = UUID()
     @Published private(set) var albumDetails: [GalleryAlbum] = []
-    @Published var selectedAssetIDs: Set<String> = []
+    @Published private(set) var selectedAssetIDs: Set<String> = []
     @Published var selectedAlbumIDs: Set<String> = []
     @Published private(set) var selectedPhotos = 0
     @Published private(set) var selectedVideos = 0
@@ -130,6 +130,8 @@ final class VisualLibraryModel: ObservableObject {
     let thumbnails: GalleryThumbnailLoader
     private let gate: SettingsWorkGate
     private var selectionSourceId: String?
+    private var manuallySelectedAssetIDs: Set<String> = []
+    private var albumMembers: [String: Set<String>] = [:]
     private(set) var loadedAlbums = false
     private var selectionTask: Task<Void, Never>?
     private let loadRequests: CoalescingWorkRequest
@@ -194,23 +196,22 @@ final class VisualLibraryModel: ObservableObject {
         GalleryDebug.log("gallery.initial.ready count=\(count)")
         // Resolve only an existing selection, after publishing the gallery.
         // Never reconcile against the partial set of displayed cells.
-        if !selectedAssetIDs.isEmpty || !selectedAlbumIDs.isEmpty {
+        if !manuallySelectedAssetIDs.isEmpty || !selectedAlbumIDs.isEmpty {
             performSelection { model in
                 if !model.selectedAlbumIDs.isEmpty {
                     try await model.ensureAlbums()
-                    for album in model.selectedAlbums {
-                        let members = try await model.library.albumAssets(album.localIdentifier)
-                        model.selectedAssetIDs.formUnion(members.identities)
-                    }
+                    try await model.resolveSelectedAlbumMembers()
                 }
-                try await model.refreshSelectionCounts()
+                try await model.refreshEffectiveSelectionCounts()
             }
         }
     }
 
     func restore(_ state: PhotoSelectionState) {
-        selectedAssetIDs = state.assetIdentities
-        selectedAlbumIDs = state.albumIdentities
+        manuallySelectedAssetIDs = state.manuallySelectedAssetIDs
+        selectedAlbumIDs = state.selectedAlbumIDs
+        albumMembers.removeAll()
+        selectedAssetIDs = manuallySelectedAssetIDs
     }
 
     func requestAlbums() {
@@ -258,16 +259,16 @@ final class VisualLibraryModel: ObservableObject {
 
     func toggleAsset(_ asset: GalleryAsset) {
         performSelection { model in
-            if model.selectedAssetIDs.contains(asset.identity) || model.selectedAssetIDs.contains("local:\(asset.localIdentifier)") {
-                model.selectedAssetIDs.remove(asset.identity)
-                model.selectedAssetIDs.remove("local:\(asset.localIdentifier)")
-                if asset.isVideo { model.selectedVideos = max(0, model.selectedVideos - 1) }
-                else { model.selectedPhotos = max(0, model.selectedPhotos - 1) }
-            }
-            else {
-                model.selectedAssetIDs.insert(asset.identity)
-                if asset.isVideo { model.selectedVideos += 1 } else { model.selectedPhotos += 1 }
-            }
+            let identity = asset.identity
+            let localFallback = "local:\(asset.localIdentifier)"
+            let selectedThroughAlbum = model.albumMembers.values.contains { $0.contains(identity) || $0.contains(localFallback) }
+            guard !selectedThroughAlbum else { return }
+            if model.manuallySelectedAssetIDs.contains(identity) || model.manuallySelectedAssetIDs.contains(localFallback) {
+                model.manuallySelectedAssetIDs.remove(identity)
+                model.manuallySelectedAssetIDs.remove(localFallback)
+            } else { model.manuallySelectedAssetIDs.insert(identity) }
+            model.rebuildEffectiveSelection()
+            try await model.refreshEffectiveSelectionCounts()
         }
     }
 
@@ -277,32 +278,44 @@ final class VisualLibraryModel: ObservableObject {
             let identity = PhotoSelectionIdentity.album(album)
             if model.selectedAlbumIDs.contains(identity) {
                 model.selectedAlbumIDs.remove(identity)
-                model.selectedAssetIDs.subtract(members.identities)
+                model.albumMembers.removeValue(forKey: identity)
             } else {
                 model.selectedAlbumIDs.insert(identity)
-                model.selectedAssetIDs.formUnion(members.identities)
+                model.albumMembers[identity] = members.identities
             }
-            try await model.refreshSelectionCounts()
+            model.rebuildEffectiveSelection()
+            try await model.refreshEffectiveSelectionCounts()
         }
     }
 
     func selectAll() {
         performSelection { model in
             let all = try await model.library.resolveAll()
-            model.selectedAssetIDs = all.identities
-            model.selectedPhotos = all.photos
-            model.selectedVideos = all.videos
+            model.manuallySelectedAssetIDs = all.identities
+            model.rebuildEffectiveSelection()
+            model.selectedPhotos = all.photos; model.selectedVideos = all.videos
         }
     }
 
     func clearSelection() {
         guard !selectionBusy else { return }
-        selectedAssetIDs.removeAll(); selectedAlbumIDs.removeAll()
+        manuallySelectedAssetIDs.removeAll(); selectedAssetIDs.removeAll(); selectedAlbumIDs.removeAll(); albumMembers.removeAll()
         selectedPhotos = 0; selectedVideos = 0
         saveSelection()
     }
 
-    private func refreshSelectionCounts() async throws {
+    private func resolveSelectedAlbumMembers() async throws {
+        for album in selectedAlbums where albumMembers[PhotoSelectionIdentity.album(album)] == nil {
+            albumMembers[PhotoSelectionIdentity.album(album)] = try await library.albumAssets(album.localIdentifier).identities
+        }
+        rebuildEffectiveSelection()
+    }
+
+    private func rebuildEffectiveSelection() {
+        selectedAssetIDs = manuallySelectedAssetIDs.union(albumMembers.values.reduce(into: Set<String>()) { $0.formUnion($1) })
+    }
+
+    private func refreshEffectiveSelectionCounts() async throws {
         let selected = try await library.resolveSelection(selectedAssetIDs)
         // Missing/inaccessible identities remain selected. The unchanged upload
         // scanner will explicitly reject an incomplete snapshot.
@@ -321,7 +334,7 @@ final class VisualLibraryModel: ObservableObject {
 
     func saveSelection() {
         guard let source = selectionSourceId else { return }
-        PhotoSelectionPreferences.save(PhotoSelectionState(assetIdentities: selectedAssetIDs, albumIdentities: selectedAlbumIDs), sourceId: source, defaults: UserDefaults(suiteName: ConnectionPreferences.preferencesSuite) ?? .standard)
+        PhotoSelectionPreferences.save(PhotoSelectionState(manuallySelectedAssetIDs: manuallySelectedAssetIDs, selectedAlbumIDs: selectedAlbumIDs), sourceId: source, defaults: UserDefaults(suiteName: ConnectionPreferences.preferencesSuite) ?? .standard)
     }
 }
 private struct InventoryView: View {
@@ -472,7 +485,8 @@ private struct InventoryView: View {
                                 }
                                 let connection = try model.loadConnection()
                                 _ = try await model.albums.run(scanner: model.scanner, connection: connection)
-                                let result = try await model.albums.sync(scanner: model.scanner, connection: connection)
+                                let result = try await model.albums.sync(scanner: model.scanner, connection: connection,
+                                    selectedAlbumIDs: visual.selectedAlbumIDs, selectedAssetIDs: visual.uploadSnapshot())
                                 let checked = result.albumsCreated + result.albumsReused
                                 await MainActor.run { albumSyncStatus = L10n.format("albumSyncResult", checked, L10n.text(checked == 1 ? "albumOne" : "albumMany")) }
                             } catch {

@@ -37,10 +37,14 @@ actor AlbumInventoryCoordinator {
         let memberships = document.albums.reduce(0) { $0 + $1.assetIdentities.count }
         return "Album-Inventar: \(document.albums.count) Collections, \(cloud) mit Cloud-Identifier, \(document.albums.count - cloud) ohne, \(parents) Parent-Beziehungen, \(memberships) Memberships; Server: \(reply.count ?? document.albums.count) gespeichert."
     }
-    func sync(scanner: PhotoLibraryScanner, connection: ConnectorConnection) async throws -> SyncResult {
+    func sync(scanner: PhotoLibraryScanner, connection: ConnectorConnection, selectedAlbumIDs: Set<String> = [], selectedAssetIDs: Set<String> = []) async throws -> SyncResult {
         try await SettingsWorkGate.shared.checkpoint()
         let sourceId = try await scanner.currentSourceId().uuidString.lowercased()
-        let body = try JSONEncoder().encode(["sourceId": sourceId])
+        let body = try JSONSerialization.data(withJSONObject: [
+            "sourceId": sourceId,
+            "selectedAlbumIDs": Array(selectedAlbumIDs).sorted(),
+            "selectedAssetIDs": Array(selectedAssetIDs).sorted()
+        ])
         var request = connection.request(path: ["index.php","apps","apple_photos_connector","api","v1","albums","sync"], method: "POST")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type"); request.httpBody = body
         let response = try await transport.send(request, file: nil)

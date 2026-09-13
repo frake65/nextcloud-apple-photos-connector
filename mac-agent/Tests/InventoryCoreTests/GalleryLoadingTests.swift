@@ -95,7 +95,7 @@ final class GalleryLoadingTests: XCTestCase {
     func testPartialCellsNeverRemovePersistedSelectionAndSnapshotIncludesOffscreen() async throws {
         let source = SimulatedGallery()
         let model = VisualLibraryModel(library: source)
-        let persisted = PhotoSelectionState(assetIdentities: ["cloud:1", "cloud:99999", "cloud:unavailable"])
+        let persisted = PhotoSelectionState(manuallySelectedAssetIDs: ["cloud:1", "cloud:99999", "cloud:unavailable"])
         try await model.openSource(persisted: persisted)
         await eventually { !model.selectionBusy }
         _ = try await source.cell(at: 1)
@@ -121,14 +121,27 @@ final class GalleryLoadingTests: XCTestCase {
         XCTAssertEqual(model.uploadSnapshot().count, 100_000)
         XCTAssertEqual(model.selectedPhotos, 100_000)
         XCTAssertTrue(model.uploadSnapshot().contains("cloud:99999"))
+        XCTAssertTrue(model.selectedAlbums.isEmpty)
         model.clearSelection()
         XCTAssertTrue(model.uploadSnapshot().isEmpty)
+    }
+
+    func testSelectAllPreservesExplicitAlbumSelection() async throws {
+        let source = SimulatedGallery()
+        let model = VisualLibraryModel(library: source)
+        try await model.openSource(persisted: PhotoSelectionState(selectedAlbumIDs: ["cloud:album-cloud"]))
+        await eventually { !model.selectionBusy }
+        XCTAssertEqual(model.selectedAlbumIDs, ["cloud:album-cloud"])
+        model.selectAll()
+        await eventually { !model.selectionBusy }
+        XCTAssertEqual(model.selectedAlbumIDs, ["cloud:album-cloud"])
+        XCTAssertEqual(model.uploadSnapshot().count, 100_000)
     }
 
     func testPersistedAlbumRestoresOffscreenMembersWithoutEnumeratingGallery() async throws {
         let source = SimulatedGallery()
         let model = VisualLibraryModel(library: source)
-        try await model.openSource(persisted: PhotoSelectionState(albumIdentities: ["cloud:album-cloud"]))
+        try await model.openSource(persisted: PhotoSelectionState(selectedAlbumIDs: ["cloud:album-cloud"]))
         await eventually { !model.selectionBusy }
         XCTAssertEqual(model.uploadSnapshot(), ["cloud:1", "cloud:99999"])
         XCTAssertEqual(model.selectedMembershipCount, 2)
@@ -261,7 +274,7 @@ final class GalleryLoadingTests: XCTestCase {
     func testUploadResolutionUsesFrozenMembershipAndPromotesLocalFallback() async throws {
         let source = SimulatedGallery()
         let model = VisualLibraryModel(library: source)
-        model.restore(PhotoSelectionState(assetIdentities: ["local:local-99999", "cloud:1"]))
+        model.restore(PhotoSelectionState(manuallySelectedAssetIDs: ["local:local-99999", "cloud:1"]))
         let frozen = model.uploadSnapshot()
         model.clearSelection()
         let resolved = try await model.resolveUploadSnapshot(frozen)
