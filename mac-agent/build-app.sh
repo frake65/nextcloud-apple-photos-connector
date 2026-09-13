@@ -30,5 +30,5 @@ for localization in en de fr pt nl es; do
   mkdir -p "$app/Contents/Resources/${localization}.lproj"
   cp "Resources/${localization}.lproj/Localizable.strings" "$app/Contents/Resources/${localization}.lproj/Localizable.strings"
 done
-codesign --force --sign - "$app"
+codesign --force --sign - --entitlements Resources/MacAgent.entitlements "$app"
 printf 'App erstellt: %s\n' "$app"
