@@ -236,6 +236,83 @@ bestätigen; die bestehende Galerie-Change-Observation bleibt erfolgreich.
 - `PHCollectionList`-/Ordneränderungen werden noch nicht separat beobachtet.
 - Nächste Phase ist die gezielte Beobachtung beziehungsweise Verarbeitung von Album-Mitgliedschaften.
 
+## PhotoKit Membership Observation – Phase 4
+
+### Album-Mitgliedschaftsänderungen
+
+Implementiert in Commit:
+
+```text
+10b2295 Observe selected album membership changes
+```
+
+Membership-Änderungen werden nur für relevante Alben beobachtet. Die
+`observedAlbumFetches` sind nach lokaler Album-ID indiziert; aktuell werden
+die ausgewählten Alben beobachtet. Für jedes beobachtete Album wird ein
+`PHAsset.fetchAssets(in: album, ...)`-Ergebnis gehalten und über
+`PHChange` beziehungsweise `changeDetails(for:)` aktualisiert. Erkannt
+werden:
+
+- `insertedAssetIDs`
+- `removedAssetIDs`
+- `changedAssetIDs`
+
+Das jeweilige `fetchResultAfterChanges` wird übernommen. Nicht inkrementelle
+Membership-Änderungen setzen `requiresFullRefresh`. Es werden nicht alle
+Alben dauerhaft beobachtet. Membership-Änderungen lösen weder eine
+Serveraktion noch einen automatischen Upload oder Album-Sync aus.
+
+`selectedAlbumIDs` und `manuallySelectedAssetIDs` bleiben erhalten. Die
+dynamische Auswahlsemantik lautet weiterhin:
+
+```text
+effectiveSelection = manuallySelectedAssetIDs
+  UNION Mitglieder der selectedAlbumIDs
+```
+
+Ein neues Foto in einem ausgewählten Album wirkt auf die zukünftige
+`effectiveSelection`. Das Entfernen eines Fotos entfernt nur diesen
+Auswahlgrund; andere Auswahlgründe bleiben erhalten. Ein laufender Upload
+arbeitet unverändert mit seinem eingefrorenen Snapshot.
+
+### UI-Auswahlanzahl
+
+Membership-Deltas aktualisieren `selectedAssetIDs` korrekt. Zunächst blieb
+die Button-Anzahl stale, weil `refreshEffectiveSelectionCounts()` nach
+Membership-Deltas nicht aufgerufen wurde. Der Fix führt diese Aktualisierung
+nach einer Membership-Änderung aus; dadurch werden `selectedPhotos` und
+`selectedVideos` korrekt neu publiziert. Ein separater Counter wurde nicht
+eingeführt.
+
+### Tests und Realtests
+
+Aktueller Stand: **105 Tests, 0 Fehler**. Die fachlichen Tests decken
+Membership-Insert, -Remove und -Change, mehrere ausgewählte Alben, manuelle
+Auswahl als weiteren Auswahlgrund, den Wegfall des letzten Auswahlgrunds,
+den unveränderten Zustand von `selectedAlbumIDs` und
+`manuallySelectedAssetIDs`, einen unveränderten Upload-Snapshot,
+non-incremental Membership-Changes, Revisionen, mehrere Membership-Deltas,
+das Ausbleiben einer Serveraktion und die abgeleitete Selection-Anzahl ab.
+
+Erfolgreich realgetestet wurden das Hinzufügen und Entfernen von Fotos in
+ausgewählten Alben, die automatische Selection, die aktualisierte
+Button-Anzahl sowie die Union-Semantik über mehrere Alben und manuelle
+Auswahl. Ein Foto bleibt über einen zweiten Auswahlgrund erhalten und fällt
+erst nach Entfernung des letzten Auswahlgrunds aus der Selection.
+
+Eine Membership-Änderung während eines laufenden Imports wurde bewusst nicht
+manuell durchgeführt. Dies ist ein **akzeptiertes Restrisiko / nicht manuell
+realgetestet**. Die Unveränderlichkeit des Upload-Snapshots ist durch
+Unit-Tests abgesichert; es gibt keinen Hinweis auf einen bekannten Fehler.
+
+### Offene Punkte / nächste Schritte
+
+- Membership-Beobachtung für geöffnete, aber nicht ausgewählte Alben ist noch nicht implementiert.
+- Es gibt keine dauerhaften Fetches für alle Alben.
+- `PHCollectionList`-/Ordneränderungen werden nicht separat beobachtet.
+- PhotoKit-Membership-Changes lösen keine automatische Server-Synchronisation aus.
+- PhotoKit-Membership-Changes lösen keinen automatischen Upload aus.
+
 ## Offene Grenze
 
 Die Auswahl wird im aktuellen Browsermodell gehalten; eine separate persistent
