@@ -140,7 +140,7 @@ actor UploadCoordinator {
                                   connection: connection, debug: debug)
             try await gate.checkpoint()
             let path = try await WebDAVUploader(connection: connection, transport: transport, debug: debug)
-                .upload(file: resource.url, filename: filename, assetId: entry.upload!.assetId, targets: targets, targetRoot: baseFolder)
+                .upload(file: resource.url, filename: filename, assetId: entry.upload!.assetId, captureDate: resolution.date, targets: targets, targetRoot: baseFolder)
             debug?("upload.put.success")
             return .success(path: path, filename: filename)
         } catch {

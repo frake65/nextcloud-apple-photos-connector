@@ -85,7 +85,7 @@ public struct WebDAVUploader: Sendable {
         return stem + "--apc-" + assetId + (attempt > 1 ? "-\(attempt - 1)" : "") + ext
     }
 
-    public func upload(file: URL, filename: String, assetId: String, targets: any UploadTargetProvider, targetRoot: String = "Photos/Apple Photos Connector") async throws -> String {
+    public func upload(file: URL, filename: String, assetId: String, captureDate: Date, targets: any UploadTargetProvider, targetRoot: String = "Photos/Apple Photos Connector") async throws -> String {
         let identity = try ContentIdentity.read(file)
         let root = ["remote.php", "dav", "files", connection.user]
         let rootComponents = try Self.safeComponents(targetRoot)
@@ -134,6 +134,7 @@ public struct WebDAVUploader: Sendable {
             var request = connection.request(path: root + targetComponents, method: "PUT")
             request.setValue("*", forHTTPHeaderField: "If-None-Match")
             request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+            request.setValue(String(Int(captureDate.timeIntervalSince1970)), forHTTPHeaderField: "X-OC-MTime")
             debug?("Request PUT · path=\(request.url?.path ?? "") · fileBytes=\(identity.bytes)")
             debug?("upload.put.start")
             let response = try await transport.send(request, file: file)

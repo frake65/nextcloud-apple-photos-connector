@@ -9,16 +9,18 @@ final class InventoryTransportMockTests: XCTestCase {
         enum Mode: Equatable { case new, known, invalid, httpError, seenZero, prepareError, putError, completeError }
         let mode: Mode
         private(set) var inventory = 0; private(set) var prepare = 0; private(set) var put = 0; private(set) var complete = 0
+        private(set) var putMTime: String?
         init(_ mode: Mode) { self.mode = mode }
         func send(_ request: URLRequest, file: URL?) async throws -> DAVResponse {
             let path = request.url?.path ?? ""
             if path.contains("/inventory") { inventory += 1; if mode == .httpError { return DAVResponse(status: 500) }; if mode == .invalid { return DAVResponse(status: 200, data: Data("bad".utf8)) }; if mode == .seenZero { return DAVResponse(status: 200, data: Data("{\"runId\":\"run\",\"assets\":[]}".utf8)) }; let state = mode == .known ? "known" : "new"; let ticket = state == "new" ? ",\"upload\":{\"uploadId\":\"u\",\"assetId\":\"1\"}" : ""; return DAVResponse(status: 200, data: Data("{\"runId\":\"run\",\"assets\":[{\"state\":\"\(state)\"\(ticket)}]}".utf8)) }
             if path.contains("/uploads/prepare") { prepare += 1; if mode == .prepareError { return DAVResponse(status: 500) }; let root = TargetDirectoryPreferences().path; return DAVResponse(status: 200, data: Data("{\"assetId\":\"1\",\"path\":\"\(root)/test.jpg\",\"bytes\":4,\"sha256\":\"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\",\"state\":\"missing\"}".utf8)) }
-            if request.httpMethod == "PUT" { put += 1; if mode == .putError { return DAVResponse(status: 500) }; return DAVResponse(status: 201) }
+            if request.httpMethod == "PUT" { put += 1; putMTime = request.value(forHTTPHeaderField: "X-OC-MTime"); if mode == .putError { return DAVResponse(status: 500) }; return DAVResponse(status: 201) }
             if path.contains("/uploads/complete") { complete += 1; if mode == .completeError { return DAVResponse(status: 500) }; return DAVResponse(status: 200) }
             return DAVResponse(status: 201)
         }
         func counts() -> (Int,Int,Int,Int) { (inventory,prepare,put,complete) }
+        func mTime() -> String? { putMTime }
     }
     struct FakeExporter: PhotoOriginalExporting {
         let failing: Bool
@@ -27,7 +29,7 @@ final class InventoryTransportMockTests: XCTestCase {
 
     private func inventoryJSON() throws -> String {
         let source = PhotoSource(sourceId: UUID(uuidString: "00000000-0000-4000-8000-000000000001")!, name: "Test")
-        return try InventoryJSON.encode([AssetInventory(localIdentifier: "local", cloudIdentifier: "cloud", mediaType: "image", creationDate: nil, filename: "test.jpg")], source: source)
+        return try InventoryJSON.encode([AssetInventory(localIdentifier: "local", cloudIdentifier: "cloud", mediaType: "image", creationDate: Date(timeIntervalSince1970: 1_700_000_000), filename: "test.jpg")], source: source)
     }
     private func connection() throws -> ConnectorConnection { try ConnectorConnection(server: "https://example.invalid", user: "test", password: "x") }
 
@@ -38,6 +40,8 @@ final class InventoryTransportMockTests: XCTestCase {
         print("H4 checkpoints: \(log.values)")
         let counts = await spy.counts(); XCTAssertEqual(counts.0, 1); XCTAssertEqual(counts.1, 1); XCTAssertEqual(counts.2, 1); XCTAssertEqual(counts.3, 1); XCTAssertEqual(s.uploadedImages, 1)
         XCTAssertTrue(log.values.contains("upload.export.start")); XCTAssertTrue(log.values.contains("upload.export.success")); XCTAssertTrue(log.values.contains("upload.put.start")); XCTAssertTrue(log.values.contains("upload.put.success"))
+        let mTime = await spy.mTime()
+        XCTAssertEqual(mTime, "1700000000")
     }
     func testH5KnownAssetSkipsDownstream() async throws {
         let spy = CoordinatorSpy(.known); let c = UploadCoordinator(exporter: FakeExporter(failing: false), transport: spy)
