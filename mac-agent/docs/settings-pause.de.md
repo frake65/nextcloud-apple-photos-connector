@@ -48,7 +48,7 @@ Job-Scheduler.
 
 ## Konfigurations-Snapshot
 
-Die UI erfasst Verbindung, Zielwurzel und `retransferMissing` nach der Freigabe
+Die UI erfasst Verbindung und Zielwurzel nach der Freigabe
 und vor dem Scan. Der Snapshot der Fotoauswahl bleibt bis zur Inventarfilterung
 erhalten. Alle Upload-Jobs erhalten dieselbe Zielwurzel und Verbindung. Werden
 Ziel/Retry vom Aufrufer nicht übergeben, liest der Koordinator die Standardwerte

@@ -25,7 +25,7 @@ Die beste Upstream-Richtung ist daher **C**: eine kleine generische External Pho
 | Bytes/SHA-Verifikation | keine falsche Dateizuordnung | Server muss tatsächliche Datei prüfen | Clienthash allein nicht vertrauenswürdig | Nein |
 | Target/path history | alte Targets erhalten, Current explizit wählen | Ja | Nein | Nein |
 | Current target | genau ein autoritativer Bezug eines Assets | Ja | Nein | Nein |
-| `retransferMissing` | erneuten Upload nur bei serverseitig fehlender Datei erlauben | Autorisierung muss serverseitig bleiben | Auslöser kann clientseitig sein | Nein |
+| Recovery fehlender Dateien | beim normalen Inventar ausgewählter Medien fehlende Dateien als `new` anbieten | Entscheidung bleibt serverseitig; die frühere Option ist entfernt | Auslöser ist ein normaler Importlauf | Nein |
 | Server-authorized retarget | kein willkürlicher Zielordnerwechsel | Ja | Nein | Nein |
 | Album inventory | externe Collection-Identität und Mitgliedschaften abbilden | Für Wiederholung und Isolation ja | Snapshot kann clientseitig erzeugt werden | Nein |
 | Album memberships | additive, idempotente Zuordnung | Server/Photos muss sie besitzen | Nein | Nein |

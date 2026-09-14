@@ -10,7 +10,7 @@ Diese Beschreibung setzt eine frische Serverinstallation mit leerem Connector-Zu
 
 ## Inventory und Identität
 
-`POST /index.php/apps/apple_photos_connector/api/v1/inventory` erwartet `source` und `assets` gemäß `inventory-request.schema.json`. Der Server verwaltet die autoritative Import-Historie und antwortet mit `runId`, Zuständen und Upload-Tickets. `new` bedeutet, dass noch keine bestätigte Dateizuordnung existiert; erst nach Complete wird ein Asset `known`.
+`POST /index.php/apps/apple_photos_connector/api/v1/inventory` erwartet `source` und `assets` gemäß `inventory-request.schema.json`. Der Server verwaltet die autoritative Import-Historie und antwortet mit `runId`, Zuständen und Upload-Tickets. `new` bedeutet, dass keine bestätigte Dateizuordnung existiert oder die zugeordnete Datei fehlt. Eine vorhandene zugeordnete Datei ergibt `known`.
 
 Stable Asset Identity bevorzugt den PhotoKit Cloud-Identifier. Fehlt er, wird die vorgesehene Source-/lokale Fallback-Identität verwendet. Unterschiedliche Sources werden niemals zusammengeführt. Datei- und Albumnamen sind keine Identitäten.
 
@@ -29,3 +29,7 @@ Album Membership ist von der Dateiübertragung getrennt. Nicht importierte Asset
 Die API verwendet HTTPS, Nextcloud-Benutzer und App-Passwort sowie `Content-Type: application/json`. Anonyme und Cookie-only-Aufrufe werden abgewiesen. Requests sind benutzer- und source-isoliert; Validierungs- und Datenbankfehler dürfen keine Teiländerungen hinterlassen.
 
 Für genaue Felder, Limits und Fehlerobjekte siehe die englische Referenz, die maschinenlesbaren Schemas und die Implementierung.
+
+## Recovery fehlender Dateien
+
+Beim normalen Inventar für ausgewählte Medien gilt eine vorhandene zugeordnete Nextcloud-Datei als `known`; eine fehlende Datei ergibt `new` mit Upload-Ticket. Die Wiederherstellung setzt ein weiterhin verfügbares Original in Apple Fotos voraus. Allein eine fehlende Datei startet keinen Import. Das frühere Feld `retransferMissing` wird nicht mehr gesendet; der Server ignoriert es weiterhin, falls ältere Clients es senden. Dies ist eine Existenzprüfung, keine allgemeine Inhalts-/Hash-Prüfung bekannter Dateien.

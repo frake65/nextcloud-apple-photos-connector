@@ -21,13 +21,13 @@ case "configure-connection":
     print("Nextcloud-URL:", terminator: " "); let server = readLine() ?? ""
     print("Benutzer:", terminator: " "); let user = readLine() ?? ""
     print("App-Passwort:", terminator: " "); let password = hiddenLine()
-    defaults.set(server, forKey: "nextcloud.server"); defaults.set(user, forKey: "nextcloud.user")
-    do { try store.update(password: password, account: user); print("URL gespeichert: ja\nBenutzer gespeichert: ja\nPasswort gespeichert: ja") }
+    do { try ConnectionPreferences(server: server, user: user, store: store).savePassword(password); defaults.set(server, forKey: "nextcloud.server"); defaults.set(user, forKey: "nextcloud.user"); defaults.set(false, forKey: ImportGuard.validatedKey); defaults.set(false, forKey: TargetDirectoryPreferences.confirmedKey); print("URL gespeichert: ja\nBenutzer gespeichert: ja\nPasswort gespeichert: ja") }
     catch { print("Passwort konnte nicht gespeichert werden."); exit(1) }
 case "status":
+    try? ConnectionPreferences.migrateLegacyPassword(defaults: defaults, store: store)
     let server = defaults.string(forKey: "nextcloud.server")?.isEmpty == false
     let user = defaults.string(forKey: "nextcloud.user") ?? ""
-    let password = (try? store.load(account: user)) ?? nil
+    let password = (try? ConnectionPreferences(server: defaults.string(forKey: "nextcloud.server") ?? "", user: user, store: store).loadPassword()) ?? nil
     print("URL vorhanden: \(server ? "ja" : "nein")\nBenutzer vorhanden: \(user.isEmpty ? "nein" : "ja")\nPasswort vorhanden: \(password?.isEmpty == false ? "ja" : "nein")")
 default:
     print("Verwendung: APCConfigureConnection configure-connection | status"); exit(2)

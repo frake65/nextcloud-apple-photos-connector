@@ -4,7 +4,7 @@
     <name>Apple Photos Connector</name>
     <summary>Import Apple Photos originals and synchronize albums</summary>
     <description>Registers Apple Photos sources, tracks original uploads through WebDAV, and synchronizes albums with Nextcloud Photos in a separate step. Files and missing source memberships are not automatically deleted.</description>
-    <version>0.8.0</version>
+    <version>0.8.1</version>
     <commands>
         <command>OCA\ApplePhotosConnector\Command\AlbumTestResolveCommand</command>
         <command>OCA\ApplePhotosConnector\Command\AlbumTestAddMembershipCommand</command>

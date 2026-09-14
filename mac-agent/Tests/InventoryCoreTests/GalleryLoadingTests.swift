@@ -88,7 +88,7 @@ final class GalleryLoadingTests: XCTestCase {
         let albums = await source.catalogRequests
         let images = await provider.starts
         XCTAssertTrue(cells.isEmpty)
-        XCTAssertEqual(all, 0); XCTAssertEqual(selection, 0); XCTAssertEqual(albums, 0)
+        XCTAssertEqual(all, 0); XCTAssertEqual(selection, 0); XCTAssertEqual(albums, 1)
         XCTAssertTrue(images.isEmpty)
     }
 
@@ -307,11 +307,11 @@ final class GalleryLoadingTests: XCTestCase {
         for _ in 0..<20 { model.requestAlbums() }
         await Task.yield()
         let before = await source.catalogRequests
-        XCTAssertEqual(before, 0)
+        XCTAssertEqual(before, 1)
         gate.setPaused(false)
         await eventually { model.loadedAlbums }
         let after = await source.catalogRequests
-        XCTAssertEqual(after, 1)
+        XCTAssertEqual(after, 2)
         XCTAssertTrue(model.uploadSnapshot().isEmpty)
     }
 
@@ -444,5 +444,16 @@ final class GalleryLoadingTests: XCTestCase {
         XCTAssertEqual(inserted.count, 2)
         XCTAssertEqual(removed.count, 1)
         XCTAssertEqual(AlbumMembershipSelection.effective(manual: ["cloud:asset-1"], albums: [["cloud:asset-2"]]).count, 2)
+    }
+
+    func testSummaryCountsDistinctAlbumsRepresentedBySelection() {
+        let albums = [
+            GalleryAlbum(inventory: AlbumInventory(localIdentifier: "a", name: "A", assetIdentities: ["asset-1", "asset-2"]), photos: 2, videos: 0, cover: nil),
+            GalleryAlbum(inventory: AlbumInventory(localIdentifier: "b", name: "B", assetIdentities: ["asset-1"]), photos: 1, videos: 0, cover: nil),
+            GalleryAlbum(inventory: AlbumInventory(localIdentifier: "c", name: "C", assetIdentities: ["asset-9"]), photos: 1, videos: 0, cover: nil)
+        ]
+        XCTAssertEqual(VisualLibraryModel.representedAlbumCount(albums: albums, selectedAssetIDs: ["asset-1"]), 2)
+        XCTAssertEqual(VisualLibraryModel.representedAlbumCount(albums: albums, selectedAssetIDs: ["asset-2"]), 1)
+        XCTAssertEqual(VisualLibraryModel.representedAlbumCount(albums: albums, selectedAssetIDs: []), 0)
     }
 }

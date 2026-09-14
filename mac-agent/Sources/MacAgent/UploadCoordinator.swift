@@ -6,11 +6,11 @@ actor UploadCoordinator {
         case uploading, uploaded, alreadyInCloud, failed, open
         var label: String {
             switch self {
-            case .uploading: "Upload läuft …"
-            case .uploaded: "Hochgeladen"
-            case .alreadyInCloud: "Bereits in der Cloud"
-            case .failed: "Fehlgeschlagen"
-            case .open: "Offen"
+            case .uploading: L10n.text("uploadRunning")
+            case .uploaded: L10n.text("assetUploaded")
+            case .alreadyInCloud: L10n.text("assetAlreadyInCloud")
+            case .failed: L10n.text("failed")
+            case .open: L10n.text("assetOpen")
             }
         }
     }
@@ -20,16 +20,25 @@ actor UploadCoordinator {
         let source: String
         let target: String?
         let status: DisplayStatus
-        let error: String?
+        let error: UploadFailure?
     }
     struct RunSummary: Sendable {
         let uploadedImages: Int; let uploadedVideos: Int; let uploadedOther: Int
         let alreadyInCloudImages: Int; let alreadyInCloudVideos: Int; let alreadyInCloudOther: Int
         let failed: Int
+        let finalProgress: Progress
+        var shouldCloseProgressSheet: Bool { failed == 0 }
     }
     struct Progress: Sendable {
         let completed: Int; let total: Int; let filename: String?; let failed: Bool
         let items: [DisplayItem]
+        var finished: Bool { completed >= total }
+        var summaryText: String {
+            let uploaded = items.filter { $0.status == .uploaded }.count
+            let known = items.filter { $0.status == .alreadyInCloud }.count
+            let failed = items.filter { $0.status == .failed }.count
+            return L10n.format("importRunSummary", uploaded, total, known, failed)
+        }
         func markingOpenUnfinished() -> Progress {
             Progress(completed: completed, total: total, filename: filename, failed: false,
                 items: items.map { item in
@@ -45,20 +54,19 @@ actor UploadCoordinator {
     private actor DisplayProgressState {
         var items: [DisplayItem]; var completed: Int; let total: Int
         init(items: [DisplayItem], completed: Int, total: Int) { self.items = items; self.completed = completed; self.total = total }
-        func updateStatus(filename: String, status: DisplayStatus, target: String? = nil, error: String? = nil) {
-            guard let index = items.firstIndex(where: { $0.filename == filename }) else { return }
+        func updateStatus(index: Int, status: DisplayStatus, target: String? = nil, error: UploadFailure? = nil) {
             let old = items[index]
             items[index] = DisplayItem(id: old.id, filename: old.filename, source: old.source,
                 target: target ?? old.target, status: status, error: error)
         }
         func complete() { completed += 1 }
         func snapshot(filename: String? = nil, failed: Bool = false) -> Progress {
-            Progress(completed: completed, total: total, filename: filename, failed: failed, items: items)
+            Progress(completed: completed, total: total, filename: filename, failed: failed || items.contains { $0.status == .failed }, items: items)
         }
     }
     enum SingleUploadResult: Sendable {
         case success(path: String, filename: String)
-        case failed(filename: String?, error: String)
+        case failed(filename: String?, error: UploadFailure)
     }
     private struct Targets: UploadTargetProvider {
         let owner: UploadCoordinator
@@ -70,10 +78,13 @@ actor UploadCoordinator {
         let debug: (@Sendable (String) -> Void)?
         func prepare(identity: ContentIdentity) async throws -> UploadTarget {
             debug?("upload.prepare.start")
-            let data = try await owner.post(["sourceId": sourceId, "runId": runId, "uploadId": uploadId,
+            do {
+                let data = try await owner.post(["sourceId": sourceId, "runId": runId, "uploadId": uploadId,
                                             "bytes": identity.bytes, "sha256": identity.sha256, "folder": folder], endpoint: "uploads/prepare", connection: connection)
-            debug?("Response uploads/prepare · responseBytes=\(data.count)")
-            return try JSONDecoder().decode(UploadTarget.self, from: data)
+                debug?("Response uploads/prepare · responseBytes=\(data.count)")
+                return try JSONDecoder().decode(UploadTarget.self, from: data)
+            } catch is CancellationError { throw CancellationError() }
+            catch { throw UploadFailure.capture(error, stage: .target) }
         }
     }
     struct InventoryReply: Decodable {
@@ -98,12 +109,12 @@ actor UploadCoordinator {
     private let gate: SettingsWorkGate
     private let exporter: any PhotoOriginalExporting
     private let transport: any DAVTransport
-    private let receiptURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("Apple Photos Connector/upload-receipts.json")
+    private let receiptURL: URL
 
     private func debugLog(_ message: String) { debugSink?(message) }
     private var debugSink: (@Sendable (String) -> Void)?
-    init(exporter: any PhotoOriginalExporting = PhotoOriginalExporter(), transport: any DAVTransport = NetworkTransport(), gate: SettingsWorkGate = .shared) {
+    init(exporter: any PhotoOriginalExporting = PhotoOriginalExporter(), transport: any DAVTransport = NetworkTransport(), gate: SettingsWorkGate = .shared, receiptURL: URL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Apple Photos Connector/upload-receipts.json")) {
+        self.receiptURL = receiptURL
         self.gate = gate
         self.exporter = exporter
         self.transport = transport
@@ -172,8 +183,9 @@ actor UploadCoordinator {
 
     private func uploadAsset(index: Int, entry: InventoryReply.Entry, assetsData: Data, sourceId: String,
                              connection: ConnectorConnection, targetRoot: String, runId: String, debug: (@Sendable (String) -> Void)?,
-                             displayState: DisplayProgressState, progress: (@Sendable (Progress) -> Void)?) async -> SingleUploadResult {
+                             displayState: DisplayProgressState, folderCoordinator: WebDAVFolderCoordinator, progress: (@Sendable (Progress) -> Void)?) async -> SingleUploadResult {
         var currentFilename: String?
+        var stage: UploadFailure.Stage = .preparation
         do {
             guard let assets = try JSONSerialization.jsonObject(with: assetsData) as? [[String: Any]],
                   let local = assets[index]["localIdentifier"] as? String,
@@ -182,7 +194,9 @@ actor UploadCoordinator {
             debug?("PREPARE_START assetID=\(local) file=\(filename)")
             try await gate.checkpoint()
             debug?("upload.export.start")
+            stage = .export
             let resource = try await exporter.export(localIdentifier: local)
+            stage = .preparation
             debug?("upload.export.success")
             defer { try? FileManager.default.removeItem(at: resource.url.deletingLastPathComponent()) }
             guard resource.filename == filename else { throw UploadError.invalidFilename }
@@ -196,8 +210,8 @@ actor UploadCoordinator {
                                   folder: "\(baseFolder)/\(String(format: "%04d", year))/\(String(format: "%02d", month))",
                                   connection: connection, debug: debug)
             try await gate.checkpoint()
-            let path = try await WebDAVUploader(connection: connection, transport: transport, debug: debug)
-                .upload(file: resource.url, filename: filename, assetId: entry.upload!.assetId, captureDate: resolution.date, targets: targets, targetRoot: baseFolder)
+            let path = try await WebDAVUploader(connection: connection, transport: UploadDisplayTransport(base: transport), debug: debug)
+                .upload(file: resource.url, filename: filename, assetId: entry.upload!.assetId, captureDate: resolution.date, targets: targets, targetRoot: baseFolder, folderCoordinator: folderCoordinator)
             debug?("upload.put.success")
             return .success(path: path, filename: filename)
         } catch {
@@ -211,17 +225,37 @@ actor UploadCoordinator {
             if case let UploadError.http(status) = error { debug?("upload.put.http.status=\(status)") }
             debug?("upload.put.error.domain=\(ns.domain)")
             debug?("upload.put.error.code=\(ns.code)")
-            return .failed(filename: currentFilename, error: error.localizedDescription)
+            return .failed(filename: currentFilename, error: UploadFailure.capture(error, stage: stage))
         }
     }
 
-    func run(json: String, connection: ConnectorConnection, targetRoot: String? = nil, retransferMissing: Bool? = nil, progress: (@Sendable (Progress) -> Void)? = nil, debug: (@Sendable (String) -> Void)? = nil, onUploaded: (@Sendable (String) -> Void)? = nil) async throws -> RunSummary {
+    func run(json: String, connection: ConnectorConnection, targetRoot: String? = nil, progress: (@Sendable (Progress) -> Void)? = nil, debug: (@Sendable (String) -> Void)? = nil, onUploaded: (@Sendable (String) -> Void)? = nil) async throws -> RunSummary {
+        guard !running else { throw RunError.alreadyRunning }
+        do {
+            return try await performRun(json: json, connection: connection, targetRoot: targetRoot, progress: progress, debug: debug, onUploaded: onUploaded)
+        } catch is CancellationError { throw CancellationError() }
+        catch {
+            // Inventory/receipt failures happen before per-asset jobs exist.
+            // Keep every selected medium visible even when that early stage fails.
+            if let document = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any],
+               let assets = document["assets"] as? [[String: Any]] {
+                let failure = UploadFailure.capture(error, stage: .inventory)
+                let items = assets.enumerated().map { index, asset in
+                    let filename = asset["filename"] as? String ?? L10n.text("file")
+                    return DisplayItem(id: String(index), filename: filename, source: filename, target: nil, status: .failed, error: failure)
+                }
+                progress?(Progress(completed: items.count, total: items.count, filename: nil, failed: true, items: items))
+            }
+            throw error
+        }
+    }
+
+    private func performRun(json: String, connection: ConnectorConnection, targetRoot: String?, progress: (@Sendable (Progress) -> Void)?, debug: (@Sendable (String) -> Void)?, onUploaded: (@Sendable (String) -> Void)?) async throws -> RunSummary {
         guard !running else { throw RunError.alreadyRunning }
         running = true
         defer { running = false }
         try await gate.checkpoint()
         let targetRoot = targetRoot ?? TargetDirectoryPreferences().path
-        let retransferMissing = retransferMissing ?? (UserDefaults(suiteName: ConnectionPreferences.preferencesSuite)?.bool(forKey: UploadPreferences.retransferMissingKey) ?? false)
         debugSink = debug
         debug?("upload.coordinator.entered")
         var receipts = FileManager.default.fileExists(atPath: receiptURL.path)
@@ -235,17 +269,15 @@ actor UploadCoordinator {
         guard let document = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any],
               let source = document["source"] as? [String: Any], let sourceId = source["sourceId"] as? String,
               let assets = document["assets"] as? [[String: Any]] else { throw UploadError.invalidResponse }
-        var inventoryDocument = document
+        let inventoryDocument = document
         debug?("inventory.payload.assets=\(assets.count)")
         guard !assets.isEmpty else {
             debug?("upload.outcome=failed reason=empty-inventory")
             throw UploadError.invalidResponse
         }
-        inventoryDocument["retransferMissing"] = retransferMissing
-        debug?("reinventory.enabled=\(retransferMissing)")
         let requestData = try JSONSerialization.data(withJSONObject: inventoryDocument)
         debug?("inventory.request.start")
-        debug?("POST inventory · payloadBytes=\(requestData.count) · retransferMissing=\(retransferMissing)")
+        debug?("POST inventory · payloadBytes=\(requestData.count)")
         try await gate.checkpoint()
         let inventoryData = try await post(inventoryDocument, endpoint: "inventory", connection: connection)
         debug?("Response inventory · status=200 · responseBytes=\(inventoryData.count)")
@@ -287,16 +319,17 @@ actor UploadCoordinator {
         var alreadyInCloudVideos = 0
         var alreadyInCloudOther = 0
         var failed = 0
-        let displayItems: [DisplayItem] = reply.assets.enumerated().compactMap { index, entry in
-            guard let filename = assets[index]["filename"] as? String else { return nil }
+        let displayItems: [DisplayItem] = reply.assets.enumerated().map { index, entry in
+            let filename = assets[index]["filename"] as? String ?? L10n.text("file")
             if entry.state == "known" {
-                return DisplayItem(id: assets[index]["localIdentifier"] as? String ?? filename, filename: filename,
-                    source: "Apple Fotos – \(filename)", target: nil, status: .alreadyInCloud, error: nil)
+                return DisplayItem(id: String(index), filename: filename,
+                    source: filename, target: nil, status: .alreadyInCloud, error: nil)
             }
-            return DisplayItem(id: assets[index]["localIdentifier"] as? String ?? filename, filename: filename,
-                source: "Apple Fotos – \(filename)", target: nil, status: .uploading, error: nil)
+            return DisplayItem(id: String(index), filename: filename,
+                source: filename, target: nil, status: .uploading, error: nil)
         }
         let displayState = DisplayProgressState(items: displayItems, completed: completedUploads, total: totalUploads)
+        let folderCoordinator = WebDAVFolderCoordinator()
         progress?(await displayState.snapshot())
 
         var nextJob = 0
@@ -311,7 +344,7 @@ actor UploadCoordinator {
                 group.addTask { [self] in
                     let outcome = await uploadAsset(index: job.index, entry: job.entry, assetsData: assetsData,
                         sourceId: sourceId, connection: connection, targetRoot: targetRoot, runId: reply.runId, debug: debug,
-                        displayState: displayState, progress: progress)
+                        displayState: displayState, folderCoordinator: folderCoordinator, progress: progress)
                     return UploadOutcome(job: job, result: outcome)
                 }
             }
@@ -337,11 +370,14 @@ actor UploadCoordinator {
                 case let .success(path, filename):
                     let receipt = Receipt(server: connection.base.absoluteString, user: connection.user,
                         sourceId: sourceId.lowercased(), runId: reply.runId, uploadId: ticket.uploadId, path: path)
+                    var completionStage: UploadFailure.Stage = .receipt
                     do {
                         debug?("upload.complete.request.status=success")
                         receipts.append(receipt)
                         try save(receipts)
+                        completionStage = .completion
                         try await confirm(receipt, connection: connection)
+                        completionStage = .receipt
                         receipts.removeAll { $0.uploadId == ticket.uploadId }
                         try save(receipts)
                         uploaded += 1
@@ -355,13 +391,16 @@ actor UploadCoordinator {
                         else if mediaType == "video" { uploadedVideos += 1 }
                         else { uploadedOther += 1 }
                         completedUploads += 1
-                        await displayState.updateStatus(filename: filename, status: .uploaded, target: path)
+                        await displayState.updateStatus(index: outcome.job.index, status: .uploaded, target: path)
                         await displayState.complete()
                         progress?(await displayState.snapshot(filename: filename))
                     } catch {
                         failed += 1
                         completedUploads += 1
-                        debug?("Upload completion failed · error=\(error.localizedDescription)")
+                        let failure = UploadFailure.capture(error, stage: completionStage)
+                        await displayState.updateStatus(index: outcome.job.index, status: .failed, target: path, error: failure)
+                        await displayState.complete()
+                        debug?("Upload completion failed · \(failure.technicalDetail)")
                         progress?(await displayState.snapshot(filename: filename, failed: true))
                     }
                 case let .failed(filename, error):
@@ -372,7 +411,7 @@ actor UploadCoordinator {
                     } catch { debug?("Upload failure acknowledgement failed · error=\(error.localizedDescription)") }
                     failed += 1
                     completedUploads += 1
-                    if let filename { await displayState.updateStatus(filename: filename, status: .failed, error: error) }
+                    await displayState.updateStatus(index: outcome.job.index, status: .failed, error: error)
                     await displayState.complete()
                     debug?("Upload failed · error=\(error)")
                     progress?(await displayState.snapshot(filename: filename, failed: true))
@@ -393,6 +432,6 @@ actor UploadCoordinator {
         debug?("upload.counter.uploaded=\(uploaded)")
         debug?("upload.outcome=\(failed > 0 ? "failed" : (uploaded > 0 ? "success" : "nothingToDo"))")
         return RunSummary(uploadedImages: uploadedImages, uploadedVideos: uploadedVideos, uploadedOther: uploadedOther,
-            alreadyInCloudImages: alreadyInCloudImages, alreadyInCloudVideos: alreadyInCloudVideos, alreadyInCloudOther: alreadyInCloudOther, failed: failed)
+            alreadyInCloudImages: alreadyInCloudImages, alreadyInCloudVideos: alreadyInCloudVideos, alreadyInCloudOther: alreadyInCloudOther, failed: failed, finalProgress: await displayState.snapshot())
     }
 }

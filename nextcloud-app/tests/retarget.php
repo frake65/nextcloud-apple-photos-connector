@@ -29,7 +29,7 @@ final class RetargetFixture {
         $this->ack($this->first,$target['path']);
         $this->old = $this->current();
     }
-    public function scan(bool $on = false): array { return $this->inventory->ingest($this->user,$this->source,$this->input,$on); }
+    public function scan(): array { return $this->inventory->ingest($this->user,$this->source,$this->input); }
     public function current(): array { return $this->repo->getCurrentTarget($this->user,$this->source['sourceId'],(int)$this->first['assets'][0]['upload']['assetId']); }
     public function reserve(array $run,string $folder='New/2026/09'): array {
         return $this->prepare->prepare($this->user,$this->source['sourceId'],$run['runId'],$run['assets'][0]['upload']['uploadId'],8,hash('sha256','ORIGINAL'),$folder);
@@ -47,23 +47,23 @@ function rejects(callable $work,string $message): void {
 function retargetScenarios(): void {
     $f = new RetargetFixture();
     $before = $f->files->files;
-    check($f->scan(true)['assets'][0]['state']==='known' && $f->reserve($f->first,'New')['path']===$f->old['path'] && $f->files->files===$before, 'R1: existing current ignores changed client folder; no move/copy');
+    check($f->scan()['assets'][0]['state']==='known' && $f->reserve($f->first,'New')['path']===$f->old['path'] && $f->files->files===$before, 'R1: existing current ignores changed client folder; no move/copy');
     // Cache fields must never drive identity or target selection.
     $f->repo->updateOwned('apc_assets',$f->user,'id',$f->old['asset_id'],['nextcloud_path'=>'bogus','nextcloud_file_id'=>null]);
-    check($f->scan(true)['assets'][0]['state']==='known','current pointer wins over stale compatibility fields');
+    check($f->scan()['assets'][0]['state']==='known','current pointer wins over stale compatibility fields');
     $f->missing();
-    check($f->scan()['assets'][0]['state']==='new' && $f->scan()['assets'][0]['upload']!==null,'R2: missing current is recoverable without retransfer flag');
-    $run = $f->scan(true); $same = $f->reserve($run,'Old/2020/01');
-    check($same['state']==='missing' && dirname($same['path'])==='Old/2020/01' && $same['path']!==$f->old['path'],'R3: missing current with retransfer ON reserves new target in same folder');
+    check($f->scan()['assets'][0]['state']==='new' && $f->scan()['assets'][0]['upload']!==null,'R2: missing current is recoverable during normal inventory');
+    $run = $f->scan(); $same = $f->reserve($run,'Old/2020/01');
+    check($same['state']==='missing' && dirname($same['path'])==='Old/2020/01' && $same['path']!==$f->old['path'],'R3: missing current reserves new target in same folder');
 
-    $f = new RetargetFixture(); $f->missing(); $run=$f->scan(true); $new=$f->reserve($run);
+    $f = new RetargetFixture(); $f->missing(); $run=$f->scan(); $new=$f->reserve($run);
     check($new['state']==='missing' && $new['path']==='New/2026/09/test.jpg','R4: authorized retarget uses current client destination');
     $f->files->files[$new['path']]=200;
     $f->ack($run,$new['path']);
     $current=$f->current();$asset=$f->repo->asset($f->user,$f->source['sourceId'],(int)$current['asset_id']);
     check($current['path']===$new['path'] && (int)$current['id']!==(int)$f->old['id'] && (int)$asset['nextcloud_file_id']===200 && $asset['nextcloud_path']===$new['path'] && $current['sha256']===hash('sha256','ORIGINAL') && (int)$current['bytes']===8,'R5: verified completion switches current and compatibility fields');
     check($f->repo->target($f->user,$f->source['sourceId'],(int)$current['asset_id'],(int)$f->old['id'])===$f->old,'R6: historical target row retained unchanged');
-    check($f->scan(true)['assets'][0]['state']==='known','R16: subsequent inventory uses new current');
+    check($f->scan()['assets'][0]['state']==='known','R16: subsequent inventory uses new current');
     // Memberships remain keyed by source and external asset. Album sync can
     // resolve the asset's current file after a successful retarget.
     $assetId = (int)$current['asset_id'];
@@ -83,7 +83,7 @@ function retargetScenarios(): void {
     check($f->current()===$current && $ack['summary']['uploaded']===1,'R12: replay, including older successful ticket, cannot switch current again');
     rejects(fn()=>$f->reserve($f->first,'Third'),'finished old ticket cannot reopen missing historical target');
 
-    $f = new RetargetFixture();$f->missing();$run=$f->scan(true);$f->files->folderFailure=true;
+    $f = new RetargetFixture();$f->missing();$run=$f->scan();$f->files->folderFailure=true;
     rejects(fn()=>$f->reserve($run),'R7: prepare folder error rejected');
     check($f->current()===$f->old && count($f->repo->targets($f->user,$f->source['sourceId']))===1,'R7: prepare error rolls reservation back and preserves current');
     $f->files->folderFailure=false;$new=$f->reserve($run);$f->ack($run,null,'failed');
@@ -117,8 +117,23 @@ function retargetScenarios(): void {
     $session=new class implements OCP\IUserSession {public function getUser(): mixed {return new class {public function getUID(): string{return 'retarget';}};}};
     $controller=new OCA\ApplePhotosConnector\Controller\InventoryController($request,$f->inventory,$session);
     check($controller->create()->getData()['assets'][0]['state']==='known','R10: client retarget_allowed cannot authorize missing current upload');
+    // Older clients may still send the retired field; it must not affect recovery.
+    foreach ([false, true] as $legacyValue) {
+        $request->params['retransferMissing'] = $legacyValue;
+        $reply = $controller->create();
+        check($reply->getStatus() === 200 && $reply->getData()['assets'][0]['state'] === 'known'
+            && $reply->getData()['assets'][0]['upload'] === null,
+            'legacy retransferMissing is tolerated for an existing file');
+    }
     $f->missing();
-    $run=$f->scan(true);$request->params=['sourceId'=>$f->source['sourceId'],'runId'=>$run['runId'],'uploadId'=>$run['assets'][0]['upload']['uploadId'],'bytes'=>8,'sha256'=>hash('sha256','ORIGINAL'),'folder'=>'Attacker','retarget_allowed'=>true,'target_id'=>null];
+    foreach ([false, true] as $legacyValue) {
+        $request->params['retransferMissing'] = $legacyValue;
+        $reply = $controller->create();
+        check($reply->getStatus() === 200 && $reply->getData()['assets'][0]['state'] === 'new'
+            && $reply->getData()['assets'][0]['upload'] !== null,
+            'legacy retransferMissing cannot suppress recovery of a missing file');
+    }
+    $run=$f->scan();$request->params=['sourceId'=>$f->source['sourceId'],'runId'=>$run['runId'],'uploadId'=>$run['assets'][0]['upload']['uploadId'],'bytes'=>8,'sha256'=>hash('sha256','ORIGINAL'),'folder'=>'Attacker','retarget_allowed'=>true,'target_id'=>null];
     $prepareController=new OCA\ApplePhotosConnector\Controller\UploadController($request,$f->complete,$session,$f->prepare);
     check($prepareController->prepare()->getStatus()===200,'R10: missing current is recoverable only from server-issued ticket state');
     foreach ([['other',$f->source['sourceId'],$run['runId']],[$f->user,'b50e8400-e29b-41d4-a716-446655440099',$run['runId']],[$f->user,$f->source['sourceId'],$f->first['runId']]] as [$user,$source,$rid]) {
@@ -128,7 +143,7 @@ function retargetScenarios(): void {
     $new=$f->reserve($run);$f->files->files[$new['path']]=202;
     rejects(fn()=>$f->complete->acknowledge($f->user,$f->source['sourceId'],$other['runId'],$other['assets'][0]['upload']['uploadId'],'uploaded',$new['path']),'R11: different asset ticket cannot claim target');
 
-    $f = new RetargetFixture();$f->missing();$run=$f->scan(true);
+    $f = new RetargetFixture();$f->missing();$run=$f->scan();
     $f->files->files['New/2026/09/test.jpg']=999;$f->files->contents['New/2026/09/test.jpg']='FOREIGN!';
     $new=$f->reserve($run);
     check($new['path']!=='New/2026/09/test.jpg' && $f->files->contents['New/2026/09/test.jpg']==='FOREIGN!','R14: foreign destination gets suffix without overwrite');
@@ -197,7 +212,7 @@ function retargetRaceScenario(): void {
         $schema=new TestHarness\Schema();
         (new OCA\ApplePhotosConnector\Migration\Version008000Date20260910000000())->changeSchema(new class implements OCP\Migration\IOutput {},fn()=>$schema,[]);
         $schema->apply($pdo);
-        $f=new RetargetFixture($pdo);$f->missing();$runs=[$f->scan(true),$f->scan(true)];
+        $f=new RetargetFixture($pdo);$f->missing();$runs=[$f->scan(),$f->scan()];
         $pdo->exec('CREATE TABLE test_current_switches (asset_id INTEGER)');
         $pdo->exec('CREATE TRIGGER test_current_switch AFTER UPDATE OF current_upload_target_id ON apc_assets WHEN NEW.current_upload_target_id IS NOT OLD.current_upload_target_id BEGIN INSERT INTO test_current_switches VALUES (NEW.id); END');
         $prepared=parallelRetargetWorkers($database,$runs,$f->files,'prepare');

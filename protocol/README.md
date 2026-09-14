@@ -122,6 +122,6 @@ Die Speicherung des Album-Inventars erfolgt anhand Benutzer, Source und lokalem 
 
 HTTP 200 enthält `status: "completed"` oder bei einzelnen Fehlern `"partial"` und `summary` mit `albumsSeen`, `albumsCreated`, `albumsReused`, `foldersSkipped`, `membershipsSeen`, `membershipsCreated`, `membershipsReused`, `membershipsSkippedNotImported` und `errors`. Fehlende Source bzw. fehlendes Album-Inventar ergibt HTTP 400. Wiederholungen ergänzen Mitgliedschaften, ohne fehlende Quelldaten als Löschauftrag zu behandeln.
 
-## Optionale Wiederübertragung
+## Recovery of missing files
 
-`retransferMissing: true` im Asset-Inventar aktiviert die Prüfung bereits zugeordneter Dateipfade auf Existenz. Fehlende Dateien werden erneut als `new` mit Upload-Auftrag angefordert. Ohne Option bleibt die Prüfung ausgeschaltet. Es findet keine allgemeine Hash-Prüfung bekannter Dateien statt. Die vorhandenen JSON-Schemas sind teilweise älter als diese Erweiterung; maßgeblich für den aktuellen Implementierungsstand sind Controller und Services.
+During a normal inventory for selected media, an existing mapped Nextcloud file is `known`; a missing file is `new` with an upload ticket. Recovery requires the original to remain available in Apple Photos. A missing file alone does not start an import. The retired `retransferMissing` field is no longer sent; older clients may still send it, and the server ignores it. This is an existence check, not a general content-hash check of known files.

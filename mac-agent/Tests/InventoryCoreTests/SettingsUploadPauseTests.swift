@@ -39,7 +39,7 @@ final class SettingsUploadPauseTests: XCTestCase {
         private(set) var completions = 0
         private(set) var folders: [String] = []
         private(set) var hosts: [String] = []
-        private(set) var retryFlags: [Bool] = []
+        private(set) var legacyFieldPresent: [Bool] = []
         init(count: Int, known: Bool = false) { self.count = count; self.known = known }
         func send(_ request: URLRequest, file: URL?) async throws -> DAVResponse {
             hosts.append(request.url!.host!)
@@ -47,7 +47,7 @@ final class SettingsUploadPauseTests: XCTestCase {
             if path.hasSuffix("/inventory") {
                 inventories += 1
                 let body = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
-                retryFlags.append(body["retransferMissing"] as! Bool)
+                legacyFieldPresent.append(body["retransferMissing"] != nil)
                 let entries: [[String: Any]] = (0..<count).map {
                     known ? ["state": "known"] : ["state": "new", "upload": ["uploadId": "u\($0)", "assetId": "\($0 + 1)"]]
                 }
@@ -163,15 +163,13 @@ final class SettingsUploadPauseTests: XCTestCase {
         let payload = try json(4)
         var currentConnection = try connection()
         var currentRoot = "Original"
-        var currentRetry = false
-        let task = Task { [currentConnection, currentRoot, currentRetry] in
-            try await coordinator.run(json: payload, connection: currentConnection, targetRoot: currentRoot, retransferMissing: currentRetry)
+        let task = Task { [currentConnection, currentRoot] in
+            try await coordinator.run(json: payload, connection: currentConnection, targetRoot: currentRoot)
         }
         await eventually { await exporter.count() == 3 }
         gate.setPaused(true)
         currentConnection = try connection("new.invalid")
         currentRoot = "Changed"
-        currentRetry = true
         await exporter.releaseAll()
         await eventually { gate.waitingCount == 3 }
         let beforeResume = await transport.folderCount()
@@ -182,14 +180,14 @@ final class SettingsUploadPauseTests: XCTestCase {
         _ = try await task.value
         let folders = await transport.folders
         let hosts = await transport.hosts
-        let flags = await transport.retryFlags
+        let flags = await transport.legacyFieldPresent
         XCTAssertEqual(folders.count, 4)
         XCTAssertTrue(folders.allSatisfy { $0.hasPrefix("Original/") })
         XCTAssertEqual(Set(hosts), ["old.invalid"])
         XCTAssertEqual(flags, [false])
         // Changed settings are inputs only to the next run.
-        let next = Task { [currentConnection, currentRoot, currentRetry] in
-            try await coordinator.run(json: payload, connection: currentConnection, targetRoot: currentRoot, retransferMissing: currentRetry)
+        let next = Task { [currentConnection, currentRoot] in
+            try await coordinator.run(json: payload, connection: currentConnection, targetRoot: currentRoot)
         }
         await eventually { await exporter.count() == 7 }
         await exporter.releaseAll()
@@ -197,8 +195,8 @@ final class SettingsUploadPauseTests: XCTestCase {
         await exporter.releaseAll()
         _ = try await next.value
         let updatedFolders = await transport.folders
-        let updatedFlags = await transport.retryFlags
+        let updatedFlags = await transport.legacyFieldPresent
         XCTAssertTrue(updatedFolders.suffix(4).allSatisfy { $0.hasPrefix("Changed/") })
-        XCTAssertEqual(updatedFlags, [false, true])
+        XCTAssertEqual(updatedFlags, [false, false])
     }
 }

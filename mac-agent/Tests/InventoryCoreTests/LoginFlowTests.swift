@@ -40,3 +40,38 @@ final class LoginFlowTests: XCTestCase {
         catch { XCTFail("unexpected error: \(error)") }
     }
 }
+
+private actor PendingLoginTransport: DAVTransport {
+    var pending = true
+    func send(_ request: URLRequest, file: URL?) async throws -> DAVResponse {
+        if pending { pending = false; throw UploadError.http(404) }
+        return DAVResponse(status: 200, data: Data(#"{"server":"https://b.example","loginName":"new","appPassword":"new-password"}"#.utf8))
+    }
+}
+
+extension LoginFlowTests {
+    func testRealTransportStyle404ContinuesPolling() async throws {
+        let service = NextcloudLoginFlowService(transport: PendingLoginTransport(), pollInterval: .milliseconds(1), timeout: .seconds(1))
+        let start = LoginFlowStartResponse(poll: .init(token: "test", endpoint: URL(string: "https://b.example/poll")!), login: URL(string: "https://b.example/login")!)
+        let credentials = try await service.poll(start)
+        XCTAssertEqual(credentials.server.host, "b.example")
+        XCTAssertEqual(credentials.loginName, "new")
+    }
+
+    func testSwitchBuildsFreshClientUsingOnlyReturnedCredentials() async throws {
+        let old = NextcloudConnectionClient(connection: try ConnectorConnection(server: "https://a.example", user: "old", password: "old"))
+        let transport = LoginFlowTransport([
+            DAVResponse(status: 200, data: Data(#"{"poll":{"token":"test","endpoint":"https://b.example/custom/poll"},"login":"https://b.example/login"}"#.utf8)),
+            DAVResponse(status: 200, data: Data(#"{"server":"https://confirmed.example","loginName":"new","appPassword":"new-password"}"#.utf8))
+        ])
+        let service = NextcloudLoginFlowService(transport: transport)
+        let start = try await service.initiate(server: "https://b.example")
+        let credentials = try await service.poll(start)
+        let client = NextcloudConnectionClient(connection: try ConnectorConnection(server: credentials.server.absoluteString, user: credentials.loginName, password: credentials.appPassword))
+        XCTAssertEqual(transport.requests.map { $0.url!.absoluteString }, ["https://b.example/index.php/login/v2", "https://b.example/custom/poll"])
+        XCTAssertTrue(transport.requests.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == nil })
+        XCTAssertEqual(client.statusRequest().url?.host, "confirmed.example")
+        XCTAssertEqual(client.statusRequest().value(forHTTPHeaderField: "Authorization"), "Basic " + Data("new:new-password".utf8).base64EncodedString())
+        XCTAssertFalse((old.transport as AnyObject) === (client.transport as AnyObject))
+    }
+}

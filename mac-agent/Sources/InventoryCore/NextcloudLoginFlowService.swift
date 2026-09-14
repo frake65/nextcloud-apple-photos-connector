@@ -59,6 +59,11 @@ public struct NextcloudLoginFlowService: Sendable {
                 guard let credentials = try? JSONDecoder().decode(LoginFlowCredentials.self, from: response.data), !credentials.loginName.isEmpty, !credentials.appPassword.isEmpty else { throw LoginFlowError.invalidResponse }
                 return credentials
             } catch is CancellationError { throw LoginFlowError.cancelled }
+            catch UploadError.http(404) {
+                // NetworkTransport throws for HTTP errors; 404 means pending in Login Flow v2.
+                try await Task.sleep(for: pollInterval)
+                continue
+            }
             catch let error as LoginFlowError { throw error }
             catch { throw LoginFlowError.network }
         }

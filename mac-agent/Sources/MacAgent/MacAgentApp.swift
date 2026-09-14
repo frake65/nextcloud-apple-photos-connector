@@ -32,6 +32,10 @@ struct MacAgentApp: App {
         Settings {
             ConnectorSettingsView()
         }
+        Window(L10n.text("debugWindow"), id: "debug-window") {
+            DebugWindowView(store: DebugLogStore.shared)
+        }
+
     }
 
     init() {
@@ -58,12 +62,14 @@ private final class InventoryModel: ObservableObject {
     @Published var uploadProgress: UploadCoordinator.Progress?
     @Published var uploadInProgress = false
     @Published var debugLog: [String] = []
+    let debugStore = DebugLogStore.shared
     var uploadTask: Task<Void, Never>?
     private var uploadLogger: DebugFileLogger?
     private var preferences: ConnectionPreferences!
 
     init() {
         let defaults = UserDefaults(suiteName: ConnectionPreferences.preferencesSuite) ?? .standard
+        try? ConnectionPreferences.migrateLegacyPassword(defaults: defaults)
         server = defaults.string(forKey: "nextcloud.server") ?? ""
         user = defaults.string(forKey: "nextcloud.user") ?? ""
         preferences = ConnectionPreferences(server: server, user: user)
@@ -74,10 +80,16 @@ private final class InventoryModel: ObservableObject {
         let defaults = UserDefaults(suiteName: ConnectionPreferences.preferencesSuite) ?? .standard
         server = defaults.string(forKey: "nextcloud.server") ?? ""
         user = defaults.string(forKey: "nextcloud.user") ?? ""
+        // Reset removes the persisted identity. Retire work holding the old connection.
+        if server.isEmpty || user.isEmpty { uploadTask?.cancel() }
         preferences = ConnectionPreferences(server: server, user: user)
         targetPath = TargetDirectoryPreferences().path
         let enabled = defaults.bool(forKey: UploadPreferences.debugModeKey)
         if (uploadLogger != nil) != enabled { uploadLogger = DebugFileLogger(enabled: enabled) }
+    }
+    func logDebug(_ event: String) {
+        debugStore.append(event)
+        logUploadEvent(event)
     }
     func logUploadEvent(_ event: String) {
         let defaults = UserDefaults(suiteName: ConnectionPreferences.preferencesSuite) ?? .standard
@@ -85,7 +97,7 @@ private final class InventoryModel: ObservableObject {
         uploadLogger?.log(event)
     }
     private func isSafeUploadEvent(_ event: String) -> Bool {
-        let prefixes = ["upload.ui.requested", "upload.ui.requested selectedAssets=", "upload.ui.reinventory=", "upload.snapshot assets=", "upload.start.skipped reason=", "upload.coordinator.entered", "inventory.request.start", "inventory.candidates assets=", "inventory.payload.assets=", "inventory.payload.invalid expected=", "reinventory.enabled=", "inventory.response.state=", "inventory.response.ticket=", "upload.queue.added", "upload.queue.skipped reason=", "upload.prepare.start", "upload.prepare.status=", "upload.prepare.error=", "upload.prepare.validate.", "upload.prepare.target.", "upload.export.start", "upload.export.success", "upload.put.start", "upload.put.status=", "upload.put.success", "upload.put.failed category=", "upload.put.http.status=", "upload.put.error.domain=", "upload.put.error.code=", "upload.complete.status=", "upload.complete.http.success", "upload.complete.request.status=", "upload.complete.success", "upload.complete.error category=", "upload.counter.uploaded=", "upload.outcome="]
+        let prefixes = ["upload.ui.requested", "upload.ui.requested selectedAssets=", "upload.snapshot assets=", "upload.start.skipped reason=", "upload.coordinator.entered", "inventory.request.start", "inventory.candidates assets=", "inventory.payload.assets=", "inventory.payload.invalid expected=", "inventory.response.state=", "inventory.response.ticket=", "upload.queue.added", "upload.queue.skipped reason=", "upload.prepare.start", "upload.prepare.status=", "upload.prepare.error=", "upload.prepare.validate.", "upload.prepare.target.", "upload.export.start", "upload.export.success", "upload.put.start", "upload.put.status=", "upload.put.success", "upload.put.failed category=", "upload.put.http.status=", "upload.put.error.domain=", "upload.put.error.code=", "upload.complete.status=", "upload.complete.http.success", "upload.complete.request.status=", "upload.complete.success", "upload.complete.error category=", "upload.counter.uploaded=", "upload.outcome="]
         return prefixes.contains { event.hasPrefix($0) } && !event.contains("/") && !event.contains("\\")
     }
     func loadConnection() throws -> ConnectorConnection {
@@ -120,6 +132,7 @@ final class VisualLibraryModel: ObservableObject {
     @Published private(set) var generation = UUID()
     @Published private(set) var albumDetails: [GalleryAlbum] = []
     @Published private(set) var selectedAssetIDs: Set<String> = []
+    @Published private(set) var representedAlbumIDs: Set<String> = []
     @Published var selectedAlbumIDs: Set<String> = []
     @Published private(set) var selectedPhotos = 0
     @Published private(set) var selectedVideos = 0
@@ -166,6 +179,7 @@ final class VisualLibraryModel: ObservableObject {
             }
         }
         rebuildEffectiveSelection()
+        Task { @MainActor [weak self] in try? await self?.refreshRepresentedAlbums() }
         Task { await library.setObservedAlbumIDs(Set(selectedAlbums.map(\.localIdentifier))) }
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -184,6 +198,21 @@ final class VisualLibraryModel: ObservableObject {
     var selectedMembershipCount: Int {
         albumDetails.filter { selectedAlbumIDs.contains(PhotoSelectionIdentity.album($0.inventory)) }
             .reduce(0) { $0 + $1.photos + $1.videos }
+    }
+
+    /// Number of distinct library albums represented by the current effective
+    /// photo selection. An asset may occur in multiple albums, but each album
+    /// is counted once.
+    var representedAlbumCount: Int {
+        representedAlbumIDs.count
+    }
+
+    static func representedAlbumCount(albums: [GalleryAlbum], selectedAssetIDs: Set<String>) -> Int {
+        guard !selectedAssetIDs.isEmpty else { return 0 }
+        return Set(albums.compactMap { album in
+            album.inventory.assetIdentities.contains(where: selectedAssetIDs.contains)
+                ? album.inventory.localIdentifier : nil
+        }).count
     }
 
     func requestLoad() {
@@ -215,10 +244,12 @@ final class VisualLibraryModel: ObservableObject {
         let count = try await library.open()
         assetCount = count
         generation = UUID()
+        try await ensureAlbums()
         thumbnails.clearCache()
         authorizationMessage = nil
         loadedAlbums = false
         albumDetails = []
+        representedAlbumIDs = []
         successfullyUploadedAssetIDs.removeAll()
         if let persisted { restore(persisted) }
         else if selectionSourceId == nil {
@@ -236,6 +267,7 @@ final class VisualLibraryModel: ObservableObject {
                     try await model.resolveSelectedAlbumMembers()
                 }
                 try await model.refreshEffectiveSelectionCounts()
+                try await model.refreshRepresentedAlbums()
             }
         }
     }
@@ -245,6 +277,7 @@ final class VisualLibraryModel: ObservableObject {
         selectedAlbumIDs = state.selectedAlbumIDs
         albumMembers.removeAll()
         selectedAssetIDs = manuallySelectedAssetIDs
+        representedAlbumIDs.removeAll()
     }
 
     func requestAlbums() {
@@ -302,6 +335,7 @@ final class VisualLibraryModel: ObservableObject {
             } else { model.manuallySelectedAssetIDs.insert(identity) }
             model.rebuildEffectiveSelection()
             try await model.refreshEffectiveSelectionCounts()
+            try await model.refreshRepresentedAlbums()
         }
     }
 
@@ -319,6 +353,7 @@ final class VisualLibraryModel: ObservableObject {
             await model.library.setObservedAlbumIDs(Set(model.selectedAlbums.map(\.localIdentifier)))
             model.rebuildEffectiveSelection()
             try await model.refreshEffectiveSelectionCounts()
+            try await model.refreshRepresentedAlbums()
         }
     }
 
@@ -328,6 +363,7 @@ final class VisualLibraryModel: ObservableObject {
             model.manuallySelectedAssetIDs = all.identities
             model.rebuildEffectiveSelection()
             model.selectedPhotos = all.photos; model.selectedVideos = all.videos
+            try await model.refreshRepresentedAlbums()
         }
     }
 
@@ -335,6 +371,7 @@ final class VisualLibraryModel: ObservableObject {
         guard !selectionBusy else { return }
         manuallySelectedAssetIDs.removeAll(); selectedAssetIDs.removeAll(); selectedAlbumIDs.removeAll(); albumMembers.removeAll(); successfullyUploadedAssetIDs.removeAll()
         selectedPhotos = 0; selectedVideos = 0
+        representedAlbumIDs.removeAll()
         saveSelection()
     }
 
@@ -359,6 +396,10 @@ final class VisualLibraryModel: ObservableObject {
         selectedVideos = selected.videos
     }
 
+    private func refreshRepresentedAlbums() async throws {
+        representedAlbumIDs = try await library.albumIDs(containing: selectedAssetIDs)
+    }
+
     func uploadSnapshot() -> Set<String> { selectedAssetIDs }
     func markSuccessfullyUploaded(_ identity: String) {
         successfullyUploadedAssetIDs.insert(identity)
@@ -377,6 +418,32 @@ final class VisualLibraryModel: ObservableObject {
         PhotoSelectionPreferences.save(PhotoSelectionState(manuallySelectedAssetIDs: manuallySelectedAssetIDs, selectedAlbumIDs: selectedAlbumIDs), sourceId: source, defaults: UserDefaults(suiteName: ConnectionPreferences.preferencesSuite) ?? .standard)
     }
 }
+private struct MediaLibrarySummaryView: View {
+    let photoCount: Int
+    let albumCount: Int?
+    let selectedPhotoCount: Int
+    let representedAlbumCount: Int
+
+    var body: some View {
+        let libraryAlbumValue = albumCount.map(String.init) ?? "—"
+        let first = Text(L10n.text("librarySummaryLibraryPrefix"))
+            + Text(photoCount.formatted()).fontWeight(.bold)
+            + Text(L10n.text("librarySummaryPhotosMiddle"))
+            + Text(libraryAlbumValue).fontWeight(.bold)
+            + Text(L10n.text("librarySummaryLibrarySuffix"))
+        let second = Text(L10n.text("librarySummaryUploadPrefix"))
+            + Text(selectedPhotoCount.formatted()).fontWeight(.bold)
+            + Text(L10n.text("librarySummarySelectedPhotosMiddle"))
+            + Text(representedAlbumCount.formatted()).fontWeight(.bold)
+            + Text(L10n.text("librarySummaryUploadSuffix"))
+        return (first + Text("\n") + second)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 private struct InventoryView: View {
     @StateObject private var model = InventoryModel()
     @StateObject private var visual = VisualLibraryModel()
@@ -385,8 +452,8 @@ private struct InventoryView: View {
     @State private var albumSyncRunning = false
     @State private var albumSyncStatus = "Noch kein Album-Abgleich gestartet."
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
     @AppStorage(UploadPreferences.debugModeKey, store: UserDefaults(suiteName: ConnectionPreferences.preferencesSuite)) private var debugMode = false
-    @AppStorage(UploadPreferences.retransferMissingKey, store: UserDefaults(suiteName: ConnectionPreferences.preferencesSuite)) private var retransferMissing = false
     @State private var persistentDebugLogger: DebugFileLogger?
 
     var body: some View {
@@ -405,6 +472,7 @@ private struct InventoryView: View {
             }
             UploadTargetSummaryView(server: model.server, user: model.user, targetPath: model.targetPath)
             Divider()
+            if debugMode { Button(L10n.text("openDebugWindow")) { openWindow(id: "debug-window") } }
             Button(model.scanning ? "Upload abbrechen" : uploadButtonTitle) {
                 if model.scanning {
                     print("CANCELLED stage=button")
@@ -413,7 +481,6 @@ private struct InventoryView: View {
                 }
                 model.debugLog = []
                 model.logUploadEvent("upload.ui.requested selectedAssets=\(visual.selectedAssetIDs.count) selectedAlbums=\(visual.selectedAlbumIDs.count)")
-                model.logUploadEvent("upload.ui.reinventory=\(retransferMissing)")
                 guard !model.scanning, !visual.selectionBusy else { return }
                 let selectionSnapshot = visual.uploadSnapshot()
                 model.logUploadEvent("upload.snapshot assets=\(selectionSnapshot.count) albums=\(visual.selectedAlbumIDs.count)")
@@ -425,6 +492,8 @@ private struct InventoryView: View {
                 }
                 model.scanning = true
                 model.uploadProgress = nil
+                model.logDebug("Import action started")
+                model.debugLog.append("Import action started · selection=\(selectionSnapshot.count)")
                 model.uploadInProgress = true
                 model.status = L10n.text("uploadRunning")
                 model.uploadTask = Task {
@@ -438,7 +507,6 @@ private struct InventoryView: View {
                         }
                         let connection = try model.loadConnection()
                         let targetRoot = TargetDirectoryPreferences().path
-                        let runRetransferMissing = retransferMissing
                         guard !selectionSnapshot.isEmpty else {
                             model.logUploadEvent("upload.start.skipped reason=empty-selection")
                             throw NSError(domain: "ApplePhotosConnector", code: 1, userInfo: [NSLocalizedDescriptionKey: "Bitte mindestens ein Foto oder Album auswählen."])
@@ -454,17 +522,21 @@ private struct InventoryView: View {
                         var uploadJSON = result.json
                         uploadJSON = try InventoryJSON.filteringByStableIdentity(uploadJSON, allowed: selectionSnapshot).json
                         model.debugLog.append("Photo inventory ready · assets=\(result.summary.totalAssets) · endpoint=/index.php/apps/apple_photos_connector/api/v1/inventory")
-                        model.debugLog.append("Inventory request pending · retransferMissing=\(runRetransferMissing)")
-                        let summary = try await model.uploader.run(json: uploadJSON, connection: connection, targetRoot: targetRoot, retransferMissing: runRetransferMissing, progress: { progress in
+                        model.debugLog.append("Inventory request pending")
+                        model.logDebug("Selection snapshot created assets=\(selectionSnapshot.count)")
+                        model.debugLog.append("Progress entries pending")
+                        let summary = try await model.uploader.run(json: uploadJSON, connection: connection, targetRoot: targetRoot, progress: { progress in
                             Task { @MainActor in model.uploadProgress = progress }
                         }, debug: { message in
                             Task { @MainActor in
                                 model.debugLog.append(message)
-                                model.logUploadEvent(message)
+                                model.logDebug(message)
                             }
                         }, onUploaded: { identity in
                             Task { @MainActor in visual.markSuccessfullyUploaded(identity) }
                         })
+                        model.logDebug("Import completed uploaded=\(summary.uploadedImages + summary.uploadedVideos + summary.uploadedOther) failed=\(summary.failed)")
+                        model.uploadProgress = summary.finalProgress
                         var albumSummary: AlbumInventoryCoordinator.SyncResult?
                         if !visual.selectedAlbumIDs.isEmpty {
                             _ = try await model.albums.run(scanner: model.scanner, connection: connection)
@@ -472,7 +544,7 @@ private struct InventoryView: View {
                                 selectedAlbumIDs: visual.selectedAlbumIDs, selectedAssetIDs: selectionSnapshot)
                         }
                         model.status = uploadSummary(summary, albums: albumSummary)
-                        if summary.failed == 0 {
+                        if summary.shouldCloseProgressSheet {
                             model.uploadInProgress = false
                         }
                     } catch is CancellationError {
@@ -484,27 +556,12 @@ private struct InventoryView: View {
                         // Keep the sheet visible for technical errors so the
                         // per-file failure remains inspectable.
                     } catch {
-                        if case let UploadError.http(status) = error {
-                            print("ERROR stage=inventory type=http status=\(status)")
-                            if (500...599).contains(status) {
-                                model.status = "Nextcloud-Server ist vorübergehend nicht verfügbar."
-                            } else if status == 401 || status == 403 {
-                                model.status = "Anfrage an Nextcloud wurde abgelehnt."
-                            } else {
-                                model.status = "Anfrage an Nextcloud wurde abgelehnt."
-                            }
-                        } else {
-                            print("ERROR stage=import error=\(error.localizedDescription)")
-                        }
-                        let nsError = error as NSError
-                        if !(error is UploadError) && nsError.domain == NSURLErrorDomain &&
-                            (nsError.code == NSURLErrorTimedOut || nsError.code == NSURLErrorCannotConnectToHost ||
-                             nsError.code == NSURLErrorNetworkConnectionLost || nsError.code == NSURLErrorNotConnectedToInternet) {
-                            model.status = "Nextcloud-Server nicht erreichbar."
-                        } else if !(error is UploadError) {
-                            model.status = "Error: \(L10n.text("upload"))"
-                        }
-                        model.uploadInProgress = false
+                        let failure = UploadFailure.capture(error, stage: .inventory)
+                        model.logDebug("Import failed \(failure.technicalDetail)")
+                        model.debugLog.append("Import failed · \(failure.technicalDetail)")
+                        model.status = failure.userMessage
+                        // Keep the progress sheet and its per-asset rows visible.
+                        model.uploadInProgress = true
                     }
                 }
             }.disabled((!model.scanning && (visual.selectionBusy || visual.loading)))
@@ -538,55 +595,18 @@ private struct InventoryView: View {
             } else if !visual.loading && visualMode == 0 && visual.assetCount == 0 {
                 Text(L10n.text("noPhotos")).foregroundStyle(.secondary)
             }
-            let visibleAlbumCount = visual.loadedAlbums ? String(visual.albums.count) : "—"
-            Text("Fotos: \(visual.assetCount) · Alben: \(visibleAlbumCount) · Ausgewählt: \(visual.selectedAssetIDs.count)")
-                .font(.callout).foregroundStyle(.secondary)
+            MediaLibrarySummaryView(
+                photoCount: visual.assetCount,
+                albumCount: visual.loadedAlbums ? visual.albums.count : nil,
+                selectedPhotoCount: visual.selectedAssetIDs.count,
+                representedAlbumCount: visual.representedAlbumCount
+            )
             HStack {
                 Button(L10n.text("selectAll")) { visual.selectAll() }.disabled(visual.selectionBusy || visual.loading)
                 Button(L10n.text("clearSelection")) { visual.clearSelection() }.disabled(visual.selectionBusy)
                 if visual.selectionBusy { ProgressView().controlSize(.small) }
                 Spacer()
             }
-            if debugMode { GroupBox {
-                VStack(alignment: .leading, spacing: 8) {
-                    let selected = visual.selectedAlbums
-                    Text("\(L10n.text("albums")): \(selected.isEmpty ? "—" : selected.map(\.name).joined(separator: ", "))")
-                    let membershipCount = visual.selectedMembershipCount
-                    Text(L10n.format("membershipsNotice", membershipCount, L10n.text("notDeletedNotice")))
-                        .foregroundStyle(.secondary)
-                    Button(L10n.text("albumSync")) {
-                        guard !albumSyncRunning else { return }
-                        guard model.importGuardFailure() == nil else {
-                            albumSyncStatus = "Album-Abgleich blockiert: Verbindung/Ziel nicht bestätigt."
-                            return
-                        }
-                        albumSyncRunning = true
-                        albumSyncStatus = L10n.text("albumsChecking")
-                        Task {
-                            defer { albumSyncRunning = false }
-                            do {
-                                try await SettingsWorkGate.shared.checkpoint()
-                                if let failure = model.importGuardFailure() {
-                                    throw UploadError.diagnostic(failure)
-                                }
-                                let connection = try model.loadConnection()
-                                _ = try await model.albums.run(scanner: model.scanner, connection: connection)
-                                let result = try await model.albums.sync(scanner: model.scanner, connection: connection,
-                                    selectedAlbumIDs: visual.selectedAlbumIDs, selectedAssetIDs: visual.uploadSnapshot())
-                                let checked = result.albumsCreated + result.albumsReused
-                                await MainActor.run { albumSyncStatus = L10n.format("albumSyncResult", checked, L10n.text(checked == 1 ? "albumOne" : "albumMany")) }
-                            } catch {
-                                await MainActor.run { albumSyncStatus = "Album-Abgleich fehlgeschlagen: \(error.localizedDescription)" }
-                            }
-                        }
-                    }
-                    .disabled(albumSyncRunning || model.scanning)
-                    Text(albumSyncStatus)
-                        .foregroundStyle(albumSyncStatus.lowercased().contains("fehlgeschlagen") ? .red : .primary)
-                }
-            } label: {
-                Text(L10n.text("albumSyncGroup")).font(.headline)
-            } }
         }
         .id(language)
         .onAppear {
@@ -689,25 +709,29 @@ private struct UploadProgressSheet: View {
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(L10n.text("uploadingOriginals")).font(.headline)
+            Text(L10n.text(progress?.finished == true ? "importStatus" : "uploadingOriginals")).font(.headline)
             if let progress {
                 ProgressView(value: progress.total == 0 ? 1 : Double(progress.completed) / Double(progress.total))
-                Text(progress.filename.map { "Datei: \($0)" } ?? "Upload wird vorbereitet …")
+                if !progress.finished { Text(progress.filename.map { L10n.format("importCurrentFile", $0) } ?? L10n.text("preparingUploads")) }
                 Text(L10n.format("uploadsProgressFormat", progress.completed, progress.total))
                     .foregroundStyle(.secondary)
+                if progress.finished { Text(progress.summaryText).fontWeight(.medium) }
                 ScrollView {
                     VStack(alignment: .leading, spacing: 8) {
                         ForEach(progress.items) { item in
                             VStack(alignment: .leading, spacing: 2) {
                                 HStack {
                                     Text(item.filename).fontWeight(.medium)
-                                    Spacer()
-                                Text(Self.statusText(item.status))
-                                        .foregroundStyle(item.status == .failed ? .red : .secondary)
                                 }
-                                Text("Quelle: \(item.source)").font(.caption).foregroundStyle(.secondary)
-                                if let target = item.target { Text("Ziel: \(target)").font(.caption).foregroundStyle(.secondary) }
-                                if let error = item.error { Text(error).font(.caption).foregroundStyle(.red) }
+                                Text(Self.statusText(item.status))
+                                    .foregroundStyle(item.status == .failed ? .red : .secondary)
+                                if let error = item.error {
+                                    Text(error.userMessage).font(.caption).foregroundStyle(.red)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    if debugEnabled { Text(error.technicalDetail).font(.caption2).textSelection(.enabled) }
+                                }
+                                Text(L10n.format("importSource", item.source)).font(.caption).foregroundStyle(.secondary)
+                                if let target = item.target { Text(L10n.format("importTarget", target)).font(.caption).foregroundStyle(.secondary) }
                             }
                         }
                     }
@@ -724,8 +748,8 @@ private struct UploadProgressSheet: View {
             } }
             HStack {
                 Spacer()
-                if progress.map({ $0.completed >= $0.total }) == true || progress?.failed == true {
-                    Button("Schließen") { dismiss() }
+                if progress?.finished == true {
+                    Button(L10n.text("closeImport")) { dismiss() }
                 } else {
                     Button(L10n.text("cancelUpload"), role: .cancel) { cancel() }
                 }
@@ -905,4 +929,41 @@ private struct AssetThumbnail: View {
 private struct GalleryThumbnailSizeKey: PreferenceKey {
     static let defaultValue = CGSize(width: 98, height: 92)
     static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
+}
+
+private struct DebugWindowView: View {
+    @ObservedObject var store: DebugLogStore
+    @AppStorage(UploadPreferences.debugModeKey, store: UserDefaults(suiteName: ConnectionPreferences.preferencesSuite)) private var debugMode = false
+    @State private var paused = false
+    @State private var shouldScroll = true
+    var body: some View {
+        VStack(spacing: 8) {
+            if debugMode {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 3) {
+                            ForEach(store.entries) { entry in
+                                Text("\(entry.category.uppercased())  \(entry.message)")
+                                    .font(.system(.caption, design: .monospaced))
+                                    .textSelection(.enabled)
+                                    .id(entry.id)
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .leading).padding(8)
+                    }
+                    .onChange(of: store.entries.count) { _, _ in
+                        guard shouldScroll, let last = store.entries.last else { return }
+                        withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                    }
+                }
+                HStack {
+                    Button(L10n.text("clearDebug")) { store.clear() }
+                    Button(paused ? L10n.text("resumeDebug") : L10n.text("pauseDebug")) { paused.toggle() }
+                    Spacer()
+                    Button(L10n.text("copyDebug")) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(store.text, forType: .string) }
+                }.padding(8)
+            } else {
+                Text(L10n.text("debugDisabled")).foregroundStyle(.secondary)
+            }
+        }.frame(minWidth: 720, minHeight: 420).onChange(of: paused) { _, value in shouldScroll = !value }
+    }
 }

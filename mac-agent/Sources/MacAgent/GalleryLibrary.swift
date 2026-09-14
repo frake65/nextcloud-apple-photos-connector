@@ -81,6 +81,7 @@ protocol GalleryLibraryProviding: Sendable {
     func resolveSelection(_ identities: Set<String>) async throws -> GallerySelection
     func albumCatalog() async throws -> [GalleryAlbum]
     func albumAssets(_ local: String) async throws -> GallerySelection
+    func albumIDs(containing identities: Set<String>) async throws -> Set<String>
     func asset(local: String) async throws -> GalleryAsset?
     func apply(change: PHChange) async -> GalleryChangeResult
     func applyAlbumChange(change: PHChange) async -> AlbumChangeDelta
@@ -98,6 +99,7 @@ extension GalleryLibraryProviding {
     }
     func setObservedAlbumIDs(_ ids: Set<String>) async { }
     func applyMembershipChanges(change: PHChange) async -> [AlbumMembershipDelta] { [] }
+    func albumIDs(containing identities: Set<String>) async throws -> Set<String> { [] }
 }
 
 enum GalleryDebug {
@@ -105,6 +107,7 @@ enum GalleryDebug {
     static func log(_ event: String) {
         let defaults = UserDefaults(suiteName: ConnectionPreferences.preferencesSuite) ?? .standard
         guard defaults.bool(forKey: UploadPreferences.debugModeKey) else { return }
+        Task { @MainActor in DebugLogStore.shared.append(event) }
         logger.log(event)
     }
 }
@@ -309,5 +312,23 @@ actor GalleryLibrary: GalleryLibraryProviding {
         try await gate.checkpoint()
         guard let album = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [local], options: nil).firstObject else { return GallerySelection() }
         return try await records(PHAsset.fetchAssets(in: album, options: options()))
+    }
+
+    func albumIDs(containing identities: Set<String>) async throws -> Set<String> {
+        guard !identities.isEmpty else { return [] }
+        let clouds = identities.filter { $0.hasPrefix("cloud:") }.compactMap { CloudIdentifierCodec.decode(String($0.dropFirst(6))) }
+        var locals = identities.compactMap { identity -> String? in
+            guard identity.hasPrefix("local:") else { return nil }
+            return String(identity.dropFirst(6))
+        }
+        let mappings = PHPhotoLibrary.shared().localIdentifierMappings(for: clouds)
+        for cloud in clouds { if case .success(let local) = mappings[cloud] { locals.append(local) } }
+        var result = Set<String>()
+        for local in locals {
+            guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [local], options: options()).firstObject else { continue }
+            let collections = PHAssetCollection.fetchAssetCollectionsContaining(asset, with: .album, options: nil)
+            for index in 0..<collections.count { result.insert(collections.object(at: index).localIdentifier) }
+        }
+        return result
     }
 }

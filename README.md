@@ -18,6 +18,11 @@ APC is non-destructive: it does not delete Nextcloud files because a photo is
 missing from Apple Photos, does not overwrite existing foreign files, and does
 not re-upload photos that are already known to the server.
 
+> **Install the Nextcloud server app first.** The macOS app cannot connect until
+> `apple_photos_connector` is copied to Nextcloud's `custom_apps` directory and
+> enabled with `occ`. See [Server installation](#nextcloud-server-app--standard-installation)
+> before installing the macOS app.
+
 ## Key principles
 
 - PhotoKit is read locally by the macOS agent.
@@ -39,13 +44,13 @@ not re-upload photos that are already known to the server.
 
 Album Membership and file transfer are separate operations. Album names are not identities; Source and Asset identities remain stable across retries.
 
-## Release 0.8.0
+## Release 0.8.1
 
-Release 0.8.0 contains the current stable connector architecture. The GitHub
+Release 0.8.1 contains the current stable connector architecture. The GitHub
 release provides both required components:
 
-- `apple_photos_connector-0.8.0.tar.gz` — Nextcloud server app
-- `Nextcloud-APC-0.8.0.zip` — universal macOS agent for Apple Silicon and Intel
+- `apple_photos_connector-0.8.1.tar.gz` — Nextcloud server app
+- `Nextcloud-APC-0.8.1.zip` — universal macOS agent for Apple Silicon and Intel
 
 ## Albums
 
@@ -66,7 +71,7 @@ agent. Then configure the connection in the agent and start an import.
 
 ### Nextcloud server app — standard installation
 
-1. Download `apple_photos_connector-0.8.0.tar.gz` from the GitHub release.
+1. Download `apple_photos_connector-0.8.1.tar.gz` from the GitHub release.
 2. Extract it; the archive contains the app directory
    `apple_photos_connector/`.
 3. Copy that directory to the Nextcloud directory configured for additional
@@ -76,7 +81,7 @@ agent. Then configure the connection in the agent and start an import.
 For a typical installation under `/var/www/html`:
 
 ```sh
-tar xzf apple_photos_connector-0.8.0.tar.gz
+tar xzf apple_photos_connector-0.8.1.tar.gz
 sudo mv apple_photos_connector /var/www/html/custom_apps/
 sudo chown -R www-data:www-data /var/www/html/custom_apps/apple_photos_connector
 cd /var/www/html
@@ -97,9 +102,9 @@ One safe AIO procedure is to copy the archive to the container, extract it in
 a temporary container directory, and then copy the app into `custom_apps`:
 
 ```sh
-docker cp apple_photos_connector-0.8.0.tar.gz nextcloud-aio-nextcloud:/tmp/
+docker cp apple_photos_connector-0.8.1.tar.gz nextcloud-aio-nextcloud:/tmp/
 docker exec nextcloud-aio-nextcloud sh -c \
-  'rm -rf /tmp/apple_photos_connector && tar xzf /tmp/apple_photos_connector-0.8.0.tar.gz -C /tmp'
+  'rm -rf /tmp/apple_photos_connector && tar xzf /tmp/apple_photos_connector-0.8.1.tar.gz -C /tmp'
 docker exec nextcloud-aio-nextcloud sh -c \
   'rm -rf /var/www/html/custom_apps/apple_photos_connector && \
    cp -a /tmp/apple_photos_connector /var/www/html/custom_apps/'
@@ -120,7 +125,7 @@ persist custom apps.
 
 ### macOS agent
 
-1. Download `Nextcloud-APC-0.8.0.zip` from the GitHub release.
+1. Download `Nextcloud-APC-0.8.1.zip` from the GitHub release.
 2. Extract the ZIP and move `Nextcloud APC.app` to `/Applications` (Programme).
 3. Start the app.
 4. Allow access to Apple Photos when macOS asks for permission.

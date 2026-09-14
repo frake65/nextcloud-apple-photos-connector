@@ -47,7 +47,22 @@ public struct ConnectionPreferences: Sendable {
     public var server: String; public var user: String
     private let store: any PasswordStore
     public init(server: String = "", user: String = "", store: any PasswordStore = KeychainPasswordStore()) { self.server=server; self.user=user; self.store=store }
-    public func loadPassword() throws -> String? { try store.load(account: user) }
-    public func savePassword(_ password: String) throws { try store.update(password: password, account: user) }
-    public func deletePassword() throws { try store.delete(account: user) }
+    // Include the installation path: two Nextcloud installations may share a host.
+    private var account: String {
+        let normalized = server.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return "v2:" + Data(normalized.utf8).base64EncodedString() + ":" + Data(user.utf8).base64EncodedString()
+    }
+    public func loadPassword() throws -> String? { try store.load(account: account) }
+    /// Migrate only the persisted installation, before presenting editable drafts.
+    public static func migrateLegacyPassword(defaults: UserDefaults, store: any PasswordStore = KeychainPasswordStore()) throws {
+        guard let server = defaults.string(forKey: "nextcloud.server"), !server.isEmpty,
+              let user = defaults.string(forKey: "nextcloud.user"), !user.isEmpty else { return }
+        let preferences = Self(server: server, user: user, store: store)
+        if try preferences.loadPassword() == nil, let legacy = try store.load(account: user) {
+            try preferences.savePassword(legacy)
+        }
+        try store.delete(account: user)
+    }
+    public func savePassword(_ password: String) throws { try store.update(password: password, account: account) }
+    public func deletePassword() throws { try store.delete(account: account) }
 }

@@ -1,6 +1,6 @@
 # Apple Photos Connector — Nextcloud-Prototyp
 
-App-ID: `apple_photos_connector`, Version 0.8.0 laut `appinfo/info.xml`. PHP ab 8.2; App-Metadaten deklarieren Nextcloud 30–34. Source-Registrierung, Inventarläufe und Bestätigung von Original-Uploads über Nextclouds WebDAV. Album-Inventarisierung und separater Abgleich mit Nextcloud Photos sind implementiert.
+App-ID: `apple_photos_connector`, Version 0.8.1 laut `appinfo/info.xml`. PHP ab 8.2; App-Metadaten deklarieren Nextcloud 30–34. Source-Registrierung, Inventarläufe und Bestätigung von Original-Uploads über Nextclouds WebDAV. Album-Inventarisierung und separater Abgleich mit Nextcloud Photos sind implementiert.
 
 ## Frische Serverinstallation
 
@@ -97,6 +97,6 @@ Die Source muss vor dem Album-Inventar registriert sein. Der Abgleich nutzt die 
 
 ## Aktuelles Datenmodell und Fresh-Install-Grenze
 
-Die App 0.8.0 startet mit einer einzigen vollständigen Fresh-Install-Migration. Historische APC-Migrationen und Backfills gehören bewusst nicht zum Clean-Cut-Schema; eine bestehende APC-Installation wird deshalb nicht automatisch umgebaut.
+Die App 0.8.1 startet mit einer einzigen vollständigen Fresh-Install-Migration. Historische APC-Migrationen und Backfills gehören bewusst nicht zum Clean-Cut-Schema; eine bestehende APC-Installation wird deshalb nicht automatisch umgebaut.
 
 Das Datenmodell umfasst Sources, Assets, Import-Runs, Upload-Aufträge, mehrere historisierte Upload-Ziele pro Asset, Album-Inventar, Mitgliedschaften und Photos-Zuordnungen. `current_upload_target_id` ist die alleinige aktuelle Dateizuordnung. Ein Retargeting darf nur bei serverseitig erlaubtem Wiederherstellungsfall erfolgen; das alte Ziel bleibt als Historie erhalten. `retarget_allowed` und `base_target_id` werden ausschließlich aus dem Serverzustand gesetzt, nicht aus Clientdaten.

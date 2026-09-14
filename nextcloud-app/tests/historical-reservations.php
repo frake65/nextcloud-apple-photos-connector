@@ -23,7 +23,7 @@ final class HistoricalReservationFixture {
         $this->assets = array_map(fn(int $i): array => ['localIdentifier'=>"asset-$i",'cloudIdentifier'=>"cloud-$i",'filename'=>"photo-$i.jpg",'mediaType'=>'image'],range(1,$count));
     }
     public function scan(?array $assets = null): array {
-        return $this->inventory->ingest($this->user,$this->source,$assets ?? $this->assets,true);
+        return $this->inventory->ingest($this->user,$this->source,$assets ?? $this->assets);
     }
     public function reserve(array $run,string $folder,int $index = 0): array {
         return $this->prepare->prepare($this->user,$this->source['sourceId'],$run['runId'],$run['assets'][$index]['upload']['uploadId'],8,hash('sha256','ORIGINAL'),$folder);
@@ -125,7 +125,7 @@ function historicalReservationScenarios(): void {
     check($f->scan()['summary']===['seen'=>7,'new'=>0,'known'=>7] && count($f->targets())===10,'HR23: repeated inventory adds no duplicates');
     // Reproduce the user's deliberate deletion between runs in the fake FS only.
     $f->files->files=[]; $f->files->folders=[]; $retry=$f->scan();
-    check($retry['summary']===['seen'=>7,'new'=>7,'known'=>0],'HR24: manual deletion with retransfer enabled legitimately makes all seven new again');
+    check($retry['summary']===['seen'=>7,'new'=>7,'known'=>0],'HR24: manual deletion legitimately makes all seven new again');
     for($i=0;$i<7;$i++) {
         $target=$f->reserve($retry,'New/2026/09',$i);
         check(str_starts_with($target['path'],'New/2026/09/'),"HR25: deleted asset $i does not fall back to historical root");

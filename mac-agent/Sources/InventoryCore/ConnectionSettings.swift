@@ -111,7 +111,6 @@ public struct TargetDirectoryPreferences: @unchecked Sendable {
 }
 
 public enum UploadPreferences {
-    public static let retransferMissingKey = "nextcloud.retransferMissingAfterDeletion"
     public static let debugModeKey = "nextcloud.debugMode"
 }
 

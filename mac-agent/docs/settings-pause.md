@@ -44,7 +44,7 @@ Pending work is process-local; this is not a persistent job scheduler.
 
 ## Configuration snapshot
 
-The UI captures connection, target root and `retransferMissing` after admission
+The UI captures connection and target root after admission
 and before scanning. It retains the selected-asset snapshot through inventory
 filtering. Every upload job receives the same target root and connection. The
 coordinator reads default target/retry values only once when omitted by a caller.

@@ -92,10 +92,10 @@ function uploadScenarios(\OCA\ApplePhotosConnector\Db\InventoryRepository $repo)
     unset($files->files[$path]);
     $missingDefault = $inventory->ingest($user, $source, [$asset]);
     check($missingDefault['assets'][0]['state'] === 'new' && $missingDefault['assets'][0]['upload'] !== null,
-        'deleted mapped file is recoverable without retransfer flag');
-    $missing = $inventory->ingest($user, $source, [$asset], true);
+        'deleted mapped file is recoverable during normal inventory');
+    $missing = $inventory->ingest($user, $source, [$asset]);
     check($missing['assets'][0]['state'] === 'new' && $missing['assets'][0]['upload'] !== null,
-        'retransfer flag requests a new upload when the previously mapped file is missing');
+        'normal inventory requests a new upload when the previously mapped file is missing');
     $missingTarget = (new \OCA\ApplePhotosConnector\Service\UploadTargetService($repo, $files))->prepare(
         $user, $source['sourceId'], $missing['runId'], $missing['assets'][0]['upload']['uploadId'],
         8, hash('sha256', 'ORIGINAL'));

@@ -29,9 +29,14 @@ Album Membership und Dateiübertragung sind getrennte Vorgänge. Albumnamen sind
 
 ## Aktueller Stand
 
-APC 0.8.0 ist ein Entwicklungsmeilenstein. Der aktuelle lokale Nachweis umfasst einen erfolgreichen manuellen Ablauf:
+APC 0.8.1 ist ein Entwicklungsmeilenstein. Der aktuelle lokale Nachweis umfasst einen erfolgreichen manuellen Ablauf:
 
 Apple Photos → PhotoKit-Auswahl → Stable Identity → Inventory → Upload-Ticket → Originalexport → Prepare → WebDAV PUT → Complete → Datei im konfigurierten Nextcloud Target Root.
+
+> **Zuerst die Nextcloud-Server-App installieren.** Die macOS-App kann erst
+> verbunden werden, wenn `apple_photos_connector` nach `custom_apps` kopiert und
+> mit `occ` aktiviert wurde. Die [Server-Installation](README.md#nextcloud-server-app--standard-installation)
+> muss vor der Installation der macOS-App erfolgen.
 
 Automatisierte Prüfung: Swift **60/60 PASS** und PHP/SQLite-Tests **PASS**. Daraus folgt keine Produktionsreife. Multi-Source-Betrieb, Album-Synchronisation, Re-Inventory und Retarget-Verhalten sind lokal dokumentiert und getestet; eine breitere Betriebsvalidierung steht noch aus.
 

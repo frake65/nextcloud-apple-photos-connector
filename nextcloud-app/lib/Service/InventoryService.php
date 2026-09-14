@@ -13,7 +13,7 @@ class InventoryService {
         private UploadedFileLocator $files,
     ) {}
 
-    public function ingest(string $user, mixed $source, mixed $assets, bool $retransferMissing = false): array {
+    public function ingest(string $user, mixed $source, mixed $assets): array {
         if ($user === '') { throw new \InvalidArgumentException('Authenticated user required'); }
         $seen = is_array($assets) && array_is_list($assets) ? count($assets) : 0;
         $run = ImportRun::start($user, $this->validator->sourceId($source), $seen);
@@ -24,7 +24,7 @@ class InventoryService {
                 throw new \InvalidArgumentException('source object and assets array required');
             }
             [$source, $assets] = $this->validator->validate($source, $assets);
-            return $this->process($user, $source, $assets, $run, $retransferMissing);
+            return $this->process($user, $source, $assets, $run);
         } catch (\Throwable $error) {
             $errorCode = $error instanceof \InvalidArgumentException ? 'validation_error'
                 : ($error instanceof \OCP\DB\Exception ? 'database_error' : 'processing_error');
@@ -38,8 +38,8 @@ class InventoryService {
         }
     }
 
-    private function process(string $user, array $source, array $assets, ImportRun $run, bool $retransferMissing): array {
-        return $this->repository->transaction(function () use ($user, $source, $assets, $run, $retransferMissing): array {
+    private function process(string $user, array $source, array $assets, ImportRun $run): array {
+        return $this->repository->transaction(function () use ($user, $source, $assets, $run): array {
             $now = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d\TH:i:s.u\Z');
             $sourceId = $source['source_id'];
             // A write precedes the asset read: concurrent inventories serialize on this source row.
@@ -76,8 +76,7 @@ class InventoryService {
                 }
                 $current = $this->repository->getCurrentTarget($user, $sourceId, (int)$row['id']);
                 // A persisted mapping is authoritative only while its file
-                // still exists. A deleted file must remain recoverable even
-                // when the optional retransfer flag is not set.
+                // still exists. Missing files are recoverable during a normal import.
                 $retarget = $current !== null && !$this->files->exists($user, $current['path']);
                 $uploaded = $current !== null && !$retarget;
                 $upload = null;

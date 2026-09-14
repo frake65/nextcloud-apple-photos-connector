@@ -32,10 +32,8 @@ class InventoryController extends Controller {
         }
         $source = $this->request->getParam('source');
         $assets = $this->request->getParam('assets');
-        $rawRetransfer = $this->request->getParam('retransferMissing');
-        $retransferMissing = $rawRetransfer === true || $rawRetransfer === 1 || $rawRetransfer === '1' || $rawRetransfer === 'true';
         try {
-            return new JSONResponse($this->service->ingest($user->getUID(), $source, $assets, $retransferMissing));
+            return new JSONResponse($this->service->ingest($user->getUID(), $source, $assets));
         } catch (ImportRunFailure $failure) {
             $error = $failure->getPrevious();
             if ($error instanceof \InvalidArgumentException) {

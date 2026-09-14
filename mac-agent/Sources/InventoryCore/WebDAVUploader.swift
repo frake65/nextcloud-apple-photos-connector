@@ -13,6 +13,8 @@ public protocol DAVTransport: Sendable {
 
 /// Redirects are rejected, including same-origin redirects, to preserve conditional PUT semantics.
 public final class NetworkTransport: NSObject, DAVTransport, URLSessionTaskDelegate, Sendable {
+    private static let requestTimeout: TimeInterval = 20
+
     public func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                            newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
         completionHandler(nil)
@@ -20,12 +22,12 @@ public final class NetworkTransport: NSObject, DAVTransport, URLSessionTaskDeleg
     public func send(_ request: URLRequest, file: URL?) async throws -> DAVResponse {
         let config = URLSessionConfiguration.ephemeral
         config.httpCookieStorage = nil
-        config.timeoutIntervalForRequest = 10
+        config.timeoutIntervalForRequest = Self.requestTimeout
         config.timeoutIntervalForResource = file == nil ? 30 : 1800
         let session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
         defer { session.finishTasksAndInvalidate() }
         var request = request
-        request.timeoutInterval = file == nil ? 10 : 1800
+        request.timeoutInterval = file == nil ? Self.requestTimeout : 1800
         let result: (Data, URLResponse)
         if let file { result = try await session.upload(for: request, fromFile: file) }
         else { result = try await session.data(for: request) }
@@ -75,6 +77,29 @@ public struct ConnectorConnection: Sendable {
     }
 }
 
+public actor WebDAVFolderCoordinator {
+    private var known: Set<String> = []
+    private var inFlight: [String: Task<Void, Error>] = [:]
+    public init() {}
+    public func ensure(path: String, operation: @escaping @Sendable () async throws -> Void) async throws {
+        if known.contains(path) { return }
+        if let existing = inFlight[path] {
+            try await existing.value
+            return
+        }
+        let task = Task { try await operation() }
+        inFlight[path] = task
+        do {
+            try await task.value
+            known.insert(path)
+            inFlight.removeValue(forKey: path)
+        } catch {
+            inFlight.removeValue(forKey: path)
+            throw error
+        }
+    }
+}
+
 public struct WebDAVUploader: Sendable {
     public static let directory = ["Photos", "Apple Photos Connector"]
     let connection: ConnectorConnection
@@ -94,16 +119,13 @@ public struct WebDAVUploader: Sendable {
         return stem + "--apc-" + assetId + (attempt > 1 ? "-\(attempt - 1)" : "") + ext
     }
 
-    public func upload(file: URL, filename: String, assetId: String, captureDate: Date, targets: any UploadTargetProvider, targetRoot: String = "Photos/Apple Photos Connector") async throws -> String {
+    public func upload(file: URL, filename: String, assetId: String, captureDate: Date, targets: any UploadTargetProvider, targetRoot: String = "Photos/Apple Photos Connector", folderCoordinator: WebDAVFolderCoordinator? = nil) async throws -> String {
         let identity = try ContentIdentity.read(file)
         let root = ["remote.php", "dav", "files", connection.user]
         let rootComponents = try Self.safeComponents(targetRoot)
         for count in 1...rootComponents.count {
-            let request = connection.request(path: root + rootComponents.prefix(count), method: "MKCOL")
-            debug?("Request MKCOL · path=\(request.url?.path ?? "")")
-            let response = try await transport.send(request, file: nil)
-            debug?("Response MKCOL · status=\(response.status) · responseBytes=\(response.data.count)")
-            guard [201, 405].contains(response.status) else { throw UploadError.http(response.status) }
+            let components = Array(rootComponents.prefix(count))
+            try await ensureCollection(root: root, components: components, coordinator: folderCoordinator)
         }
         for _ in 0..<100 {
             try Task.checkCancellation()
@@ -131,13 +153,10 @@ public struct WebDAVUploader: Sendable {
             guard filenameMatch else { throw UploadError.invalidResponse }
             if target.state == "present" { return target.path }
             if targetComponents.count > rootComponents.count + 1 {
-                for count in (rootComponents.count + 1)..<targetComponents.count {
+                for count in (rootComponents.count + 1)..<(targetComponents.count - 1) {
                     let folder = root + Array(targetComponents.prefix(count))
-                    let request = connection.request(path: folder, method: "MKCOL")
-                    debug?("Request MKCOL · path=\(request.url?.path ?? "")")
-                    let response = try await transport.send(request, file: nil)
-                    debug?("Response MKCOL · status=\(response.status) · responseBytes=\(response.data.count)")
-                    guard [201, 405].contains(response.status) else { throw UploadError.http(response.status) }
+                    let components = Array(targetComponents.prefix(count))
+                    try await ensureCollection(root: root, components: components, coordinator: folderCoordinator)
                 }
             }
             var request = connection.request(path: root + targetComponents, method: "PUT")
@@ -154,6 +173,28 @@ public struct WebDAVUploader: Sendable {
             if response.status != 412 { throw UploadError.http(response.status) }
         }
         throw UploadError.collisions
+    }
+
+    private func ensureCollection(root: [String], components: [String], coordinator: WebDAVFolderCoordinator?) async throws {
+        let path = (root + components).joined(separator: "/")
+        let operation: @Sendable () async throws -> Void = { [connection, transport, debug] in
+            for attempt in 0..<3 {
+                do {
+                    let request = connection.request(path: root + components, method: "MKCOL")
+                    debug?("Request MKCOL · path=\(request.url?.path ?? "")")
+                    let response = try await transport.send(request, file: nil)
+                    debug?("Response MKCOL · status=\(response.status) · responseBytes=\(response.data.count)")
+                    if response.status == 423 {
+                        if attempt < 2 { try await Task.sleep(for: .milliseconds(100 * (attempt + 1))); continue }
+                        throw UploadError.http(423)
+                    }
+                    guard [201, 405].contains(response.status) else { throw UploadError.http(response.status) }
+                    return
+                }
+            }
+        }
+        if let coordinator { try await coordinator.ensure(path: path, operation: operation) }
+        else { try await operation() }
     }
 
     private static func safeComponents(_ path: String) throws -> [String] {
