@@ -12,6 +12,10 @@ public struct UploadProgressDisplay: Equatable, Sendable {
     public var isComplete: Bool { completed >= total }
 }
 
+public enum ImportRunState: Equatable, Sendable {
+    case idle, running, cancelling, completed, failed, cancelled
+}
+
 public enum UploadModalState: Equatable, Sendable {
     case hidden, active, cancelled, completed
 }

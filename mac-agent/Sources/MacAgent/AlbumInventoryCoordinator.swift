@@ -9,9 +9,12 @@ actor AlbumInventoryCoordinator {
     struct SyncError: Decodable { let type: String?; let message: String? }
     private let transport: any DAVTransport = NetworkTransport()
     func run(scanner: PhotoLibraryScanner, connection: ConnectorConnection) async throws -> String {
+        try Task.checkCancellation()
         try await SettingsWorkGate.shared.checkpoint()
         let document: AlbumInventoryDocument
-        do { document = try await scanner.scanAlbums() } catch { throw UploadError.diagnostic("PhotoKit-Albumscan fehlgeschlagen: \(error)") }
+        do { document = try await scanner.scanAlbums() }
+        catch is CancellationError { throw CancellationError() }
+        catch { throw UploadError.diagnostic("PhotoKit-Albumscan fehlgeschlagen: \(error)") }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data: Data
         do {
@@ -22,6 +25,7 @@ actor AlbumInventoryCoordinator {
         var request = connection.request(path: ["index.php","apps","apple_photos_connector","api","v1","albums","inventory"], method: "POST")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type"); request.httpBody = data
         let response = try await transport.send(request, file: nil)
+        try Task.checkCancellation()
         print("Album response HTTP \(response.status), headers=\(response.headers), bytes=\(response.data.count)")
         if let body = String(data: response.data, encoding: .utf8) { print("Album response body UTF-8: \(body)") } else { print("Album response body hex: \(response.data.prefix(128).map { String(format: "%02x", $0) }.joined())") }
         guard response.status == 200 else {
@@ -38,6 +42,7 @@ actor AlbumInventoryCoordinator {
         return "Album-Inventar: \(document.albums.count) Collections, \(cloud) mit Cloud-Identifier, \(document.albums.count - cloud) ohne, \(parents) Parent-Beziehungen, \(memberships) Memberships; Server: \(reply.count ?? document.albums.count) gespeichert."
     }
     func sync(scanner: PhotoLibraryScanner, connection: ConnectorConnection, selectedAlbumIDs: Set<String> = [], selectedAssetIDs: Set<String> = []) async throws -> SyncResult {
+        try Task.checkCancellation()
         try await SettingsWorkGate.shared.checkpoint()
         let sourceId = try await scanner.currentSourceId().uuidString.lowercased()
         let body = try JSONSerialization.data(withJSONObject: [
@@ -48,6 +53,7 @@ actor AlbumInventoryCoordinator {
         var request = connection.request(path: ["index.php","apps","apple_photos_connector","api","v1","albums","sync"], method: "POST")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type"); request.httpBody = body
         let response = try await transport.send(request, file: nil)
+        try Task.checkCancellation()
         guard response.status == 200 else { throw UploadError.diagnostic("Album-Sync HTTP \(response.status): \(String(data: response.data, encoding: .utf8) ?? "")") }
         let decoded = try JSONDecoder().decode(SyncReply.self, from: response.data)
         let s=decoded.summary

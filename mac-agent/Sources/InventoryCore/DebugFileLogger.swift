@@ -25,7 +25,7 @@ public final class DebugFileLogger: @unchecked Sendable {
         let line = "\(ISO8601DateFormatter().string(from: Date())) \(event)\n"
         guard let data = line.data(using: .utf8), let handle = try? FileHandle(forWritingTo: fileURL) else { return }
         defer { try? handle.close() }
-        try? handle.seekToEnd()
+        _ = try? handle.seekToEnd()
         try? handle.write(contentsOf: data)
     }
 

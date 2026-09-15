@@ -1,6 +1,6 @@
-# Apple Photos Connector — Nextcloud-Prototyp
+# Apple Photos Connector — Nextcloud Server App
 
-App-ID: `apple_photos_connector`, Version 0.8.1 laut `appinfo/info.xml`. PHP ab 8.2; App-Metadaten deklarieren Nextcloud 30–34. Source-Registrierung, Inventarläufe und Bestätigung von Original-Uploads über Nextclouds WebDAV. Album-Inventarisierung und separater Abgleich mit Nextcloud Photos sind implementiert.
+App-ID: `apple_photos_connector`, Version 0.8.2 laut `appinfo/info.xml`. PHP ab 8.2; App-Metadaten deklarieren Nextcloud 34–35. Die separate macOS-App **Nextcloud APC** ist erforderlich und wird nicht über den Nextcloud App Store verteilt. Die App-Store-Einreichung wird vorbereitet; das Zertifikat steht noch aus. Original-Uploads und additive Album-Synchronisation sind implementiert. Vollständige Photos-8-Albumtests stehen noch aus.
 
 ## Frische Serverinstallation
 
@@ -51,7 +51,7 @@ Upload-Recovery verwendet dauerhaft gespeicherte Ziele. `POST /api/v1/uploads/pr
 Beim Erzeugen eines Deployment-Archivs auf macOS müssen AppleDouble-Metadateien deaktiviert werden. Andernfalls können Dateien wie `._InventoryController.php` in die Nextcloud-App gelangen und als PHP-Klassen interpretiert werden. Beispiel:
 
 ```sh
-COPYFILE_DISABLE=1 tar -czf /tmp/apple_photos_connector-deploy.tar.gz -C nextcloud-app .
+sh nextcloud-app/build-package.sh
 ```
 
 ## Tests und statische Prüfungen
@@ -73,6 +73,28 @@ NEXTCLOUD_ROOT=/path/to/nextcloud APC_TEST_DATABASE=disposable php tests/nextclo
 
 Dieser Lauf verwendet Nextclouds echten QueryBuilder und dieselben Inventarszenarien. Er erzeugt zufällig benannte Testbenutzer-Namespaces in den App-Tabellen; die Zeilen bleiben absichtlich in der wegwerfbaren Testdatenbank. Keine produktive Instanz verwenden.
 
+## Paketierung / Packaging
+
+Run `sh nextcloud-app/build-package.sh` from the repository root. The default
+output is `.build/server/apple_photos_connector-0.8.2.tar.gz`, containing exactly
+one `apple_photos_connector/` directory. The script stages only runtime folders,
+README, composer metadata, LICENSE and CHANGELOG; tests and tooling are excluded.
+It strips macOS archive metadata. No signing or upload occurs.
+
+`sh nextcloud-app/check-package.sh STAGING_PARENT [INFO_XSD]` validates the entire
+staging parent. PHP DOM/libxml is required (no Composer dependencies). Set
+`INFO_XSD=/path/to/info.xsd` when building to validate against the official schema.
+
+Die zwei OCC-Testcommands sind nicht mehr öffentlich registriert. Ihre Klassen
+bleiben für Entwicklung und Tests erhalten. Administratoren können weiterhin
+`apple-photos-connector:album:sync` verwenden.
+
+The package is licensed under AGPL-3.0-or-later; LICENSE contains the unmodified
+GNU AGPL version 3 text. The existing icon is `appinfo/img/icon.png` (1024×1024).
+It is not the conventional `img/app.svg` expected by Nextcloud. A suitable SVG
+from the existing artwork is still required before submission; no new design
+has been introduced.
+
 Run-Tests prüfen neue, bekannte und leere Inventare, separate Runs, Benutzertrennung sowie Rollback bei Fehlern während des Abschlusses. Weitere Fehlerproben decken fehlgeschlagene Run-Anlage, ausgefallene Fehlerprotokollierung und verlorene Commit-Bestätigung ab. Die dabei absichtlich ausgelöste Meldung `failed to finalize import run` ist erwartete Testausgabe.
 
 Upload-Tests prüfen Aufträge, Retry nach Fehler, idempotente Bestätigung, Benutzer-/Pfadgrenzen und erhaltene Dateien bei leeren Folgescans. Der Datei-Locator ist dabei ein Testdouble; echte WebDAV-/Nextcloud-Dateisystemintegration ist nicht Teil dieses lokalen Tests. Die Identitätstests verwenden zwischen Scans bestätigte Dateireferenzen als Fixtures, damit sie weiterhin die unveränderte Apple-Identitätslogik prüfen.
@@ -93,7 +115,7 @@ Alle Pfade liegen unter `/index.php/apps/apple_photos_connector/api/v1` und erfo
 | POST | `/albums/inventory` | Album-Metadaten und Mitgliedschaften speichern |
 | POST | `/albums/sync` | Gespeicherte Alben mit Nextcloud Photos abgleichen |
 
-Die Source muss vor dem Album-Inventar registriert sein. Der Abgleich nutzt die Photos-Mapper über `NextcloudAlbumAdapter`. Dieser akzeptiert derzeit genau Photos 7.0.0 und prüft die benötigten Mapper-Methoden; andere Versionen werden abgewiesen. Ordner werden übersprungen. Mitgliedschaften werden nur für importierte Assets ergänzt. Namen sind keine Schlüssel. Details und Antwortfelder stehen im [Protokoll](../protocol/README.md).
+Die Source muss vor dem Album-Inventar registriert sein. Der Abgleich nutzt die Photos-Mapper über `NextcloudAlbumAdapter`. Dieser akzeptiert Photos 7.0.0 und 8.0.0 und prüft die benötigten Mapper-Methoden; andere Versionen werden abgewiesen. Ordner werden übersprungen. Mitgliedschaften werden nur für importierte Assets ergänzt. Namen sind keine Schlüssel. Details und Antwortfelder stehen im [Protokoll](../protocol/README.md).
 
 ## Aktuelles Datenmodell und Fresh-Install-Grenze
 

@@ -84,13 +84,21 @@ public actor WebDAVFolderCoordinator {
     public func ensure(path: String, operation: @escaping @Sendable () async throws -> Void) async throws {
         if known.contains(path) { return }
         if let existing = inFlight[path] {
-            try await existing.value
+            try await withTaskCancellationHandler {
+                try await existing.value
+            } onCancel: {
+                existing.cancel()
+            }
             return
         }
         let task = Task { try await operation() }
         inFlight[path] = task
         do {
-            try await task.value
+            try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: {
+                task.cancel()
+            }
             known.insert(path)
             inFlight.removeValue(forKey: path)
         } catch {
@@ -154,7 +162,6 @@ public struct WebDAVUploader: Sendable {
             if target.state == "present" { return target.path }
             if targetComponents.count > rootComponents.count + 1 {
                 for count in (rootComponents.count + 1)..<(targetComponents.count - 1) {
-                    let folder = root + Array(targetComponents.prefix(count))
                     let components = Array(targetComponents.prefix(count))
                     try await ensureCollection(root: root, components: components, coordinator: folderCoordinator)
                 }

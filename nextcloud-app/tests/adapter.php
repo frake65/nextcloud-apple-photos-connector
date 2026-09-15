@@ -5,6 +5,8 @@ final class FakeAlbumMapper { public array $calls=[]; public array $albums=[]; p
 function adapterScenarios(OCA\ApplePhotosConnector\Db\AlbumMapRepository $maps): void {
     check(OCA\ApplePhotosConnector\Service\AlbumIdentity::key('c','l')==='cloud:c','cloud identity key');
     check(OCA\ApplePhotosConnector\Service\AlbumIdentity::key(null,'l')==='local:l','local identity key');
+    $nc35=new OCA\ApplePhotosConnector\Service\NextcloudAlbumAdapter($maps,new FakeAlbumMapper(),'8.0.0');
+    check($nc35->supportsVersion(),'Photos 8.0.0 / Nextcloud 35 version guard');
     $a=new FakeAlbumMapper(); $adapter=new OCA\ApplePhotosConnector\Service\NextcloudAlbumAdapter($maps,$a,'7.0.0');
     check($adapter->supportsVersion(),'Photos version guard');
     $row=$adapter->resolveOrCreateAlbum('u','s',1,['localIdentifier'=>'a','cloudIdentifier'=>null,'name'=>'Same','kind'=>'album']);

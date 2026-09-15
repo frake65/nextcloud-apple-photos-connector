@@ -61,6 +61,7 @@ private final class InventoryModel: ObservableObject {
     @Published var scanning = false
     @Published var uploadProgress: UploadCoordinator.Progress?
     @Published var uploadInProgress = false
+    @Published var uploadState: ImportRunState = .idle
     @Published var debugLog: [String] = []
     let debugStore = DebugLogStore.shared
     var uploadTask: Task<Void, Never>?
@@ -86,6 +87,19 @@ private final class InventoryModel: ObservableObject {
         targetPath = TargetDirectoryPreferences().path
         let enabled = defaults.bool(forKey: UploadPreferences.debugModeKey)
         if (uploadLogger != nil) != enabled { uploadLogger = DebugFileLogger(enabled: enabled) }
+    }
+    func cancelUpload() {
+        guard uploadState == .running else { return }
+        uploadState = .cancelling
+        status = L10n.text("uploadCancelling")
+        uploadTask?.cancel()
+    }
+    func clearRecoveredConnectionError() {
+        let transientMessages = [L10n.text("uploadFailureServer"), L10n.text("serverUnavailable")]
+        if transientMessages.contains(status) {
+            status = ""
+            logDebug("connection.state temporarilyUnavailable -> connected reason=validation")
+        }
     }
     func logDebug(_ event: String) {
         debugStore.append(event)
@@ -491,6 +505,7 @@ private struct InventoryView: View {
                     return
                 }
                 model.scanning = true
+                model.uploadState = .running
                 model.uploadProgress = nil
                 model.logDebug("Import action started")
                 model.debugLog.append("Import action started · selection=\(selectionSnapshot.count)")
@@ -539,19 +554,26 @@ private struct InventoryView: View {
                         model.uploadProgress = summary.finalProgress
                         var albumSummary: AlbumInventoryCoordinator.SyncResult?
                         if !visual.selectedAlbumIDs.isEmpty {
+                            try Task.checkCancellation()
                             _ = try await model.albums.run(scanner: model.scanner, connection: connection)
+                            try Task.checkCancellation()
                             albumSummary = try await model.albums.sync(scanner: model.scanner, connection: connection,
                                 selectedAlbumIDs: visual.selectedAlbumIDs, selectedAssetIDs: selectionSnapshot)
                         }
                         model.status = uploadSummary(summary, albums: albumSummary)
+                        model.uploadState = .completed
                         if summary.shouldCloseProgressSheet {
                             model.uploadInProgress = false
                         }
                     } catch is CancellationError {
                         print("CANCELLED stage=task")
                         if let progress = model.uploadProgress {
-                            model.uploadProgress = progress.markingOpenUnfinished()
+                            model.uploadProgress = progress.markingCancelled()
+                        } else {
+                            model.uploadProgress = UploadCoordinator.Progress(completed: 0, total: 0, filename: nil, failed: false, cancelled: true, items: [])
                         }
+                        model.uploadState = .cancelled
+                        model.status = L10n.text("uploadCancelled")
                         model.status = "Import durch Benutzer abgebrochen"
                         // Keep the sheet visible for technical errors so the
                         // per-file failure remains inspectable.
@@ -560,6 +582,7 @@ private struct InventoryView: View {
                         model.logDebug("Import failed \(failure.technicalDetail)")
                         model.debugLog.append("Import failed · \(failure.technicalDetail)")
                         model.status = failure.userMessage
+                        model.uploadState = .failed
                         // Keep the progress sheet and its per-asset rows visible.
                         model.uploadInProgress = true
                     }
@@ -638,6 +661,7 @@ private struct InventoryView: View {
             model.refreshPreferences()
         }
         .onReceive(NotificationCenter.default.publisher(for: .connectionStateChanged)) { _ in
+            model.clearRecoveredConnectionError()
             model.refreshPreferences()
             persistentDebugLogger?.log("gallery.load.deferred reason=connection_state_changed")
             visual.requestLoad()
@@ -646,7 +670,7 @@ private struct InventoryView: View {
         .padding(20)
         .frame(minWidth: 900, minHeight: 650)
         .sheet(isPresented: $model.uploadInProgress) {
-            UploadProgressSheet(progress: model.uploadProgress, debugLog: model.debugLog, debugEnabled: debugMode) { model.uploadTask?.cancel() }
+            UploadProgressSheet(progress: model.uploadProgress, state: model.uploadState, debugLog: model.debugLog, debugEnabled: debugMode) { model.cancelUpload() }
         }
     }
 
@@ -703,39 +727,99 @@ struct UploadTargetSummaryView: View {
 
 private struct UploadProgressSheet: View {
     let progress: UploadCoordinator.Progress?
+    let state: ImportRunState
     let debugLog: [String]
     let debugEnabled: Bool
     let cancel: () -> Void
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(L10n.text(progress?.finished == true ? "importStatus" : "uploadingOriginals")).font(.headline)
+            Text(L10n.text(state == .completed || state == .cancelled ? "importStatus" : "uploadingOriginals")).font(.headline)
             if let progress {
-                ProgressView(value: progress.total == 0 ? 1 : Double(progress.completed) / Double(progress.total))
-                if !progress.finished { Text(progress.filename.map { L10n.format("importCurrentFile", $0) } ?? L10n.text("preparingUploads")) }
-                Text(L10n.format("uploadsProgressFormat", progress.completed, progress.total))
-                    .foregroundStyle(.secondary)
-                if progress.finished { Text(progress.summaryText).fontWeight(.medium) }
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(progress.items) { item in
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack {
-                                    Text(item.filename).fontWeight(.medium)
-                                }
+                VStack(alignment: .leading, spacing: 14) {
+                    ProgressView(value: progress.total == 0 ? 1 : Double(progress.completed) / Double(progress.total))
+                    if !progress.finished {
+                        Text(progress.filename.map { L10n.format("importCurrentFile", $0) } ?? L10n.text("preparingUploads"))
+                            .lineLimit(nil)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    Text(L10n.format("uploadsProgressFormat", progress.completed, progress.total))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(nil)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if progress.finished || state == .cancelled {
+                        Text(progress.summaryText)
+                            .fontWeight(.medium)
+                            .lineLimit(nil)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .layoutPriority(1)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                if !progress.items.isEmpty {
+                    Text(L10n.text("details"))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    ScrollView(.vertical, showsIndicators: true) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(progress.items) { item in
+                                VStack(alignment: .leading, spacing: 2) {
+                                Text(item.filename)
+                                    .fontWeight(.medium)
+                                    .lineLimit(nil)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .layoutPriority(1)
                                 Text(Self.statusText(item.status))
                                     .foregroundStyle(item.status == .failed ? .red : .secondary)
+                                    .lineLimit(nil)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                                 if let error = item.error {
                                     Text(error.userMessage).font(.caption).foregroundStyle(.red)
+                                        .lineLimit(nil)
                                         .fixedSize(horizontal: false, vertical: true)
-                                    if debugEnabled { Text(error.technicalDetail).font(.caption2).textSelection(.enabled) }
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    if debugEnabled {
+                                        Text(error.technicalDetail)
+                                            .font(.caption2)
+                                            .lineLimit(nil)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .textSelection(.enabled)
+                                    }
                                 }
-                                Text(L10n.format("importSource", item.source)).font(.caption).foregroundStyle(.secondary)
-                                if let target = item.target { Text(L10n.format("importTarget", target)).font(.caption).foregroundStyle(.secondary) }
+                                Text(L10n.format("importSource", item.source))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(nil)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                if let target = item.target {
+                                    Text(L10n.format("importTarget", target))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(nil)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                }
                             }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
                     }
-                }.frame(maxHeight: 220)
+                    .frame(minHeight: 24, maxHeight: 220)
+                    .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 6))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(.quaternary, lineWidth: 1)
+                    }
+                }
             } else { ProgressView(); Text(L10n.text("preparingUploads")) }
             if debugEnabled { GroupBox(L10n.text("debug")) {
                 ScrollView {
@@ -748,10 +832,11 @@ private struct UploadProgressSheet: View {
             } }
             HStack {
                 Spacer()
-                if progress?.finished == true {
+                if state == .completed || state == .cancelled || state == .failed {
                     Button(L10n.text("closeImport")) { dismiss() }
                 } else {
-                    Button(L10n.text("cancelUpload"), role: .cancel) { cancel() }
+                    Button(state == .cancelling ? L10n.text("uploadCancelling") : L10n.text("cancelUpload"), role: .cancel) { cancel() }
+                        .disabled(state == .cancelling)
                 }
             }
         }.padding(24).frame(width: 380)

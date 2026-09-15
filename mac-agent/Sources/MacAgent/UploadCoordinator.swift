@@ -31,16 +31,20 @@ actor UploadCoordinator {
     }
     struct Progress: Sendable {
         let completed: Int; let total: Int; let filename: String?; let failed: Bool
+        let cancelled: Bool
         let items: [DisplayItem]
         var finished: Bool { completed >= total }
         var summaryText: String {
             let uploaded = items.filter { $0.status == .uploaded }.count
             let known = items.filter { $0.status == .alreadyInCloud }.count
             let failed = items.filter { $0.status == .failed }.count
-            return L10n.format("importRunSummary", uploaded, total, known, failed)
+            let summary = L10n.format("importRunSummary", uploaded, total, known, failed)
+            guard cancelled else { return summary }
+            let notProcessed = max(0, total - uploaded - known - failed)
+            return "\(summary) \(L10n.format("notProcessedCount", notProcessed))"
         }
-        func markingOpenUnfinished() -> Progress {
-            Progress(completed: completed, total: total, filename: filename, failed: false,
+        func markingCancelled() -> Progress {
+            Progress(completed: completed, total: total, filename: filename, failed: false, cancelled: true,
                 items: items.map { item in
                     guard item.status == .uploading else { return item }
                     return DisplayItem(id: item.id, filename: item.filename, source: item.source,
@@ -61,12 +65,13 @@ actor UploadCoordinator {
         }
         func complete() { completed += 1 }
         func snapshot(filename: String? = nil, failed: Bool = false) -> Progress {
-            Progress(completed: completed, total: total, filename: filename, failed: failed || items.contains { $0.status == .failed }, items: items)
+            Progress(completed: completed, total: total, filename: filename, failed: failed || items.contains { $0.status == .failed }, cancelled: false, items: items)
         }
     }
     enum SingleUploadResult: Sendable {
         case success(path: String, filename: String)
         case failed(filename: String?, error: UploadFailure)
+        case cancelled
     }
     private struct Targets: UploadTargetProvider {
         let owner: UploadCoordinator
@@ -187,15 +192,18 @@ actor UploadCoordinator {
         var currentFilename: String?
         var stage: UploadFailure.Stage = .preparation
         do {
+            try Task.checkCancellation()
             guard let assets = try JSONSerialization.jsonObject(with: assetsData) as? [[String: Any]],
                   let local = assets[index]["localIdentifier"] as? String,
                   let filename = assets[index]["filename"] as? String else { throw UploadError.invalidFilename }
             currentFilename = filename
             debug?("PREPARE_START assetID=\(local) file=\(filename)")
             try await gate.checkpoint()
+            try Task.checkCancellation()
             debug?("upload.export.start")
             stage = .export
             let resource = try await exporter.export(localIdentifier: local)
+            try Task.checkCancellation()
             stage = .preparation
             debug?("upload.export.success")
             defer { try? FileManager.default.removeItem(at: resource.url.deletingLastPathComponent()) }
@@ -210,10 +218,14 @@ actor UploadCoordinator {
                                   folder: "\(baseFolder)/\(String(format: "%04d", year))/\(String(format: "%02d", month))",
                                   connection: connection, debug: debug)
             try await gate.checkpoint()
+            try Task.checkCancellation()
             let path = try await WebDAVUploader(connection: connection, transport: UploadDisplayTransport(base: transport), debug: debug)
                 .upload(file: resource.url, filename: filename, assetId: entry.upload!.assetId, captureDate: resolution.date, targets: targets, targetRoot: baseFolder, folderCoordinator: folderCoordinator)
             debug?("upload.put.success")
             return .success(path: path, filename: filename)
+        } catch is CancellationError {
+            debug?("upload.put.cancelled")
+            return .cancelled
         } catch {
             let ns = error as NSError
             let category: String
@@ -233,7 +245,7 @@ actor UploadCoordinator {
         guard !running else { throw RunError.alreadyRunning }
         do {
             return try await performRun(json: json, connection: connection, targetRoot: targetRoot, progress: progress, debug: debug, onUploaded: onUploaded)
-        } catch is CancellationError { throw CancellationError() }
+            } catch is CancellationError { throw CancellationError() }
         catch {
             // Inventory/receipt failures happen before per-asset jobs exist.
             // Keep every selected medium visible even when that early stage fails.
@@ -244,7 +256,7 @@ actor UploadCoordinator {
                     let filename = asset["filename"] as? String ?? L10n.text("file")
                     return DisplayItem(id: String(index), filename: filename, source: filename, target: nil, status: .failed, error: failure)
                 }
-                progress?(Progress(completed: items.count, total: items.count, filename: nil, failed: true, items: items))
+                progress?(Progress(completed: items.count, total: items.count, filename: nil, failed: true, cancelled: false, items: items))
             }
             throw error
         }
@@ -367,6 +379,9 @@ actor UploadCoordinator {
                 active -= 1
                 let ticket = outcome.job.entry.upload!
                 switch outcome.result {
+                case .cancelled:
+                    group.cancelAll()
+                    break
                 case let .success(path, filename):
                     let receipt = Receipt(server: connection.base.absoluteString, user: connection.user,
                         sourceId: sourceId.lowercased(), runId: reply.runId, uploadId: ticket.uploadId, path: path)
@@ -394,6 +409,9 @@ actor UploadCoordinator {
                         await displayState.updateStatus(index: outcome.job.index, status: .uploaded, target: path)
                         await displayState.complete()
                         progress?(await displayState.snapshot(filename: filename))
+                    } catch is CancellationError {
+                        group.cancelAll()
+                        break
                     } catch {
                         failed += 1
                         completedUploads += 1
@@ -404,10 +422,17 @@ actor UploadCoordinator {
                         progress?(await displayState.snapshot(filename: filename, failed: true))
                     }
                 case let .failed(filename, error):
+                    if Task.isCancelled {
+                        group.cancelAll()
+                        break
+                    }
                     do {
                         debug?("upload.complete.request.status=failed")
                         _ = try await post(["sourceId": sourceId.lowercased(), "runId": reply.runId,
                             "uploadId": ticket.uploadId, "status": "failed"], endpoint: "uploads/complete", connection: connection)
+                    } catch is CancellationError {
+                        group.cancelAll()
+                        break
                     } catch { debug?("Upload failure acknowledgement failed · error=\(error.localizedDescription)") }
                     failed += 1
                     completedUploads += 1

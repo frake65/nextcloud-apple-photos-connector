@@ -2,20 +2,29 @@
 <info xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://apps.nextcloud.com/schema/apps/info.xsd">
     <id>apple_photos_connector</id>
     <name>Apple Photos Connector</name>
-    <summary>Import Apple Photos originals and synchronize albums</summary>
-    <description>Registers Apple Photos sources, tracks original uploads through WebDAV, and synchronizes albums with Nextcloud Photos in a separate step. Files and missing source memberships are not automatically deleted.</description>
-    <version>0.8.1</version>
-    <commands>
-        <command>OCA\ApplePhotosConnector\Command\AlbumTestResolveCommand</command>
-        <command>OCA\ApplePhotosConnector\Command\AlbumTestAddMembershipCommand</command>
-        <command>OCA\ApplePhotosConnector\Command\AlbumSyncCommand</command>
-    </commands>
-    <licence>agpl</licence>
+    <summary>Import originals and albums from Apple Photos with the Nextcloud APC macOS app</summary>
+    <description>Connect Apple Photos to Nextcloud using the separate Nextcloud APC macOS app, which is required and is not included in this server app.
+
+The macOS app reads your selected photos and videos from Apple Photos and imports their original files into Nextcloud. Repeated imports transfer new or missing files; files already present and confirmed by the connector are not uploaded again. Albums can be imported into Nextcloud Photos.
+
+Imports are intentionally non-destructive: existing files are not overwritten, and photos missing from Apple Photos do not cause automatic deletion of files or album memberships in Nextcloud.</description>
+    <version>0.8.2</version>
+    <licence>AGPL-3.0-or-later</licence>
     <author>Frank Kettenbeil</author>
     <namespace>ApplePhotosConnector</namespace>
+    <documentation>
+        <user>https://github.com/frake65/nextcloud-apple-photos-connector/blob/main/README.md</user>
+        <admin>https://github.com/frake65/nextcloud-apple-photos-connector/blob/main/nextcloud-app/README.md</admin>
+    </documentation>
     <category>multimedia</category>
+    <website>https://github.com/frake65/nextcloud-apple-photos-connector</website>
+    <bugs>https://github.com/frake65/nextcloud-apple-photos-connector/issues</bugs>
+    <repository type="git">https://github.com/frake65/nextcloud-apple-photos-connector.git</repository>
     <dependencies>
         <php min-version="8.2"/>
-        <nextcloud min-version="34" max-version="34"/>
+        <nextcloud min-version="34" max-version="35"/>
     </dependencies>
+    <commands>
+        <command>OCA\ApplePhotosConnector\Command\AlbumSyncCommand</command>
+    </commands>
 </info>

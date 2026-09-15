@@ -4,13 +4,13 @@ namespace OCA\ApplePhotosConnector\Service;
 use OCA\ApplePhotosConnector\Db\AlbumMapRepository;
 
 final class NextcloudAlbumAdapter {
-    private const PHOTOS_VERSION = '7.0.0';
+    private const SUPPORTED_PHOTOS_VERSIONS = ['7.0.0', '8.0.0'];
     public function __construct(private AlbumMapRepository $maps, private object $albumMapper, private string $photosVersion) {}
     public function supportsVersion(): bool {
         foreach(['create','get','getForAlbumIdAndFileId','addFile'] as $method) if(!method_exists($this->albumMapper,$method)) return false;
-        return $this->photosVersion === self::PHOTOS_VERSION;
+        return in_array($this->photosVersion, self::SUPPORTED_PHOTOS_VERSIONS, true);
     }
-    private function guard(): void { if(!$this->supportsVersion()) throw new \RuntimeException('Unsupported Photos integration; expected Photos 7.0.0 with AlbumMapper'); }
+    private function guard(): void { if(!$this->supportsVersion()) throw new \RuntimeException('Unsupported Photos integration; expected Photos 7.0.0 or 8.0.0 with AlbumMapper'); }
     public function findAlbum(string $userId,string $sourceId,array $album): ?array {
         if(($album['kind']??'album')==='folder') return null;
         $key=AlbumIdentity::key($album['cloudIdentifier']??null,$album['localIdentifier']); return $this->maps->find($userId,$sourceId,$key);

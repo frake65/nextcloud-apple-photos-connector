@@ -25,9 +25,26 @@ final class UploadProgressTests: XCTestCase {
         XCTAssertEqual(UploadModalState.cancelled, .cancelled)
         XCTAssertEqual(UploadModalState.completed, .completed)
     }
+    func testImportCancellationLifecycleStatesAreDistinct() {
+        XCTAssertNotEqual(ImportRunState.running, .cancelling)
+        XCTAssertNotEqual(ImportRunState.cancelling, .cancelled)
+        XCTAssertNotEqual(ImportRunState.cancelled, .completed)
+        XCTAssertNotEqual(ImportRunState.cancelled, .failed)
+    }
     func testUploadDisplayStatusUsesUserFacingLabels() {
         XCTAssertEqual(UploadCoordinator.DisplayStatus.alreadyInCloud.label, "Bereits in der Cloud")
         XCTAssertEqual(UploadCoordinator.DisplayStatus.uploaded.label, "Hochgeladen")
         XCTAssertEqual(UploadCoordinator.DisplayStatus.failed.label, "Fehlgeschlagen")
+    }
+    func testSummaryClarifiesKnownMediaWerePresentBeforeThisRun() {
+        let uploaded = (0..<34).map { UploadCoordinator.DisplayItem(id: "u\($0)", filename: "u\($0).jpg", source: "u\($0).jpg", target: nil, status: .uploaded, error: nil) }
+        let known = (0..<23).map { UploadCoordinator.DisplayItem(id: "k\($0)", filename: "k\($0).jpg", source: "k\($0).jpg", target: nil, status: .alreadyInCloud, error: nil) }
+        let progress = UploadCoordinator.Progress(completed: 57, total: 57, filename: nil, failed: false, cancelled: false, items: uploaded + known)
+        XCTAssertEqual(progress.summaryText, "34 von 57 Medien übertragen. 23 davon waren bereits vor diesem Lauf in der Cloud. 0 fehlgeschlagen.")
+    }
+    func testSummaryClarifiesAllMediaWereKnownBeforeThisRun() {
+        let items = (0..<57).map { UploadCoordinator.DisplayItem(id: "k\($0)", filename: "k\($0).jpg", source: "k\($0).jpg", target: nil, status: .alreadyInCloud, error: nil) }
+        let progress = UploadCoordinator.Progress(completed: 57, total: 57, filename: nil, failed: false, cancelled: false, items: items)
+        XCTAssertEqual(progress.summaryText, "0 von 57 Medien übertragen. 57 davon waren bereits vor diesem Lauf in der Cloud. 0 fehlgeschlagen.")
     }
 }

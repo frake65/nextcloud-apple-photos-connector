@@ -2,6 +2,12 @@
 
 [English](README.md) | Deutsch
 
+Die App-Store-Einreichung der Server-App 0.8.2 wird vorbereitet; das
+Signierungszertifikat steht noch aus. Die separate macOS-App **Nextcloud APC**
+bleibt erforderlich und wird nicht über den Nextcloud App Store verteilt.
+Die Server-Metadaten unterstützen NC34–35. Die Installation unter NC35 wurde
+auf RC4 geprüft; vollständige Photos-8-Albumtests stehen noch aus.
+
 ## Was ist APC?
 
 Ein sicherer, nicht-destruktiver Apple-Photos-Importer für Nextcloud mit inkrementellen Uploads, Album-Erhalt und stabilen Asset-Identitäten.
@@ -29,7 +35,7 @@ Album Membership und Dateiübertragung sind getrennte Vorgänge. Albumnamen sind
 
 ## Aktueller Stand
 
-APC 0.8.1 ist ein Entwicklungsmeilenstein. Der aktuelle lokale Nachweis umfasst einen erfolgreichen manuellen Ablauf:
+APC 0.8.2 ist der aktuelle Release-Stand. Der lokale Nachweis umfasst einen erfolgreichen manuellen Ablauf:
 
 Apple Photos → PhotoKit-Auswahl → Stable Identity → Inventory → Upload-Ticket → Originalexport → Prepare → WebDAV PUT → Complete → Datei im konfigurierten Nextcloud Target Root.
 
@@ -38,7 +44,7 @@ Apple Photos → PhotoKit-Auswahl → Stable Identity → Inventory → Upload-T
 > mit `occ` aktiviert wurde. Die [Server-Installation](README.md#nextcloud-server-app--standard-installation)
 > muss vor der Installation der macOS-App erfolgen.
 
-Automatisierte Prüfung: Swift **60/60 PASS** und PHP/SQLite-Tests **PASS**. Daraus folgt keine Produktionsreife. Multi-Source-Betrieb, Album-Synchronisation, Re-Inventory und Retarget-Verhalten sind lokal dokumentiert und getestet; eine breitere Betriebsvalidierung steht noch aus.
+Der zuletzt dokumentierte macOS-Teststand umfasst 134 erfolgreiche Tests; die PHP/SQLite-Suite prüft die Serverdienste. Multi-Source-Betrieb, Album-Synchronisation, Re-Inventory und Retarget-Verhalten sind lokal dokumentiert und getestet; eine breitere Betriebsvalidierung steht noch aus.
 
 ## Alben
 
@@ -79,7 +85,7 @@ Historische Entwicklungs- und Testberichte liegen unter `docs/`; sie sind keine 
 
 - Breitere manuelle Prüfung mit mehreren Sources und Mediatheken
 - Vollständigere Validierung der Photos-Album-Kompatibilität
-- Dokumentation von Packaging, Distribution und Installation
+- App-Store-Signierung und Einreichung abschließen
 - Upstream-Abstimmung zu einer generischen Abstraktion für externe Fotoquellen
 
 ## Projektstatus
