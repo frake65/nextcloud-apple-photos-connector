@@ -1,0 +1,44 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+		A10000000000000000000001 /* Project object */ = {isa = PBXProject; attributes = {BuildIndependentTargetsInParallel = 1; LastUpgradeCheck = 2700; TargetAttributes = {A10000000000000000000003 = {CreatedOnToolsVersion = 27.0; }; }; }; buildConfigurationList = A10000000000000000000011; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base, de); mainGroup = A10000000000000000000002; packageReferences = (A10000000000000000000010 /* XCLocalSwiftPackageReference "../shared/InventoryCore" */, ); productRefGroup = A10000000000000000000005; projectDirPath = ""; projectRoot = ""; targets = (A10000000000000000000003 /* ApplePhotosConnector */, ); };
+		A10000000000000000000002 /* Main Group */ = {isa = PBXGroup; children = (A10000000000000000000004 /* Sources */, A10000000000000000000006 /* Products */, A10000000000000000000007 /* Resources */, ); sourceTree = "<group>"; };
+		A10000000000000000000003 /* ApplePhotosConnector */ = {isa = PBXNativeTarget; buildConfigurationList = A10000000000000000000012; buildPhases = (A10000000000000000000013 /* Sources */, A10000000000000000000014 /* Frameworks */, A10000000000000000000015 /* Resources */, ); buildRules = (); dependencies = (); name = ApplePhotosConnector; packageProductDependencies = (A10000000000000000000016 /* InventoryCore */, ); productName = "Nextcloud APC"; productReference = A10000000000000000000008 /* Nextcloud APC.app */; productType = "com.apple.product-type.application"; };
+		A10000000000000000000004 /* Sources */ = {isa = PBXGroup; children = (A10000000000000000000020 /* App */, A10000000000000000000021 /* Models */, A10000000000000000000022 /* PhotosAdapter */, ); path = Sources; sourceTree = "<group>"; };
+		A10000000000000000000005 /* Products */ = {isa = PBXGroup; children = (A10000000000000000000008 /* Nextcloud APC.app */, ); name = Products; sourceTree = "<group>"; };
+		A10000000000000000000006 /* Local Package Products */ = {isa = PBXGroup; children = (); name = "Local Package Products"; sourceTree = "<group>"; };
+		A10000000000000000000007 /* Resources */ = {isa = PBXGroup; children = (A10000000000000000000023 /* Info.plist */, ); path = Resources; sourceTree = "<group>"; };
+		A10000000000000000000008 /* Nextcloud APC.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Nextcloud APC.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000000000000000000009 /* XCBuildConfiguration list */ = {isa = XCConfigurationList; buildConfigurations = (A10000000000000000000017, A10000000000000000000018, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		A10000000000000000000010 /* XCLocalSwiftPackageReference "../shared/InventoryCore" */ = {isa = XCLocalSwiftPackageReference; relativePath = ../shared/InventoryCore; };
+		A10000000000000000000011 /* Project configuration list */ = {isa = XCConfigurationList; buildConfigurations = (A10000000000000000000019, A1000000000000000000001A, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		A10000000000000000000012 /* Target configuration list */ = {isa = XCConfigurationList; buildConfigurations = (A1000000000000000000001B, A1000000000000000000001C, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		A10000000000000000000013 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000024, A10000000000000000000025, A10000000000000000000026, A10000000000000000000027, ); runOnlyForDeploymentPostprocessing = 0; };
+		A10000000000000000000014 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000028 /* InventoryCore in Frameworks */, ); runOnlyForDeploymentPostprocessing = 0; };
+		A10000000000000000000015 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		A10000000000000000000016 /* InventoryCore */ = {isa = XCSwiftPackageProductDependency; package = A10000000000000000000010; productName = InventoryCore; };
+		A10000000000000000000017 = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_STYLE = Automatic; IPHONEOS_DEPLOYMENT_TARGET = 17.0; PRODUCT_BUNDLE_IDENTIFIER = de.applephotosconnector.iosagent; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 6.0; }; name = Debug; };
+		A10000000000000000000018 = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_STYLE = Automatic; IPHONEOS_DEPLOYMENT_TARGET = 17.0; PRODUCT_BUNDLE_IDENTIFIER = de.applephotosconnector.iosagent; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 6.0; }; name = Release; };
+		A10000000000000000000019 = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; }; name = Debug; };
+		A1000000000000000000001A = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; }; name = Release; };
+		A1000000000000000000001B = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_FILE = Resources/Info.plist; INFOPLIST_KEY_CFBundleDisplayName = "Nextcloud APC"; INFOPLIST_KEY_LSApplicationCategoryType = public.app-category.photography; IPHONEOS_DEPLOYMENT_TARGET = 17.0; PRODUCT_BUNDLE_IDENTIFIER = de.applephotosconnector.iosagent; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Debug; };
+		A1000000000000000000001C = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_FILE = Resources/Info.plist; INFOPLIST_KEY_CFBundleDisplayName = "Nextcloud APC"; INFOPLIST_KEY_LSApplicationCategoryType = public.app-category.photography; IPHONEOS_DEPLOYMENT_TARGET = 17.0; PRODUCT_BUNDLE_IDENTIFIER = de.applephotosconnector.iosagent; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Release; };
+		A10000000000000000000020 /* App group */ = {isa = PBXGroup; children = (A10000000000000000000029, A1000000000000000000002A, ); path = App; sourceTree = "<group>"; };
+		A10000000000000000000021 /* Models group */ = {isa = PBXGroup; children = (A1000000000000000000002B, ); path = Models; sourceTree = "<group>"; };
+		A10000000000000000000022 /* Adapter group */ = {isa = PBXGroup; children = (A1000000000000000000002C, ); path = PhotosAdapter; sourceTree = "<group>"; };
+		A10000000000000000000023 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A10000000000000000000024 /* ApplePhotosConnectorApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000029; };
+		A10000000000000000000025 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000002A; };
+		A10000000000000000000026 /* GalleryModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000002B; };
+		A10000000000000000000027 /* PhotoLibraryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000002C; };
+		A10000000000000000000028 /* InventoryCore in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000016; };
+		A10000000000000000000029 /* ApplePhotosConnectorApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplePhotosConnectorApp.swift; sourceTree = "<group>"; };
+		A1000000000000000000002A /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		A1000000000000000000002B /* GalleryModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryModels.swift; sourceTree = "<group>"; };
+		A1000000000000000000002C /* PhotoLibraryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoLibraryModel.swift; sourceTree = "<group>"; };
+	};
+	rootObject = A10000000000000000000001;
+}
