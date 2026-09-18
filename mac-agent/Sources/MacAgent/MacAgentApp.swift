@@ -156,6 +156,7 @@ final class VisualLibraryModel: ObservableObject {
     @Published private(set) var libraryChangeState = PhotoLibraryChangeState()
     let library: any GalleryLibraryProviding
     let thumbnails: GalleryThumbnailLoader
+    private let authorization: any PhotoAuthorizationProviding
     private let gate: SettingsWorkGate
     private var selectionSourceId: String?
     private var manuallySelectedAssetIDs: Set<String> = []
@@ -169,8 +170,10 @@ final class VisualLibraryModel: ObservableObject {
 
     init(library: any GalleryLibraryProviding = GalleryLibrary(),
          thumbnails: GalleryThumbnailLoader = GalleryThumbnailLoader(),
-         gate: SettingsWorkGate = .shared) {
+         gate: SettingsWorkGate = .shared,
+         authorization: any PhotoAuthorizationProviding = PhotoKitAuthorizationProvider()) {
         self.library = library; self.thumbnails = thumbnails; self.gate = gate
+        self.authorization = authorization
         loadRequests = CoalescingWorkRequest(gate: gate)
         albumRequests = CoalescingWorkRequest(gate: gate)
         changeCoordinator = PhotoLibraryChangeCoordinator(library: library) { [weak self] change, albums, memberships in
@@ -230,22 +233,33 @@ final class VisualLibraryModel: ObservableObject {
     }
 
     func requestLoad() {
-        loadRequests.request { [weak self] in await self?.load() }
+        loadRequests.request(preflight: { [weak self] in
+            guard let self else { return false }
+            return await self.prepareLoadAuthorization()
+        }) { [weak self] in
+            await self?.loadAuthorizedLibrary()
+        }
     }
 
-    private func load() async {
-        do {
-            try await gate.checkpoint()
-            loading = true
-            defer { loading = false }
-            var status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-            if status == .notDetermined { status = await PHPhotoLibrary.requestAuthorization(for: .readWrite) }
-            guard status == .authorized || status == .limited else {
-                authorizationMessage = status == .restricted ? "Der Fotozugriff ist eingeschränkt." : "Bitte erlaube den Fotozugriff in den Systemeinstellungen."
-                return
-            }
-            try await openSource()
-        } catch is CancellationError { }
+    private func prepareLoadAuthorization() async -> Bool {
+        loading = true
+        authorizationMessage = nil
+        var status = await authorization.status()
+        if status == .notDetermined { status = await authorization.requestReadWrite() }
+        guard status == .authorized || status == .limited else {
+            authorizationMessage = status == .restricted
+                ? "Der Fotozugriff ist eingeschränkt."
+                : "Bitte erlaube den Fotozugriff in den Systemeinstellungen."
+            loading = false
+            return false
+        }
+        return true
+    }
+
+    private func loadAuthorizedLibrary() async {
+        defer { loading = false }
+        do { try await openSource() }
+        catch is CancellationError { }
         catch { authorizationMessage = "Galerie konnte nicht geladen werden: \(error.localizedDescription)" }
     }
 

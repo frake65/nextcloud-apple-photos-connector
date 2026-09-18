@@ -60,11 +60,27 @@ public final class CoalescingWorkRequest {
     public init(gate: SettingsWorkGate = .shared) { self.gate = gate }
 
     public func request(_ operation: @escaping @MainActor () async -> Void) {
+        enqueue(preflight: nil, operation: operation)
+    }
+
+    /// Runs a lightweight prerequisite before waiting for Settings to close,
+    /// then performs the operation under the same admission gate.
+    public func request(preflight: @escaping @MainActor () async -> Bool,
+                        operation: @escaping @MainActor () async -> Void) {
+        enqueue(preflight: preflight, operation: operation)
+    }
+
+    private func enqueue(preflight: (@MainActor () async -> Bool)?,
+                         operation: @escaping @MainActor () async -> Void) {
         pending = true
         guard worker == nil else { return }
         worker = Task { [self] in
             defer { worker = nil }
             while pending {
+                if let preflight, !(await preflight()) {
+                    pending = false
+                    return
+                }
                 do { try await gate.checkpoint() } catch { pending = false; return }
                 pending = false
                 await operation()

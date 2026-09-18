@@ -89,6 +89,21 @@ protocol GalleryLibraryProviding: Sendable {
     func applyMembershipChanges(change: PHChange) async -> [AlbumMembershipDelta]
 }
 
+protocol PhotoAuthorizationProviding: Sendable {
+    func status() async -> PHAuthorizationStatus
+    func requestReadWrite() async -> PHAuthorizationStatus
+}
+
+struct PhotoKitAuthorizationProvider: PhotoAuthorizationProviding {
+    func status() async -> PHAuthorizationStatus {
+        PHPhotoLibrary.authorizationStatus(for: .readWrite)
+    }
+
+    func requestReadWrite() async -> PHAuthorizationStatus {
+        await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+    }
+}
+
 extension GalleryLibraryProviding {
     func currentCount() async -> Int { 0 }
     func apply(change: PHChange) async -> GalleryChangeResult {

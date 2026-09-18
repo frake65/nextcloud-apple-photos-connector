@@ -1,5 +1,6 @@
 import XCTest
 import AppKit
+import Photos
 @testable import MacAgent
 @testable import InventoryCore
 
@@ -60,6 +61,28 @@ private actor ControlledThumbnails: GalleryThumbnailProviding {
     func finish(_ local: String, value: GalleryImage? = nil) { pending.removeValue(forKey: local)?.resume(returning: value) }
 }
 
+private actor SimulatedPhotoAuthorization: PhotoAuthorizationProviding {
+    private let initialStatus: PHAuthorizationStatus
+    private let requestedStatus: PHAuthorizationStatus
+    private(set) var statusChecks = 0
+    private(set) var requests = 0
+
+    init(initialStatus: PHAuthorizationStatus, requestedStatus: PHAuthorizationStatus = .authorized) {
+        self.initialStatus = initialStatus
+        self.requestedStatus = requestedStatus
+    }
+
+    func status() async -> PHAuthorizationStatus {
+        statusChecks += 1
+        return initialStatus
+    }
+
+    func requestReadWrite() async -> PHAuthorizationStatus {
+        requests += 1
+        return requestedStatus
+    }
+}
+
 @MainActor
 final class GalleryLoadingTests: XCTestCase {
     private final class CancelledIDs: @unchecked Sendable {
@@ -74,6 +97,82 @@ final class GalleryLoadingTests: XCTestCase {
             await Task.yield()
         }
         XCTFail("Condition did not become true", file: file, line: line)
+    }
+
+    func testPausedSettingsAllowFirstPhotoAuthorizationButHoldGalleryOpen() async {
+        let gate = SettingsWorkGate()
+        gate.setPaused(true)
+        let source = SimulatedGallery(count: 12, gate: gate)
+        let authorization = SimulatedPhotoAuthorization(initialStatus: .notDetermined)
+        let model = VisualLibraryModel(library: source, gate: gate, authorization: authorization)
+
+        model.requestLoad()
+        await eventually { await authorization.requests == 1 && gate.waitingCount == 1 }
+        model.requestLoad() // Still coalesced while the first request waits at the gate.
+
+        let opensBeforeResume = await source.opens
+        let checks = await authorization.statusChecks
+        XCTAssertEqual(checks, 1)
+        XCTAssertEqual(opensBeforeResume, 0)
+        XCTAssertTrue(gate.isPaused)
+
+        gate.setPaused(false)
+        await eventually { !model.loading }
+
+        let opensAfterResume = await source.opens
+        let requestsAfterResume = await authorization.requests
+        XCTAssertEqual(opensAfterResume, 1)
+        XCTAssertEqual(requestsAfterResume, 1)
+    }
+
+    func testAlreadyAuthorizedLoadStillWaitsForSettingsGate() async {
+        let gate = SettingsWorkGate()
+        gate.setPaused(true)
+        let source = SimulatedGallery(count: 5, gate: gate)
+        let authorization = SimulatedPhotoAuthorization(initialStatus: .authorized)
+        let model = VisualLibraryModel(library: source, gate: gate, authorization: authorization)
+
+        model.requestLoad()
+        await eventually { gate.waitingCount == 1 }
+
+        let opens = await source.opens
+        let requests = await authorization.requests
+        XCTAssertEqual(opens, 0)
+        XCTAssertEqual(requests, 0)
+
+        gate.setPaused(false)
+        await eventually { !model.loading }
+        let resumedOpens = await source.opens
+        XCTAssertEqual(resumedOpens, 1)
+    }
+
+    func testDeniedAndRestrictedAuthorizationDoNotWaitForSettingsOrOpenLibrary() async {
+        let cases: [(PHAuthorizationStatus, PHAuthorizationStatus, Int, String)] = [
+            (.denied, .authorized, 0, "Bitte erlaube den Fotozugriff in den Systemeinstellungen."),
+            (.restricted, .authorized, 0, "Der Fotozugriff ist eingeschränkt."),
+            (.notDetermined, .denied, 1, "Bitte erlaube den Fotozugriff in den Systemeinstellungen.")
+        ]
+        for (status, requestedStatus, expectedRequests, expectedMessage) in cases {
+            let gate = SettingsWorkGate()
+            gate.setPaused(true)
+            let source = SimulatedGallery(count: 3, gate: gate)
+            let authorization = SimulatedPhotoAuthorization(initialStatus: status, requestedStatus: requestedStatus)
+            let model = VisualLibraryModel(library: source, gate: gate, authorization: authorization)
+
+            model.requestLoad()
+            await eventually { model.authorizationMessage != nil }
+
+            let opens = await source.opens
+            let requests = await authorization.requests
+            let checks = await authorization.statusChecks
+            XCTAssertEqual(opens, 0)
+            XCTAssertEqual(requests, expectedRequests)
+            XCTAssertEqual(checks, 1)
+            XCTAssertEqual(model.authorizationMessage, expectedMessage)
+            XCTAssertFalse(model.loading)
+            XCTAssertEqual(gate.waitingCount, 0)
+            XCTAssertTrue(gate.isPaused)
+        }
     }
 
     func testLargeInitialLoadDoesNotResolveAssetsAlbumsOrRequestThumbnails() async throws {

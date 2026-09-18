@@ -41,7 +41,6 @@ actor PhotoLibraryScanner {
     }
 
     func scan() async throws -> Result {
-        try await SettingsWorkGate.shared.checkpoint()
         var status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         logger.info("photos.scan.authorization.status=\(String(describing: status.rawValue), privacy: .public)")
         if status == .notDetermined {
