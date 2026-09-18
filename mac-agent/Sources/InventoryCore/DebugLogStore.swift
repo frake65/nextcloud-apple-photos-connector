@@ -30,6 +30,12 @@ public struct DebugLogEntry: Identifiable, Sendable, Equatable {
     }
     private static func category(for message: String) -> String {
         let lower = message.lowercased()
+        if lower.contains("album.sync.summary") {
+            return count(in: lower, key: "errors") == 0 ? "album" : "warning"
+        }
+        if lower.hasPrefix("import completed ") {
+            return count(in: lower, key: "failed") == 0 ? "upload" : "error"
+        }
         if lower.contains("error") || lower.contains("failed") || lower.contains("failure") { return "error" }
         if lower.contains("inventory") { return "inventory" }
         if lower.contains("mkcol") || lower.contains("webdav") || lower.contains("put") { return "webdav" }
@@ -38,6 +44,11 @@ public struct DebugLogEntry: Identifiable, Sendable, Equatable {
         if lower.contains("album") { return "album" }
         if lower.contains("photokit") || lower.contains("photo") { return "photokit" }
         return "system"
+    }
+    private static func count(in message: String, key: String) -> Int? {
+        guard let range = message.range(of: "\\b\(key)=[0-9]+", options: .regularExpression),
+              let value = message[range].split(separator: "=").last else { return nil }
+        return Int(value)
     }
     private static func sanitize(_ value: String) -> String {
         var result = value

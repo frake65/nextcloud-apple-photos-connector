@@ -2,11 +2,12 @@
 
 English | [Deutsch](README.de.md)
 
-App Store submission for server app 0.8.2 is being prepared; the signing
-certificate is pending. The separate **Nextcloud APC** macOS app is required
+The current server app patch is 0.8.6; the separate **Nextcloud APC** macOS
+agent is at 0.8.3. App Store submission is being prepared; the signing
+certificate is pending. The macOS app is required
 and will not be distributed through the Nextcloud App Store. Server metadata
-targets Nextcloud 34–35. NC35 installation was checked on RC4; full Photos 8
-album integration testing remains pending.
+targets Nextcloud 34–35. Idempotence and album recovery were manually verified
+against Nextcloud 35 and Photos 8.0.0.
 
 ## What is it?
 

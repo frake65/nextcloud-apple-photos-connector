@@ -1,19 +1,96 @@
 <?php
 declare(strict_types=1);
 namespace OCA\ApplePhotosConnector\Controller;
-use OCA\ApplePhotosConnector\AppInfo\Application; use OCA\ApplePhotosConnector\Service\AlbumSyncOrchestrator; use OCP\AppFramework\Controller; use OCP\AppFramework\Http\Attribute\NoAdminRequired; use OCP\AppFramework\Http\Attribute\NoCSRFRequired; use OCP\AppFramework\Http\JSONResponse; use OCP\IRequest; use OCP\IUserSession; use OCP\IDBConnection;
+
+use OCA\ApplePhotosConnector\AppInfo\Application;
+use OCA\ApplePhotosConnector\Service\AlbumSyncDiagnosticException;
+use OCA\ApplePhotosConnector\Service\AlbumSyncOrchestrator;
+use OCP\AppFramework\Controller;
+use OCP\AppFramework\Http\Attribute\NoAdminRequired;
+use OCP\AppFramework\Http\Attribute\NoCSRFRequired;
+use OCP\AppFramework\Http\JSONResponse;
+use OCP\IRequest;
+use OCP\IUserSession;
+use OCP\IDBConnection;
+
 class AlbumController extends Controller {
- public function __construct(IRequest $r, private IUserSession $session, private IDBConnection $db, private ?AlbumSyncOrchestrator $orchestrator=null){parent::__construct(Application::APP_ID,$r);}
- #[NoAdminRequired]
- #[NoCSRFRequired]
- public function sync(): JSONResponse {
-  $u=$this->session->getUser(); if(!$u||!str_starts_with(strtolower($this->request->getHeader('Authorization')),'basic ')) return new JSONResponse(['error'=>'Authentication required'],401);
-  $p=$this->request->getParams(); $sid=$p['sourceId']??null; if(!is_string($sid)||!$this->orchestrator) return new JSONResponse(['error'=>'Invalid album sync request'],400);
-  $albumIds=$p['selectedAlbumIDs']??null; $assetIds=$p['selectedAssetIDs']??null;
-  if($albumIds!==null&&!is_array($albumIds)||$assetIds!==null&&!is_array($assetIds)) return new JSONResponse(['error'=>'Invalid album selection'],400);
-  try { $r=$this->orchestrator->sync(strtolower($sid),$u->getUID(),$albumIds===null?null:array_values(array_filter($albumIds,'is_string')),$assetIds===null?null:array_values(array_filter($assetIds,'is_string'))); return new JSONResponse(['status'=>$r['errors']?'partial':'completed','summary'=>['albumsSeen'=>$r['albums_seen'],'albumsCreated'=>$r['albums_created'],'albumsReused'=>$r['albums_reused'],'foldersSkipped'=>$r['folders_skipped'],'membershipsSeen'=>$r['memberships_seen'],'membershipsCreated'=>$r['memberships_created'],'membershipsReused'=>$r['memberships_reused'],'membershipsSkippedNotImported'=>$r['memberships_skipped_not_imported'],'errors'=>$r['errors']]]); }
-  catch(\InvalidArgumentException $e){return new JSONResponse(['error'=>$e->getMessage()],400);} catch(\Throwable $e){return new JSONResponse(['error'=>'Album sync failed'],500);}
- }
+    public function __construct(IRequest $r, private IUserSession $session, private IDBConnection $db, private ?AlbumSyncOrchestrator $orchestrator = null) {
+        parent::__construct(Application::APP_ID, $r);
+    }
+
+    #[NoAdminRequired]
+    #[NoCSRFRequired]
+    public function sync(): JSONResponse {
+        $user = $this->session->getUser();
+        if (!$user || !str_starts_with(strtolower($this->request->getHeader('Authorization')), 'basic ')) return new JSONResponse(['error' => 'Authentication required'], 401);
+        $params = $this->request->getParams();
+        $sourceId = $params['sourceId'] ?? null;
+        if (!is_string($sourceId) || !$this->orchestrator) return new JSONResponse(['error' => 'Invalid album sync request'], 400);
+        $albumIds = $params['selectedAlbumIDs'] ?? null;
+        $assetIds = $params['selectedAssetIDs'] ?? null;
+        if (($albumIds !== null && !is_array($albumIds)) || ($assetIds !== null && !is_array($assetIds))) return new JSONResponse(['error' => 'Invalid album selection'], 400);
+        $albumIds = $albumIds === null ? null : array_values(array_filter($albumIds, 'is_string'));
+        $assetIds = $assetIds === null ? null : array_values(array_filter($assetIds, 'is_string'));
+        $requestContext = [
+            'selected_album_count' => count($albumIds ?? []),
+            'selected_asset_count' => count($assetIds ?? []),
+            'selected_asset_prefixes' => $this->identityPrefixCounts($assetIds ?? []),
+        ];
+        $this->debug('album.sync.request source='.strtolower($sourceId).' '.json_encode($requestContext, JSON_UNESCAPED_SLASHES));
+
+        try {
+            $result = $this->orchestrator->sync(strtolower($sourceId), $user->getUID(), $albumIds, $assetIds);
+            return new JSONResponse(['status' => $result['errors'] ? 'partial' : 'completed', 'summary' => [
+                'albumsSeen' => $result['albums_seen'], 'albumsCreated' => $result['albums_created'], 'albumsReused' => $result['albums_reused'],
+                'foldersSkipped' => $result['folders_skipped'], 'membershipsSeen' => $result['memberships_seen'],
+                'membershipsCreated' => $result['memberships_created'], 'membershipsReused' => $result['memberships_reused'],
+                'membershipsSkippedNotImported' => $result['memberships_skipped_not_imported'], 'errors' => $result['errors'],
+            ]]);
+        } catch (AlbumSyncDiagnosticException $e) {
+            return $this->syncFailure($e, $requestContext);
+        } catch (\InvalidArgumentException $e) {
+            return new JSONResponse(['error' => $e->getMessage()], 400);
+        } catch (\Throwable $e) {
+            return $this->syncFailure($e, $requestContext);
+        }
+    }
+
+    private function syncFailure(\Throwable $error, array $requestContext): JSONResponse {
+        $diagnostic = $error instanceof AlbumSyncDiagnosticException ? $error : null;
+        $cause = $diagnostic?->getPrevious() ?? $error;
+        if ($cause instanceof \InvalidArgumentException) return new JSONResponse(['error' => $cause->getMessage()], 400);
+
+        $this->debug('album.sync.failure stage='.($diagnostic?->stage ?? 'album.sync.unclassified').' exception='.get_class($cause));
+        $response = ['error' => 'Album sync failed'];
+        if (defined('OC_DEBUG') && OC_DEBUG) {
+            $message = preg_replace('/[\r\n\t]+/', ' ', $cause->getMessage()) ?? '';
+            $message = preg_replace('/(authorization|password|token|secret|cookie)\s*[:=]\s*\S+/i', '$1=[redacted]', $message) ?? $message;
+            $response['diagnostic'] = [
+                'stage' => $diagnostic?->stage ?? 'album.sync.unclassified',
+                'exceptionClass' => get_class($cause),
+                'message' => substr($message, 0, 500),
+                'context' => $diagnostic?->context ?? [],
+                'request' => $requestContext,
+            ];
+        }
+        return new JSONResponse($response, 500);
+    }
+
+    private function identityPrefixCounts(array $identities): array {
+        $counts = ['cloud' => 0, 'local' => 0, 'other' => 0];
+        foreach ($identities as $identity) {
+            $prefix = str_starts_with($identity, 'cloud:') ? 'cloud' : (str_starts_with($identity, 'local:') ? 'local' : 'other');
+            $counts[$prefix]++;
+        }
+        return $counts;
+    }
+
+    private function debug(string $message): void {
+        if (defined('OC_DEBUG') && OC_DEBUG && class_exists('OC') && isset(\OC::$server)) {
+            try { \OC::$server->getLogger()->debug('Apple Photos Connector: '.$message, ['app' => 'apple_photos_connector']); } catch (\Throwable) {}
+        }
+    }
+
  #[NoAdminRequired]
  #[NoCSRFRequired]
  public function inventory(): JSONResponse {

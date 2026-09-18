@@ -1,6 +1,6 @@
 # Apple Photos Connector — Nextcloud Server App
 
-App-ID: `apple_photos_connector`, Version 0.8.2 laut `appinfo/info.xml`. PHP ab 8.2; App-Metadaten deklarieren Nextcloud 34–35. Die separate macOS-App **Nextcloud APC** ist erforderlich und wird nicht über den Nextcloud App Store verteilt. Die App-Store-Einreichung wird vorbereitet; das Zertifikat steht noch aus. Original-Uploads und additive Album-Synchronisation sind implementiert. Vollständige Photos-8-Albumtests stehen noch aus.
+App-ID: `apple_photos_connector`, Version 0.8.6 laut `appinfo/info.xml`. PHP ab 8.2; App-Metadaten deklarieren Nextcloud 34–35. Die separate macOS-App **Nextcloud APC** ist erforderlich und wird nicht über den Nextcloud App Store verteilt. Die App-Store-Einreichung wird vorbereitet; das Zertifikat steht noch aus. Original-Uploads und additive Album-Synchronisation sind implementiert. Album-Recovery und idempotente Wiederholung wurden manuell mit Nextcloud 35 und Photos 8.0.0 geprüft.
 
 ## Frische Serverinstallation
 
@@ -76,7 +76,7 @@ Dieser Lauf verwendet Nextclouds echten QueryBuilder und dieselben Inventarszena
 ## Paketierung / Packaging
 
 Run `sh nextcloud-app/build-package.sh` from the repository root. The default
-output is `.build/server/apple_photos_connector-0.8.2.tar.gz`, containing exactly
+output is `.build/server/apple_photos_connector-0.8.6.tar.gz`, containing exactly
 one `apple_photos_connector/` directory. The script stages only runtime folders,
 README, composer metadata, LICENSE and CHANGELOG; tests and tooling are excluded.
 It strips macOS archive metadata. No signing or upload occurs.

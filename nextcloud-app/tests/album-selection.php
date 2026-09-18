@@ -7,6 +7,8 @@ function albumSelectionScenarios(): void {
     check(AlbumSyncOrchestrator::selectedAlbumMatches($album,['cloud:album-cloud-a']),'selected filter keeps a selected album');
     check(!AlbumSyncOrchestrator::selectedAssetMatches(['local_identifier'=>'asset-a','cloud_identifier'=>'cloud:a'],['cloud:other']),'zero relevant assets are skipped');
     check(AlbumSyncOrchestrator::selectedAssetMatches(['local_identifier'=>'asset-a','cloud_identifier'=>'cloud:a'],['cloud:a']),'one relevant asset is retained');
+    check(AlbumSyncOrchestrator::selectedAssetMatches(['local_identifier'=>'asset-a','cloud_identifier'=>'cloud-a'],['cloud:cloud-a']),'stable cloud-prefixed selected identity matches server inventory');
+    check(AlbumSyncOrchestrator::selectedAssetMatches(['local_identifier'=>'asset-a','cloud_identifier'=>null],['local:asset-a']),'stable local-prefixed selected identity matches server inventory');
     check(!AlbumSyncOrchestrator::selectedAssetMatches(['local_identifier'=>'asset-b','cloud_identifier'=>'cloud:b'],['cloud:a']),'mixed album assets exclude unselected assets');
     check(AlbumSyncOrchestrator::selectedAssetMatches(['local_identifier'=>'asset-a','cloud_identifier'=>'cloud:a','nextcloud_file_id'=>7,'nextcloud_path'=>'Photos/a.jpg'],['asset-a']),'already imported asset remains eligible for membership');
     $members=[]; foreach(['cloud:a','cloud:a'] as $id) $members[$id]=true;

@@ -3,15 +3,60 @@
 Changes follow the Keep a Changelog categories. This package contains the server
 app; companion macOS changes below are provided for context.
 
-## [Unreleased]
+## [0.8.6] - 2026-09-18
+
+### Fixed
+- Recover deleted Nextcloud Photos albums selected through the memberships of
+  already imported assets, including requests with no explicit album selection.
+- Restore every already imported membership in each directly affected album;
+  skip unimported assets, do not expand recovery into other albums, and do not
+  upload known files again.
+- Clear an earlier album-resolution error only when a later membership
+  operation successfully resolves that same album. Count the actual Photos
+  action in `albumsCreated` / `albumsReused` and preserve genuine membership
+  failures in `summary.errors`.
+- Keep repeated recovery runs idempotent.
 
 ### Changed
 - Prepare 0.8.1 for the App Store: SPDX license, documentation and support links,
   full license text and validated app-ID archive layout.
 - Declare Nextcloud 34–35 compatibility and accept Photos 8.0.0 alongside 7.0.0.
-  Full Photos 8 album integration validation remains pending.
 - Unregister the two development-only album OCC commands; retain administrator
   album sync and the development classes.
+
+### Verified
+- Manually verified album recovery and idempotence against Nextcloud 35 and
+  Photos 8.0.0: selected imported assets restored affected albums and their
+  imported memberships without duplicate uploads or false error results.
+
+## [Unreleased]
+
+## [0.8.5] - 2026-09-18
+
+### Fixed
+- Recover all previously imported asset memberships in affected albums without
+  expanding selection transitively or uploading files again.
+- Report newly created and reused Photos albums based on the actual Photos lookup.
+
+### Tests
+- Cover multi-album recovery, unselected imported memberships, unrelated albums,
+  skipped unimported assets and idempotent recovery.
+
+## [0.8.4] - 2026-09-18
+
+### Fixed
+- Use Nextcloud's supported query expression for selected-asset album membership lookup.
+- Add DEBUG-only album recovery stage diagnostics and sanitized failure details without stack traces.
+
+### Tests
+- Match Photos 8.0.0 `AlbumMapper` method signatures in the SQLite harness and remove the unsupported `col()` test helper.
+
+## [0.8.3] - 2026-09-18
+
+### Fixed
+- Recover albums related to selected imported assets even when the client sends
+  an empty explicit album selection; match stable `local:` and `cloud:` asset IDs.
+- Restrict asset-scoped recovery to albums containing selected imported assets.
 
 ## [0.8.2] - 2026-09-15
 

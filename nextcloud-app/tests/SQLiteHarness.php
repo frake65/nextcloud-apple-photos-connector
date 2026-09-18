@@ -16,6 +16,9 @@ namespace OCP\AppFramework {
         public function __construct(string $name, protected \OCP\IRequest $request) {}
     }
 }
+namespace OCP\App {
+    interface IAppManager { public function getAppVersion(string $app): string; }
+}
 namespace OCP\AppFramework\Http {
     class JSONResponse {
         public function __construct(private mixed $data, private int $status = 200) {}
@@ -42,6 +45,20 @@ namespace OCP\Files {
     interface IRootFolder {}
     interface File {}
 }
+namespace OCA\Photos\Album {
+    class AlbumInfo {
+        public function __construct(private int $id, private string $userId) {}
+        public function getId(): int { return $this->id; }
+        public function getUserId(): string { return $this->userId; }
+    }
+    class AlbumFile {}
+    interface AlbumMapper {
+        public function create(string $userId, string $name, string $location = '', ?string $filters = null): AlbumInfo;
+        public function get(int $id): ?AlbumInfo;
+        public function getForAlbumIdAndFileId(int $albumId, int $fileId): ?AlbumFile;
+        public function addFile(int $albumId, int $fileId, string $owner): void;
+    }
+}
 namespace OCP\Lock {
     interface ILockingProvider { public const LOCK_SHARED = 1; }
 }
@@ -60,10 +77,11 @@ namespace TestHarness {
     class Query {
         private string $operation = '';
         private string $table = '';
-        private array $parameters = [], $values = [], $where = [];
+        private array $parameters = [], $values = [], $where = [], $joins = [];
+        private string $columns = '*';
         public function __construct(private \PDO $pdo) {}
-        public function select(string $columns): self { $this->operation = 'select'; return $this; }
-        public function from(string $table): self { $this->table = $table; return $this; }
+        public function select(string ...$columns): self { $this->operation = 'select'; $this->columns=implode(',', $columns) ?: '*'; return $this; }
+        public function from(string $table, ?string $alias = null): self { $this->table = $table . ($alias ? ' ' . $alias : ''); return $this; }
         public function insert(string $table): self { $this->operation = 'insert'; $this->table = $table; return $this; }
         public function update(string $table): self { $this->operation = 'update'; $this->table = $table; return $this; }
         public function values(array $values): self { $this->values = $values; return $this; }
@@ -72,6 +90,9 @@ namespace TestHarness {
         public function expr(): self { return $this; }
         public function orX(string ...$where): string { return '(' . implode(' OR ', $where) . ')'; }
         public function eq(string $key, string $parameter): string { return "$key = $parameter"; }
+        public function isNotNull(string $key): string { return "$key IS NOT NULL"; }
+        // Match Nextcloud's IExpressionBuilder: column comparisons use eq('a.id', 'm.asset_id'); there is no col().
+        public function innerJoin(string $fromAlias,string $joinTable,string $alias,string $condition): self { $this->joins[]="INNER JOIN $joinTable $alias ON $condition"; return $this; }
         public function createNamedParameter(mixed $value, mixed $type = null): string {
             $key = ':p' . count($this->parameters);
             $this->parameters[$key] = $value;
@@ -79,7 +100,7 @@ namespace TestHarness {
         }
         private function statement(): \PDOStatement {
             $sql = match ($this->operation) {
-                'select' => 'SELECT * FROM ' . $this->table,
+                'select' => 'SELECT ' . ($this->columns ?? '*') . ' FROM ' . $this->table . ($this->joins ? ' ' . implode(' ', $this->joins) : ''),
                 'insert' => 'INSERT INTO ' . $this->table . ' (' . implode(',', array_keys($this->values)) . ') VALUES (' . implode(',', $this->values) . ')',
                 'update' => 'UPDATE ' . $this->table . ' SET ' . implode(',', array_map(fn ($key) => "$key = " . $this->values[$key], array_keys($this->values))),
             };
@@ -94,6 +115,7 @@ namespace TestHarness {
     class Result {
         public function __construct(private \PDOStatement $statement) {}
         public function fetchAllAssociative(): array { return $this->statement->fetchAll(\PDO::FETCH_ASSOC); }
+        public function fetchAll(): array { return $this->fetchAllAssociative(); }
         public function fetch(): mixed { return $this->statement->fetch(\PDO::FETCH_ASSOC); }
         public function closeCursor(): void { $this->statement->closeCursor(); }
     }

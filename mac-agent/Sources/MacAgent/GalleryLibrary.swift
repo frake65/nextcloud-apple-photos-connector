@@ -104,10 +104,10 @@ extension GalleryLibraryProviding {
 
 enum GalleryDebug {
     private static let logger = DebugFileLogger(enabled: true)
-    static func log(_ event: String) {
+    static func log(_ event: String, category: String? = nil) {
         let defaults = UserDefaults(suiteName: ConnectionPreferences.preferencesSuite) ?? .standard
         guard defaults.bool(forKey: UploadPreferences.debugModeKey) else { return }
-        Task { @MainActor in DebugLogStore.shared.append(event) }
+        Task { @MainActor in DebugLogStore.shared.append(event, category: category) }
         logger.log(event)
     }
 }

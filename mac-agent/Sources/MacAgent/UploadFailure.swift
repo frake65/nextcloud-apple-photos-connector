@@ -49,13 +49,29 @@ struct UploadFailure: Error, Sendable, Equatable {
         case .source: key = "uploadFailureSource"
         case .filesystem: key = "uploadFailureFilesystem"
         case .response: key = "uploadFailureResponse"
-        case .unknown: key = "uploadFailureUnknown"
+        case .unknown: key = stage == .inventory ? "inventoryFailureUnknown" : "uploadFailureUnknown"
         }
         let message = category == .http ? L10n.format(key, httpStatus ?? 0) : L10n.text(key)
         if stage == .completion || stage == .receipt {
             return L10n.text("uploadFailureConfirmation") + " " + message
         }
         return message
+    }
+}
+
+struct AlbumOperationFailure: Error, Sendable, Equatable {
+    enum Stage: String, Sendable { case inventory, sync }
+    let stage: Stage
+    let technicalDetail: String
+
+    var userMessage: String {
+        L10n.text(stage == .sync ? "albumSyncFailure" : "albumInventoryFailure")
+    }
+
+    static func capture(_ error: any Error, stage: Stage) -> Self {
+        let safe = UploadFailure.capture(error, stage: .inventory)
+        let details = safe.technicalDetail.replacingOccurrences(of: "stage=inventory ", with: "")
+        return Self(stage: stage, technicalDetail: "stage=album_\(stage.rawValue) \(details)")
     }
 }
 

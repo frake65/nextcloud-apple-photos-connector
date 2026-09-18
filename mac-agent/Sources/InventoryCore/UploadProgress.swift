@@ -13,7 +13,12 @@ public struct UploadProgressDisplay: Equatable, Sendable {
 }
 
 public enum ImportRunState: Equatable, Sendable {
-    case idle, running, cancelling, completed, failed, cancelled
+    case idle, running, cancelling, completed, failed, albumFailed, cancelled
+
+    public static func finalState(uploadFailures: Int, albumFailed: Bool) -> Self {
+        if albumFailed { return .albumFailed }
+        return uploadFailures > 0 ? .failed : .completed
+    }
 }
 
 public enum UploadModalState: Equatable, Sendable {

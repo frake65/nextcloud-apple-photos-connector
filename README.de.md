@@ -2,11 +2,12 @@
 
 [English](README.md) | Deutsch
 
-Die App-Store-Einreichung der Server-App 0.8.2 wird vorbereitet; das
-Signierungszertifikat steht noch aus. Die separate macOS-App **Nextcloud APC**
+Der aktuelle Server-App-Patch ist 0.8.6; der separate macOS-Agent **Nextcloud APC**
+ist bei 0.8.3. Die App-Store-Einreichung wird vorbereitet; das
+Signierungszertifikat steht noch aus. Die macOS-App
 bleibt erforderlich und wird nicht über den Nextcloud App Store verteilt.
-Die Server-Metadaten unterstützen NC34–35. Die Installation unter NC35 wurde
-auf RC4 geprüft; vollständige Photos-8-Albumtests stehen noch aus.
+Die Server-Metadaten unterstützen NC34–35. Idempotenz und Album-Recovery wurden
+manuell mit Nextcloud 35 und Photos 8.0.0 verifiziert.
 
 ## Was ist APC?
 
@@ -35,7 +36,7 @@ Album Membership und Dateiübertragung sind getrennte Vorgänge. Albumnamen sind
 
 ## Aktueller Stand
 
-APC 0.8.2 ist der aktuelle Release-Stand. Der lokale Nachweis umfasst einen erfolgreichen manuellen Ablauf:
+Der letzte gemeinsame Release ist APC 0.8.2; die Server-App liegt inzwischen als Patch 0.8.6 vor, während der Agent bei 0.8.3 steht. Die manuellen Idempotenz- und Album-Recovery-Tests waren erfolgreich:
 
 Apple Photos → PhotoKit-Auswahl → Stable Identity → Inventory → Upload-Ticket → Originalexport → Prepare → WebDAV PUT → Complete → Datei im konfigurierten Nextcloud Target Root.
 

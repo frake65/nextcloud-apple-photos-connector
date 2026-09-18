@@ -97,6 +97,7 @@ final class UploadFailureProgressTests: XCTestCase {
     func testMixedRunKeepsFailureWithCauseAndDoesNotCloseOrDeselectFailedAsset() async throws {
         let (summary, events) = try await run(.put413)
         XCTAssertEqual(summary.uploadedImages, 2); XCTAssertEqual(summary.failed, 1)
+        XCTAssertEqual(ImportRunState.finalState(uploadFailures: summary.failed, albumFailed: false), .failed)
         XCTAssertFalse(summary.shouldCloseProgressSheet)
         let final = summary.finalProgress
         XCTAssertTrue(final.finished); XCTAssertEqual(final.completed, 3)
@@ -110,6 +111,18 @@ final class UploadFailureProgressTests: XCTestCase {
         let remainingSelection = Set(["local:local0", "local:local1", "local:local2"]).subtracting(events.uploaded)
         XCTAssertEqual(remainingSelection.count, 1)
         XCTAssertEqual(final.items.filter { $0.status == .failed }.count, 1)
+    }
+    func testKnownAssetsNeedNoUploadAndCompleteSuccessfully() async throws {
+        let (summary, _) = try await run(.known)
+        XCTAssertEqual(summary.failed, 0)
+        XCTAssertEqual(summary.uploadedImages, 0)
+        XCTAssertEqual(summary.alreadyInCloudImages, 3)
+        XCTAssertEqual(ImportRunState.finalState(uploadFailures: summary.failed, albumFailed: false), .completed)
+    }
+    func testUnknownInventoryFailureDoesNotClaimFileTransferFailed() {
+        let failure = UploadFailure.capture(UploadError.diagnostic("inventory unavailable"), stage: .inventory)
+        XCTAssertEqual(failure.userMessage, L10n.text("inventoryFailureUnknown", language: "en"))
+        XCTAssertNotEqual(failure.userMessage, L10n.text("uploadFailureUnknown", language: "en"))
     }
     func testExportAndTimeoutFailuresReachFinalRows() async throws {
         for (mode, category, stage) in [(Mode.export, UploadFailure.Category.source, UploadFailure.Stage.export), (.timeout, .timeout, .put), (.prepare, .notFound, .target)] {

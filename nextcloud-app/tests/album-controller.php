@@ -15,3 +15,22 @@ function albumControllerScenarios(PDO $pdo): void {
  $req->params['source']['sourceId']=$sourceB; $req->params['albums'][0]['assets']=['asset1']; check($c->inventory()->getStatus()===400 && (int)$pdo->query('SELECT COUNT(*) FROM apc_source_albums')->fetchColumn()===1,'album/source isolation rejects foreign asset');
  $pdo->exec("INSERT INTO apc_sources(user_id,source_id,name,created_at,last_seen_at) VALUES ('u1','550e8400-e29b-41d4-a716-446655440012','C','now','now')"); $req->params['source']['sourceId']='550e8400-e29b-41d4-a716-446655440012'; $req->params['albums'][0]['assets']=[]; check($c->inventory()->getStatus()===200,'same-name album in second source accepted separately'); check((int)$pdo->query('SELECT COUNT(*) FROM apc_source_albums')->fetchColumn()===2,'same-name albums across sources remain separate');
 }
+
+function albumSyncDiagnosticControllerScenario(): void {
+ if (!defined('OC_DEBUG')) define('OC_DEBUG', true);
+ $db=new class implements \OCP\IDBConnection { function getQueryBuilder(): never { throw new RuntimeException('synthetic query failure'); } };
+ $maps=new \OCA\ApplePhotosConnector\Db\AlbumMapRepository($db);
+ $mapper=new FakeAlbumMapper();
+ $resolver=new \OCA\ApplePhotosConnector\Service\AlbumResolutionService($db,$maps,$mapper,new FakePhotosVersion());
+ $memberships=new \OCA\ApplePhotosConnector\Service\AlbumMembershipService($db,$maps,$mapper,new FakePhotosVersion(),new FakeAlbumRoot(77));
+ $sync=new \OCA\ApplePhotosConnector\Service\AlbumSyncOrchestrator($db,$maps,$resolver,$memberships);
+ $request=new class implements \OCP\IRequest { function getHeader(string $n):string{return $n==='Authorization'?'Basic test':'';} function getParam(string $n):mixed{return null;} function getParams():array{return ['sourceId'=>'550e8400-e29b-41d4-a716-446655440020','selectedAlbumIDs'=>[],'selectedAssetIDs'=>['cloud:asset-cloud-x']];} };
+ $session=new class implements \OCP\IUserSession { function getUser():mixed{return new class{function getUID():string{return 'u1';}};} };
+ $response=(new \OCA\ApplePhotosConnector\Controller\AlbumController($request,$session,$db,$sync))->sync();
+ $data=$response->getData();
+ check($response->getStatus()===500,'album sync unexpected failure remains HTTP 500');
+ check(($data['diagnostic']['stage']??null)==='album.sync.source_albums.lookup','debug response identifies failed sync stage');
+ check(($data['diagnostic']['exceptionClass']??null)===RuntimeException::class,'debug response identifies original exception class');
+ check(($data['diagnostic']['request']['selected_album_count']??null)===0 && ($data['diagnostic']['request']['selected_asset_prefixes']['cloud']??null)===1,'debug response records empty album selection and prefixed cloud asset count');
+ check(!array_key_exists('trace',$data['diagnostic']??[]),'debug response does not include a stack trace');
+}

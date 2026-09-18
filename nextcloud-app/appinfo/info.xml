@@ -8,7 +8,7 @@
 The macOS app reads your selected photos and videos from Apple Photos and imports their original files into Nextcloud. Repeated imports transfer new or missing files; files already present and confirmed by the connector are not uploaded again. Albums can be imported into Nextcloud Photos.
 
 Imports are intentionally non-destructive: existing files are not overwritten, and photos missing from Apple Photos do not cause automatic deletion of files or album memberships in Nextcloud.</description>
-    <version>0.8.2</version>
+    <version>0.8.6</version>
     <licence>AGPL-3.0-or-later</licence>
     <author>Frank Kettenbeil</author>
     <namespace>ApplePhotosConnector</namespace>

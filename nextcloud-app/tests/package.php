@@ -28,7 +28,7 @@ foreach (['LICENSE', 'CHANGELOG.md', 'appinfo/info.xml'] as $name) {
 }
 $path = "$root/appinfo/info.xml";
 $original = file_get_contents($path);
-foreach (['<id>apple_photos_connector</id>' => '<id>wrong</id>', '<version>0.8.2</version>' => '<version>9.0.0</version>'] as $from => $to) {
+foreach (['<id>apple_photos_connector</id>' => '<id>wrong</id>', '<version>0.8.6</version>' => '<version>9.0.0</version>'] as $from => $to) {
     file_put_contents($path, str_replace($from, $to, $original));
     try { rejected($stage); } finally { file_put_contents($path, $original); }
 }

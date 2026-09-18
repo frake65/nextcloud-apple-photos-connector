@@ -4,6 +4,11 @@ import XCTest
 @testable import MacAgent
 
 final class InventoryTransportMockTests: XCTestCase {
+    func testAlbumRecoveryRunsForKnownAssetSelection() {
+        XCTAssertTrue(AlbumInventoryCoordinator.shouldSyncAfterUpload(selectedAlbumIDs: [], selectedAssetIDs: ["cloud:x"]))
+        XCTAssertTrue(AlbumInventoryCoordinator.shouldSyncAfterUpload(selectedAlbumIDs: ["local:album"], selectedAssetIDs: []))
+        XCTAssertFalse(AlbumInventoryCoordinator.shouldSyncAfterUpload(selectedAlbumIDs: [], selectedAssetIDs: []))
+    }
     final class Log: @unchecked Sendable { var values:[String]=[]; let lock=NSLock(); func add(_ v:String){lock.lock(); values.append(v); lock.unlock()} }
     actor CoordinatorSpy: DAVTransport {
         enum Mode: Equatable { case new, known, invalid, httpError, seenZero, prepareError, putError, completeError }

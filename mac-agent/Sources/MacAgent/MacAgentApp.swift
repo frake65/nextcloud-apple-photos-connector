@@ -111,7 +111,7 @@ private final class InventoryModel: ObservableObject {
         uploadLogger?.log(event)
     }
     private func isSafeUploadEvent(_ event: String) -> Bool {
-        let prefixes = ["upload.ui.requested", "upload.ui.requested selectedAssets=", "upload.snapshot assets=", "upload.start.skipped reason=", "upload.coordinator.entered", "inventory.request.start", "inventory.candidates assets=", "inventory.payload.assets=", "inventory.payload.invalid expected=", "inventory.response.state=", "inventory.response.ticket=", "upload.queue.added", "upload.queue.skipped reason=", "upload.prepare.start", "upload.prepare.status=", "upload.prepare.error=", "upload.prepare.validate.", "upload.prepare.target.", "upload.export.start", "upload.export.success", "upload.put.start", "upload.put.status=", "upload.put.success", "upload.put.failed category=", "upload.put.http.status=", "upload.put.error.domain=", "upload.put.error.code=", "upload.complete.status=", "upload.complete.http.success", "upload.complete.request.status=", "upload.complete.success", "upload.complete.error category=", "upload.counter.uploaded=", "upload.outcome="]
+        let prefixes = ["upload.ui.requested", "upload.ui.requested selectedAssets=", "upload.snapshot assets=", "upload.start.skipped reason=", "upload.coordinator.entered", "inventory.request.start", "inventory.candidates assets=", "inventory.payload.assets=", "inventory.payload.invalid expected=", "inventory.response.state=", "inventory.response.ticket=", "upload.queue.added", "upload.queue.skipped reason=", "upload.prepare.start", "upload.prepare.status=", "upload.prepare.error=", "upload.prepare.validate.", "upload.prepare.target.", "upload.export.start", "upload.export.success", "upload.put.start", "upload.put.status=", "upload.put.success", "upload.put.failed category=", "upload.put.http.status=", "upload.put.error.domain=", "upload.put.error.code=", "upload.complete.status=", "upload.complete.http.success", "upload.complete.request.status=", "upload.complete.success", "upload.complete.error category=", "upload.counter.uploaded=", "upload.outcome=", "album."]
         return prefixes.contains { event.hasPrefix($0) } && !event.contains("/") && !event.contains("\\")
     }
     func loadConnection() throws -> ConnectorConnection {
@@ -513,6 +513,7 @@ private struct InventoryView: View {
                 model.status = L10n.text("uploadRunning")
                 model.uploadTask = Task {
                     defer { model.scanning = false; model.uploadTask = nil }
+                    var completedUploadSummary: UploadCoordinator.RunSummary?
                     do {
                         try await SettingsWorkGate.shared.checkpoint()
                         // A pending start must validate the settings that exist
@@ -550,18 +551,26 @@ private struct InventoryView: View {
                         }, onUploaded: { identity in
                             Task { @MainActor in visual.markSuccessfullyUploaded(identity) }
                         })
+                        completedUploadSummary = summary
                         model.logDebug("Import completed uploaded=\(summary.uploadedImages + summary.uploadedVideos + summary.uploadedOther) failed=\(summary.failed)")
                         model.uploadProgress = summary.finalProgress
                         var albumSummary: AlbumInventoryCoordinator.SyncResult?
-                        if !visual.selectedAlbumIDs.isEmpty {
+                        model.logUploadEvent("album.sync.gate source=\(try await model.scanner.currentSourceId().uuidString.lowercased()) selectedAlbums=\(visual.selectedAlbumIDs.count) selectedAssets=\(selectionSnapshot.count) allowed=\(AlbumInventoryCoordinator.shouldSyncAfterUpload(selectedAlbumIDs: visual.selectedAlbumIDs, selectedAssetIDs: selectionSnapshot))")
+                        if AlbumInventoryCoordinator.shouldSyncAfterUpload(selectedAlbumIDs: visual.selectedAlbumIDs, selectedAssetIDs: selectionSnapshot) {
                             try Task.checkCancellation()
-                            _ = try await model.albums.run(scanner: model.scanner, connection: connection)
+                            do { _ = try await model.albums.run(scanner: model.scanner, connection: connection) }
+                            catch is CancellationError { throw CancellationError() }
+                            catch { throw AlbumOperationFailure.capture(error, stage: .inventory) }
                             try Task.checkCancellation()
-                            albumSummary = try await model.albums.sync(scanner: model.scanner, connection: connection,
-                                selectedAlbumIDs: visual.selectedAlbumIDs, selectedAssetIDs: selectionSnapshot)
+                            do {
+                                albumSummary = try await model.albums.sync(scanner: model.scanner, connection: connection,
+                                    selectedAlbumIDs: visual.selectedAlbumIDs, selectedAssetIDs: selectionSnapshot)
+                            } catch is CancellationError { throw CancellationError() }
+                            catch let failure as AlbumOperationFailure { throw failure }
+                            catch { throw AlbumOperationFailure.capture(error, stage: .sync) }
                         }
                         model.status = uploadSummary(summary, albums: albumSummary)
-                        model.uploadState = .completed
+                        model.uploadState = ImportRunState.finalState(uploadFailures: summary.failed, albumFailed: false)
                         if summary.shouldCloseProgressSheet {
                             model.uploadInProgress = false
                         }
@@ -577,6 +586,13 @@ private struct InventoryView: View {
                         model.status = "Import durch Benutzer abgebrochen"
                         // Keep the sheet visible for technical errors so the
                         // per-file failure remains inspectable.
+                    } catch let failure as AlbumOperationFailure {
+                        model.logDebug("Import failed \(failure.technicalDetail)")
+                        model.debugLog.append("Album operation failed · \(failure.technicalDetail)")
+                        let uploadFailure = (completedUploadSummary?.failed ?? 0) > 0
+                        model.status = (uploadFailure ? L10n.text("uploadFailureUnknown") + " " : "") + failure.userMessage
+                        model.uploadState = ImportRunState.finalState(uploadFailures: completedUploadSummary?.failed ?? 0, albumFailed: true)
+                        model.uploadInProgress = true
                     } catch {
                         let failure = UploadFailure.capture(error, stage: .inventory)
                         model.logDebug("Import failed \(failure.technicalDetail)")
@@ -699,11 +715,12 @@ private struct InventoryView: View {
 
 
     private func uploadSummary(_ summary: UploadCoordinator.RunSummary, albums: AlbumInventoryCoordinator.SyncResult? = nil) -> String {
-        var parts: [String] = [L10n.text("upload") + " abgeschlossen"]
+        var parts: [String] = [L10n.text(summary.failed == 0 ? "importCompleted" : "uploadFailureUnknown")]
         if summary.uploadedImages > 0 { parts.append(L10n.format("transferredCount", summary.uploadedImages, L10n.text(summary.uploadedImages == 1 ? "photoCountOne" : "photoCountMany"))) }
         if summary.uploadedVideos > 0 { parts.append(L10n.format("transferredCount", summary.uploadedVideos, L10n.text(summary.uploadedVideos == 1 ? "videoCountOne" : "videoCountMany"))) }
         if summary.alreadyInCloudImages > 0 { parts.append(L10n.format("alreadyInCloudCount", summary.alreadyInCloudImages, L10n.text(summary.alreadyInCloudImages == 1 ? "photoCountOne" : "photoCountMany"))) }
         if summary.alreadyInCloudVideos > 0 { parts.append(L10n.format("alreadyInCloudCount", summary.alreadyInCloudVideos, L10n.text(summary.alreadyInCloudVideos == 1 ? "videoCountOne" : "videoCountMany"))) }
+        if summary.failed > 0 { parts.append(L10n.format("transferFailuresCount", summary.failed)) }
         if let albums { parts.append("\(albums.membershipsCreated + albums.membershipsReused) Albumzuordnungen durchgeführt") }
         return parts.joined(separator: " · ")
     }
@@ -732,9 +749,17 @@ private struct UploadProgressSheet: View {
     let debugEnabled: Bool
     let cancel: () -> Void
     @Environment(\.dismiss) private var dismiss
+    private var titleKey: String {
+        switch state {
+        case .running, .cancelling: "uploadingOriginals"
+        case .failed: "importFailureTitle"
+        case .albumFailed: "albumSyncFailure"
+        default: "importStatus"
+        }
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(L10n.text(state == .completed || state == .cancelled ? "importStatus" : "uploadingOriginals")).font(.headline)
+            Text(L10n.text(titleKey)).font(.headline)
             if let progress {
                 VStack(alignment: .leading, spacing: 14) {
                     ProgressView(value: progress.total == 0 ? 1 : Double(progress.completed) / Double(progress.total))
@@ -832,7 +857,7 @@ private struct UploadProgressSheet: View {
             } }
             HStack {
                 Spacer()
-                if state == .completed || state == .cancelled || state == .failed {
+                if state == .completed || state == .cancelled || state == .failed || state == .albumFailed {
                     Button(L10n.text("closeImport")) { dismiss() }
                 } else {
                     Button(state == .cancelling ? L10n.text("uploadCancelling") : L10n.text("cancelUpload"), role: .cancel) { cancel() }
