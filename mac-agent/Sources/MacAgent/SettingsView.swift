@@ -1,6 +1,7 @@
 import SwiftUI
 import InventoryCore
 import AppKit
+import MacAgentSupport
 
 struct ConnectorSettingsView: View {
     @AppStorage(L10n.languageKey, store: UserDefaults(suiteName: ConnectionPreferences.preferencesSuite)) private var language = "system"

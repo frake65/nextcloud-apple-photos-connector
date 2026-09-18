@@ -2,6 +2,7 @@ import Foundation
 import XCTest
 @testable import InventoryCore
 @testable import MacAgent
+@testable import MacAgentSupport
 
 final class InventoryTransportMockTests: XCTestCase {
     func testAlbumRecoveryRunsForKnownAssetSelection() {

@@ -1,6 +1,7 @@
 import XCTest
 @testable import InventoryCore
 @testable import MacAgent
+@testable import MacAgentSupport
 
 final class UploadProgressTests: XCTestCase {
     func testZeroUploadsIsDisplayedAsComplete() {

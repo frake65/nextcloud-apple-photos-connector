@@ -1,5 +1,6 @@
 import XCTest
 @testable import InventoryCore
+@testable import MacAgentSupport
 
 private final class ResetPasswordStore: PasswordStore, @unchecked Sendable {
     var values: [String: String] = [:]

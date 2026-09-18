@@ -5,10 +5,13 @@ let package = Package(
     name: "ApplePhotosConnector",
     platforms: [.macOS(.v14)],
     products: [.executable(name: "MacAgent", targets: ["MacAgent"]), .executable(name: "APCConfigureConnection", targets: ["APCConfigureConnection"])],
+    dependencies: [
+        .package(name: "APCSharedInventoryCore", path: "../shared/InventoryCore")
+    ],
     targets: [
-        .target(name: "InventoryCore"),
-        .executableTarget(name: "MacAgent", dependencies: ["InventoryCore"]),
-        .executableTarget(name: "APCConfigureConnection", dependencies: ["InventoryCore"]),
-        .testTarget(name: "InventoryCoreTests", dependencies: ["InventoryCore", "MacAgent"])
+        .target(name: "MacAgentSupport", dependencies: [.product(name: "InventoryCore", package: "APCSharedInventoryCore")]),
+        .executableTarget(name: "MacAgent", dependencies: ["MacAgentSupport", .product(name: "InventoryCore", package: "APCSharedInventoryCore")]),
+        .executableTarget(name: "APCConfigureConnection", dependencies: ["MacAgentSupport", .product(name: "InventoryCore", package: "APCSharedInventoryCore")]),
+        .testTarget(name: "MacAgentTests", dependencies: ["MacAgentSupport", "MacAgent", .product(name: "InventoryCore", package: "APCSharedInventoryCore")])
     ]
 )

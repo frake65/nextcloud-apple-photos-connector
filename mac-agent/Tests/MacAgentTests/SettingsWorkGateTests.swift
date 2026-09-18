@@ -1,5 +1,5 @@
 import XCTest
-@testable import InventoryCore
+@testable import MacAgentSupport
 
 @MainActor
 final class SettingsWorkGateTests: XCTestCase {

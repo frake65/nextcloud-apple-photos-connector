@@ -1,5 +1,5 @@
 import XCTest
-@testable import InventoryCore
+@testable import MacAgentSupport
 
 final class DebugFileLoggerTests: XCTestCase {
     func testDebugEnabledCreatesLogAndLifecycleEvent() throws {

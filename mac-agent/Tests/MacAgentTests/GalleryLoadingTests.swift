@@ -3,6 +3,7 @@ import AppKit
 import Photos
 @testable import MacAgent
 @testable import InventoryCore
+@testable import MacAgentSupport
 
 private actor SimulatedGallery: GalleryLibraryProviding {
     let count: Int

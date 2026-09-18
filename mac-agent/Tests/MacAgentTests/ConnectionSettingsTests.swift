@@ -1,5 +1,6 @@
 import XCTest
 @testable import InventoryCore
+@testable import MacAgentSupport
 
 private struct FakeDAVTransport: DAVTransport {
     let result: Result<DAVResponse, Error>

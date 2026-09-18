@@ -1,5 +1,6 @@
 import Foundation
 import InventoryCore
+import MacAgentSupport
 #if canImport(Darwin)
 import Darwin
 #endif

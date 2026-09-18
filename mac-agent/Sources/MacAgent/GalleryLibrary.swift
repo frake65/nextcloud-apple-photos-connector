@@ -2,6 +2,7 @@ import Foundation
 import Photos
 import AppKit
 import InventoryCore
+import MacAgentSupport
 
 struct GalleryAsset: Sendable, Equatable {
     let localIdentifier: String

@@ -1,5 +1,6 @@
 import Foundation
 import InventoryCore
+import MacAgentSupport
 
 actor AlbumInventoryCoordinator {
     struct SyncResult: Sendable { let albumsCreated: Int; let albumsReused: Int; let foldersSkipped: Int; let membershipsCreated: Int; let membershipsReused: Int; let membershipsSkippedNotImported: Int }

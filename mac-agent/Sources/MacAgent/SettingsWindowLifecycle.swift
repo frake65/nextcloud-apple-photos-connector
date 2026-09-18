@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import InventoryCore
+import MacAgentSupport
 
 /// SwiftUI's Settings scene has one window. Window close, rather than view
 /// disappearance or focus, owns resumption (sheets and focus changes don't).

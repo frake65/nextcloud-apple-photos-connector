@@ -1,5 +1,6 @@
 import Foundation
 import InventoryCore
+import MacAgentSupport
 
 actor UploadCoordinator {
     enum DisplayStatus: String, Sendable {

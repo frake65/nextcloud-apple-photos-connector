@@ -1,4 +1,5 @@
 import Foundation
+import InventoryCore
 
 /// Called only after validation, on the main actor, without suspension between
 /// Keychain and settings writes. A failed Keychain write leaves settings intact.

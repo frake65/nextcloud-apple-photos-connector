@@ -2,6 +2,7 @@ import Foundation
 import Photos
 import OSLog
 import InventoryCore
+import MacAgentSupport
 
 /// Serial background isolation keeps PhotoKit enumeration off the UI thread.
 actor PhotoLibraryScanner {

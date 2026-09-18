@@ -1,5 +1,6 @@
 import Foundation
 import InventoryCore
+import MacAgentSupport
 
 struct UploadConfiguration: Codable, Sendable {
     var baseFolder: String = TargetDirectoryPreferences.defaultPath

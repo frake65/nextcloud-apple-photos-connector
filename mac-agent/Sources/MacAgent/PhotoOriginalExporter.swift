@@ -1,6 +1,7 @@
 import Foundation
 import Photos
 import InventoryCore
+import MacAgentSupport
 
 /// Exports only the primary original resource. Live Photo companions and edits are out of scope.
 protocol PhotoOriginalExporting: Sendable {

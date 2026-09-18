@@ -1,6 +1,7 @@
 import XCTest
 @testable import InventoryCore
 @testable import MacAgent
+@testable import MacAgentSupport
 
 actor MKCOLCounter {
     var calls = 0; var active = 0; var maximum = 0

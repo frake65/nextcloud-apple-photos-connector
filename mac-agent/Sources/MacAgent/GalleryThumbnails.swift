@@ -1,6 +1,7 @@
 import AppKit
 import Photos
 import InventoryCore
+import MacAgentSupport
 
 /// The PhotoKit-produced image is handed to the UI without mutation. Only the
 /// MainActor reads/draws it; this box is the narrow callback transfer boundary.

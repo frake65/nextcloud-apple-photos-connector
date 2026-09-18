@@ -3,6 +3,7 @@ import InventoryCore
 import Photos
 import AppKit
 import OSLog
+import MacAgentSupport
 
 extension Notification.Name {
     static let requestPhotoAccess = Notification.Name("APCRequestPhotoAccess")

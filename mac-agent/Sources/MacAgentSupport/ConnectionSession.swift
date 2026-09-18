@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import InventoryCore
 
 /// Main-actor connection drafts and async-result ownership shared by login,
 /// validation and reset. Programmatic changes have no persistence observers.
