@@ -23,6 +23,29 @@ codesign -d --entitlements :- ".build/Nextcloud APC.app"
 
 `APC_SIGNING_IDENTITY` ist durch den tatsächlich installierten Developer-ID-Identitätsnamen zu ersetzen. Ohne diese Variable bleibt das lokale Ad-hoc-Signieren der Standard. Ein nachfolgendes `codesign --force` ohne `--entitlements Resources/MacAgent.entitlements` ersetzt die Codesignatur und kann das Photos-Entitlement entfernen; daher muss die Entitlement-Datei beim letzten Signierschritt angegeben werden. Der Agent verwendet im Quellcode keine AppleScript- oder expliziten Apple-Events-APIs; `com.apple.security.automation.apple-events` wird deshalb nicht angefordert.
 
+## Developer-ID-Release und Notarisierung
+
+Das Release-Script `scripts/release-macos.sh` baut mit `build-app.sh`, signiert mit Developer ID und notarytool, stapelt das Ticket und erzeugt erst danach das finale ZIP. Voraussetzungen sind macOS, Xcode Command Line Tools mit `swift`, `xcodebuild` und `xcrun`, sowie `codesign`, `ditto`, `shasum`, `security`, `lipo` und `spctl`. Die Developer-ID-Application-Identität muss im Schlüsselbund verfügbar sein; derzeit wird `Developer ID Application: Frank Kettenbeil (Q3PGXQ5B45)` verwendet.
+
+Ein notarytool-Keychain-Profil einmalig anlegen (Apple-ID, Team-ID und App-spezifisches Passwort durch eigene Werte ersetzen; Zugangsdaten gehören nicht in dieses Repository):
+
+```sh
+xcrun notarytool store-credentials "APC-Notary" \
+  --apple-id "APPLE-ID" \
+  --team-id "TEAM-ID" \
+  --password "APP-SPECIFIC-PASSWORD"
+```
+
+Für einen Release müssen beide Variablen gesetzt sein. Der Versionsparameter muss `CFBundleShortVersionString` entsprechen:
+
+```sh
+APC_SIGNING_IDENTITY="Developer ID Application: Frank Kettenbeil (Q3PGXQ5B45)" \
+APC_NOTARY_PROFILE="APC-Notary" \
+  ./scripts/release-macos.sh 0.8.3
+```
+
+Vom Repository-Root aus lautet der Script-Pfad `./mac-agent/scripts/release-macos.sh`. Das Script prüft macOS und benötigte Werkzeuge, Signing Identity, unveränderte getrackte Agent-Dateien, Bundle-ID und Version, arm64+x86_64, signierte Photos-Entitlements, codesign, Accepted-Notarisierung, Stapling, Gatekeeper sowie erneut dieselben Merkmale an der aus dem finalen ZIP entpackten App. Es entfernt vor dem Build nur alte App-/Release-Binär-Ausgaben, damit kein alter Binary-Fallback als aktueller Build durchgeht. Das Ergebnis ist `.build/Nextcloud-APC-<version>-macos-universal.zip`; SHA-256 und Dateigröße werden ausgegeben. Temporäre Notarisierungsdateien werden entfernt. Ein vorhandenes gleichnamiges finales ZIP wird erst nach allen Prüfungen ersetzt. Das Script erstellt keine Commits oder Tags und veröffentlicht nichts auf GitHub.
+
 In der App **Zugriff anfordern & inventarisieren** wählen und den macOS-Fotodialog bestätigen. Bei verweigertem Zugriff die Freigabe unter **Systemeinstellungen → Datenschutz & Sicherheit → Fotos** ändern und erneut scannen. PhotoKit verwendet hierfür die Zugriffsstufe `readWrite`; der Prototyp führt ausschließlich Leseoperationen aus.
 
 Das Textfeld zeigt das vollständige JSON-Dokument mit `source` und `assets` zum Markieren und Kopieren. Ein erneuter Scan ersetzt das Inventar. Die Source-Konfiguration wird lokal gespeichert; das Asset-Inventar wird weder automatisch gespeichert noch übertragen.
