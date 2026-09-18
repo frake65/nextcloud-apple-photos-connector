@@ -13,6 +13,16 @@ open ".build/Nextcloud APC.app"
 
 Das Skript baut standardmäßig einen Universal-Release für arm64 und x86_64 und signiert das lokale Bundle ad-hoc, ohne Notarisierung. `CONFIGURATION=debug bash build-app.sh` erstellt einen Debug-Build. Achtung: Im Release-Zweig kann das Skript nach einem fehlgeschlagenen Build auf vorhandene ausführbare Dateien zurückfallen; für einen frischen Build deshalb auch die Build-Ausgabe prüfen. Bitte das App-Bundle starten, nicht `swift run`: Es enthält die für den Fotozugriff erforderliche `NSPhotoLibraryUsageDescription`.
 
+Für einen Developer-ID-Release muss das finale Bundle-Signieren ebenfalls über `build-app.sh` laufen, damit das Photos-Entitlement aus `Resources/MacAgent.entitlements` zusammen mit der Hardened Runtime signiert wird:
+
+```sh
+APC_SIGNING_IDENTITY="Developer ID Application: Example Name (TEAMID)" bash build-app.sh
+codesign --verify --deep --strict ".build/Nextcloud APC.app"
+codesign -d --entitlements :- ".build/Nextcloud APC.app"
+```
+
+`APC_SIGNING_IDENTITY` ist durch den tatsächlich installierten Developer-ID-Identitätsnamen zu ersetzen. Ohne diese Variable bleibt das lokale Ad-hoc-Signieren der Standard. Ein nachfolgendes `codesign --force` ohne `--entitlements Resources/MacAgent.entitlements` ersetzt die Codesignatur und kann das Photos-Entitlement entfernen; daher muss die Entitlement-Datei beim letzten Signierschritt angegeben werden. Der Agent verwendet im Quellcode keine AppleScript- oder expliziten Apple-Events-APIs; `com.apple.security.automation.apple-events` wird deshalb nicht angefordert.
+
 In der App **Zugriff anfordern & inventarisieren** wählen und den macOS-Fotodialog bestätigen. Bei verweigertem Zugriff die Freigabe unter **Systemeinstellungen → Datenschutz & Sicherheit → Fotos** ändern und erneut scannen. PhotoKit verwendet hierfür die Zugriffsstufe `readWrite`; der Prototyp führt ausschließlich Leseoperationen aus.
 
 Das Textfeld zeigt das vollständige JSON-Dokument mit `source` und `assets` zum Markieren und Kopieren. Ein erneuter Scan ersetzt das Inventar. Die Source-Konfiguration wird lokal gespeichert; das Asset-Inventar wird weder automatisch gespeichert noch übertragen.

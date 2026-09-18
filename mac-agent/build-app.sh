@@ -30,5 +30,14 @@ for localization in en de fr pt nl es; do
   mkdir -p "$app/Contents/Resources/${localization}.lproj"
   cp "Resources/${localization}.lproj/Localizable.strings" "$app/Contents/Resources/${localization}.lproj/Localizable.strings"
 done
-codesign --force --sign - --entitlements Resources/MacAgent.entitlements "$app"
+signing_identity="${APC_SIGNING_IDENTITY:--}"
+if [[ "$signing_identity" == "-" ]]; then
+  codesign --force --sign - --entitlements Resources/MacAgent.entitlements "$app"
+else
+  codesign --force --options runtime --timestamp \
+    --entitlements Resources/MacAgent.entitlements \
+    --sign "$signing_identity" "$app"
+fi
+codesign --verify --deep --strict "$app"
+codesign -d --entitlements :- "$app"
 printf 'App erstellt: %s\n' "$app"
