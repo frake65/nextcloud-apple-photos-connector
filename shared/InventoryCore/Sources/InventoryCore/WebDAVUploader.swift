@@ -12,20 +12,36 @@ public protocol DAVTransport: Sendable {
 }
 
 /// Redirects are rejected, including same-origin redirects, to preserve conditional PUT semantics.
-public final class NetworkTransport: NSObject, DAVTransport, URLSessionTaskDelegate, Sendable {
+public final class NetworkTransport: NSObject, DAVTransport, URLSessionTaskDelegate, @unchecked Sendable {
     private static let requestTimeout: TimeInterval = 20
+    private var apiSession: URLSession!
+    private var transferSession: URLSession!
+
+    public override init() {
+        let apiConfiguration = URLSessionConfiguration.ephemeral
+        apiConfiguration.httpCookieStorage = nil
+        apiConfiguration.timeoutIntervalForRequest = Self.requestTimeout
+        apiConfiguration.timeoutIntervalForResource = 30
+        let transferConfiguration = URLSessionConfiguration.ephemeral
+        transferConfiguration.httpCookieStorage = nil
+        transferConfiguration.timeoutIntervalForRequest = Self.requestTimeout
+        transferConfiguration.timeoutIntervalForResource = 1800
+        super.init()
+        apiSession = URLSession(configuration: apiConfiguration, delegate: self, delegateQueue: nil)
+        transferSession = URLSession(configuration: transferConfiguration, delegate: self, delegateQueue: nil)
+    }
+
+    deinit {
+        apiSession?.invalidateAndCancel()
+        transferSession?.invalidateAndCancel()
+    }
 
     public func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                            newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
         completionHandler(nil)
     }
     public func send(_ request: URLRequest, file: URL?) async throws -> DAVResponse {
-        let config = URLSessionConfiguration.ephemeral
-        config.httpCookieStorage = nil
-        config.timeoutIntervalForRequest = Self.requestTimeout
-        config.timeoutIntervalForResource = file == nil ? 30 : 1800
-        let session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
-        defer { session.finishTasksAndInvalidate() }
+        let session: URLSession = (file == nil ? apiSession : transferSession)!
         var request = request
         request.timeoutInterval = file == nil ? Self.requestTimeout : 1800
         let result: (Data, URLResponse)
@@ -81,6 +97,7 @@ public actor WebDAVFolderCoordinator {
     private var known: Set<String> = []
     private var inFlight: [String: Task<Void, Error>] = [:]
     public init() {}
+    public func isEnsured(path: String) -> Bool { known.contains(path) }
     public func ensure(path: String, operation: @escaping @Sendable () async throws -> Void) async throws {
         if known.contains(path) { return }
         if let existing = inFlight[path] {
@@ -113,7 +130,8 @@ public struct WebDAVUploader: Sendable {
     let connection: ConnectorConnection
     let transport: any DAVTransport
     let debug: (@Sendable (String) -> Void)?
-    public init(connection: ConnectorConnection, transport: any DAVTransport, debug: (@Sendable (String) -> Void)? = nil) { self.connection = connection; self.transport = transport; self.debug = debug }
+    private let runFolderCoordinator: WebDAVFolderCoordinator
+    public init(connection: ConnectorConnection, transport: any DAVTransport, debug: (@Sendable (String) -> Void)? = nil, folderCoordinator: WebDAVFolderCoordinator = WebDAVFolderCoordinator()) { self.connection = connection; self.transport = transport; self.debug = debug; self.runFolderCoordinator = folderCoordinator }
 
     public static func filename(_ original: String, assetId: String, attempt: Int) throws -> String {
         guard !original.isEmpty, ![".", ".."].contains(original),
@@ -132,6 +150,7 @@ public struct WebDAVUploader: Sendable {
     }
 
     public func uploadWithTarget(file: URL, filename: String, assetId: String, captureDate: Date, targets: any UploadTargetProvider, targetRoot: String = "Photos/Apple Photos Connector", folderCoordinator: WebDAVFolderCoordinator? = nil) async throws -> UploadTarget {
+        let folderCoordinator = folderCoordinator ?? runFolderCoordinator
         let identity = try ContentIdentity.read(file)
         let root = ["remote.php", "dav", "files", connection.user]
         let rootComponents = try Self.safeComponents(targetRoot)
@@ -181,7 +200,20 @@ public struct WebDAVUploader: Sendable {
             request.setValue(String(Int(captureDate.timeIntervalSince1970)), forHTTPHeaderField: "X-OC-MTime")
             debug?("Request PUT · path=\(request.url?.path ?? "") · fileBytes=\(identity.bytes)")
             debug?("upload.put.start")
-            let response = try await transport.send(request, file: file)
+            let putStarted = ContinuousClock.now
+            debug?("APC IMPORT webdav.put START bytes=\(identity.bytes)")
+            let response: DAVResponse
+            do {
+                response = try await transport.send(request, file: file)
+                debug?("APC IMPORT webdav.put OK status=\(response.status) elapsed=\(putStarted.duration(to: .now)) bytes=\(identity.bytes)")
+            } catch let error {
+                let detail: String
+                if let urlError = error as? URLError { detail = "urlError=\(urlError.code.rawValue)" }
+                else if case let UploadError.http(status) = error { detail = "httpStatus=\(status)" }
+                else { detail = "error=\(String(describing: type(of: error)))" }
+                debug?("APC IMPORT webdav.put ERROR elapsed=\(putStarted.duration(to: .now)) \(detail)")
+                throw error
+            }
             debug?("upload.put.status=\(response.status)")
             debug?("Response PUT · status=\(response.status) · responseBytes=\(response.data.count)")
             if response.status == 201 { return target }
@@ -193,12 +225,29 @@ public struct WebDAVUploader: Sendable {
 
     private func ensureCollection(root: [String], components: [String], coordinator: WebDAVFolderCoordinator?) async throws {
         let path = (root + components).joined(separator: "/")
+        if let coordinator, await coordinator.isEnsured(path: path) {
+            debug?("APC IMPORT webdav.mkcol SKIP pathDepth=\(components.count) reason=alreadyEnsured")
+            return
+        }
         let operation: @Sendable () async throws -> Void = { [connection, transport, debug] in
             for attempt in 0..<3 {
                 do {
                     let request = connection.request(path: root + components, method: "MKCOL")
                     debug?("Request MKCOL · path=\(request.url?.path ?? "")")
-                    let response = try await transport.send(request, file: nil)
+                    let mkcolStarted = ContinuousClock.now
+                    debug?("APC IMPORT webdav.mkcol START pathDepth=\(components.count)")
+                    let response: DAVResponse
+                    do {
+                        response = try await transport.send(request, file: nil)
+                        debug?("APC IMPORT webdav.mkcol OK status=\(response.status) elapsed=\(mkcolStarted.duration(to: .now))")
+                    } catch let error {
+                        let detail: String
+                        if let urlError = error as? URLError { detail = "urlError=\(urlError.code.rawValue)" }
+                        else if case let UploadError.http(status) = error { detail = "httpStatus=\(status)" }
+                        else { detail = "error=\(String(describing: type(of: error)))" }
+                        debug?("APC IMPORT webdav.mkcol ERROR elapsed=\(mkcolStarted.duration(to: .now)) \(detail)")
+                        throw error
+                    }
                     debug?("Response MKCOL · status=\(response.status) · responseBytes=\(response.data.count)")
                     if response.status == 423 {
                         if attempt < 2 { try await Task.sleep(for: .milliseconds(100 * (attempt + 1))); continue }
