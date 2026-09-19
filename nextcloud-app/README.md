@@ -4,7 +4,7 @@ App-ID: `apple_photos_connector`, Version 0.8.6 laut `appinfo/info.xml`. PHP ab 
 
 ## Frische Serverinstallation
 
-Voraussetzung ist ein vollständiger Neustart des serverseitigen Connector-Zustands: keine bisherige Connector-Installation, keine übernommenen Connector-Tabellen, Import-Historien, Upload-Reservierungen oder Album-Zuordnungen. Frühere Entwicklungsstände werden nicht migriert. Eine frische Nextcloud-Testinstanz erfüllt diese Voraussetzung. Dies beschreibt den Ausgangszustand; es ist keine Anleitung zum Löschen vorhandener Nextcloud-Dateien.
+Voraussetzung für die beschriebenen Tests ist eine frische Nextcloud-Testinstanz ohne APC-Daten. Die additive Content-Identity-Migration unterstützt bestehende Installationen ab dem APC-Basisschema, übernimmt dabei aber ausschließlich bestätigte APC-Uploads; sie hasht keine Altdateien und ändert kein Inventar-Matching. Dies beschreibt den Test-Ausgangszustand; es ist keine Anleitung zum Löschen vorhandener Nextcloud-Dateien.
 
 Den Inhalt dieses Verzeichnisses unter `<nextcloud>/custom_apps/apple_photos_connector/` ablegen (der installierte Ordner muss der App-ID entsprechen), anschließend als Nextcloud-Webserverbenutzer ausführen:
 
@@ -36,6 +36,7 @@ Curl fragt das App-Passwort interaktiv ab. Sources und Assets werden durch den a
 
 - `lib/Migration`: persistente Tabellen und Indizes; Source-UUID pro Benutzer eindeutig.
 - `lib/Db/InventoryRepository`: Nextcloud-QueryBuilder und Transaktionen.
+- `lib/Db/ContentIdentityRepository`: benutzergebundener Index bestätigter SHA-256-/Bytegrößen-Nachweise; nicht in `new`/`known` eingebunden.
 - `lib/Service/AssetIdentity`: bevorzugte Cloud-Identität und vorläufiger lokaler Fallback.
 - `lib/Db/ImportRun`: zufällige Run-UUID und initialer Audit-Datensatz.
 - `lib/Service/InventoryValidator`: Validierung vor Source-/Asset-Änderungen.
@@ -44,7 +45,7 @@ Curl fragt das App-Passwort interaktiv ab. Sources und Assets werden durch den a
 - `lib/Service/UploadService`: benutzergebundene Upload-Bestätigung und atomare Zähler.
 - `lib/Service/UploadedFileLocator`: tatsächliche Datei-ID aus dem Benutzerdateisystem.
 
-Für den Prototyp wird das bestehende Inventar einer Source einmal pro Lauf gelesen und im Speicher indiziert. SHA-256 dient ausschließlich der Verifikation reservierter Uploads, nicht der Deduplizierung. Keine Vergleiche zwischen Sources und keine automatischen Löschungen. Große Sources benötigen entsprechend Speicher; eine spätere indexierte Identitätssuche kann im Repository ergänzt werden.
+Für den Prototyp wird das bestehende Inventar einer Source einmal pro Lauf gelesen und im Speicher indiziert. SHA-256 verifiziert reservierte Uploads und wird nach erfolgreicher Bestätigung zusätzlich als benutzerspezifische Content Identity gespeichert. Diese additive Tabelle wird noch nicht für Inventar- oder `new`/`known`-Matching verwendet. Gleiche Bytes führen weder zum Zusammenführen von Assets noch zu Löschungen.
 
 Upload-Recovery verwendet dauerhaft gespeicherte Ziele. `POST /api/v1/uploads/prepare` reserviert bzw. prüft den Zielpfad anhand Byteanzahl und SHA-256. Derselbe Asset-Datensatz behält seinen Pfad über Runs und Client-Neustarts. Bestehende fremde Dateien werden übersprungen; unklare Prüfergebnisse führen zum Abbruch statt zu einem weiteren Dateinamen. Die Bestätigung prüft die tatsächlichen Bytes erneut. Details und Schemas im [Upload-Protokoll](../protocol/uploads.md).
 
@@ -119,6 +120,39 @@ Die Source muss vor dem Album-Inventar registriert sein. Der Abgleich nutzt die 
 
 ## Aktuelles Datenmodell und Fresh-Install-Grenze
 
-Die App 0.8.1 startet mit einer einzigen vollständigen Fresh-Install-Migration. Historische APC-Migrationen und Backfills gehören bewusst nicht zum Clean-Cut-Schema; eine bestehende APC-Installation wird deshalb nicht automatisch umgebaut.
+Das Basisschema wird durch die Fresh-Install-Migration angelegt. Die additive Content-Identity-Migration ergänzt zwei Tabellen und übernimmt ausschließlich SHA-256-/Bytegrößen-Werte von APC-Upload-Targets, die über ein `uploaded`-Ticket bestätigt wurden. Der Backfill liest keine Nextcloud-Dateien erneut. Reservierungen, fehlgeschlagene und nicht bestätigte Ziele werden ausgelassen.
 
-Das Datenmodell umfasst Sources, Assets, Import-Runs, Upload-Aufträge, mehrere historisierte Upload-Ziele pro Asset, Album-Inventar, Mitgliedschaften und Photos-Zuordnungen. `current_upload_target_id` ist die alleinige aktuelle Dateizuordnung. Ein Retargeting darf nur bei serverseitig erlaubtem Wiederherstellungsfall erfolgen; das alte Ziel bleibt als Historie erhalten. `retarget_allowed` und `base_target_id` werden ausschließlich aus dem Serverzustand gesetzt, nicht aus Clientdaten.
+Das Datenmodell umfasst Sources, Assets, Import-Runs, Upload-Aufträge, mehrere historisierte Upload-Ziele pro Asset, Album-Inventar, Mitgliedschaften, Photos-Zuordnungen und den benutzerspezifischen Content-Index samt Target-Belegen. `current_upload_target_id` ist die alleinige aktuelle Dateizuordnung. Ein Retargeting darf nur bei serverseitig erlaubtem Wiederherstellungsfall erfolgen; das alte Ziel bleibt als Historie erhalten. `retarget_allowed` und `base_target_id` werden ausschließlich aus dem Serverzustand gesetzt, nicht aus Clientdaten. Content-Zeilen sind keine Asset-Zeilen und verändern deren Identitäten nicht.
+
+## Phase 2/3 content identity details
+
+The additive migration is `Version008600Date20260918000000.php`; there is no
+`Version008700` migration in this release. It creates `apc_content_identities`
+and `apc_content_targets`. The content index is unique by
+`user_id + sha256 + byte_size` and remains separate from `new`/`known` asset
+matching. The server app version is 0.8.6.
+
+`uploads/prepare` may return `contentAlreadyPresent` for a confirmed target.
+The client then performs no PUT and no Complete, but can still run album sync.
+This does not alter asset identities or merge equal-byte assets. Only confirmed
+APC upload targets are backfilled; reserved, failed, incomplete, orphaned, and
+deleted targets are excluded, and files are not re-hashed.
+
+## Album semantics
+
+`/albums/inventory` receives source-scoped album metadata and memberships,
+including empty albums and assets belonging to several albums.
+`/albums/sync` operates only on albums selected by the client. It restores every
+membership whose asset is imported, skips non-imported members, performs no
+transitive selection, and is idempotent. Known assets and
+`contentAlreadyPresent` results can recover memberships without a new file
+upload. The server never deletes an album membership merely because a source
+omitted it.
+
+## Packaging safety
+
+`build-package.sh` sets `COPYFILE_DISABLE=1`, excludes AppleDouble metadata, and
+fails validation if an archive contains `._*` or `.DS_Store`. This is required
+because an earlier `._AlbumController.php` was interpreted as PHP source by
+Nextcloud. The package contains runtime code only; tests and build artifacts are
+excluded.

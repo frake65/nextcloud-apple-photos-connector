@@ -1,44 +1,422 @@
 // !$*UTF8*$!
 {
 	archiveVersion = 1;
-	classes = {};
-	objectVersion = 56;
+	classes = {
+	};
+	objectVersion = 60;
 	objects = {
-		A10000000000000000000001 /* Project object */ = {isa = PBXProject; attributes = {BuildIndependentTargetsInParallel = 1; LastUpgradeCheck = 2700; TargetAttributes = {A10000000000000000000003 = {CreatedOnToolsVersion = 27.0; }; }; }; buildConfigurationList = A10000000000000000000011; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base, de); mainGroup = A10000000000000000000002; packageReferences = (A10000000000000000000010 /* XCLocalSwiftPackageReference "../shared/InventoryCore" */, ); productRefGroup = A10000000000000000000005; projectDirPath = ""; projectRoot = ""; targets = (A10000000000000000000003 /* ApplePhotosConnector */, ); };
-		A10000000000000000000002 /* Main Group */ = {isa = PBXGroup; children = (A10000000000000000000004 /* Sources */, A10000000000000000000006 /* Products */, A10000000000000000000007 /* Resources */, ); sourceTree = "<group>"; };
-		A10000000000000000000003 /* ApplePhotosConnector */ = {isa = PBXNativeTarget; buildConfigurationList = A10000000000000000000012; buildPhases = (A10000000000000000000013 /* Sources */, A10000000000000000000014 /* Frameworks */, A10000000000000000000015 /* Resources */, ); buildRules = (); dependencies = (); name = ApplePhotosConnector; packageProductDependencies = (A10000000000000000000016 /* InventoryCore */, ); productName = "Nextcloud APC"; productReference = A10000000000000000000008 /* Nextcloud APC.app */; productType = "com.apple.product-type.application"; };
-		A10000000000000000000004 /* Sources */ = {isa = PBXGroup; children = (A10000000000000000000020 /* App */, A10000000000000000000021 /* Models */, A10000000000000000000022 /* PhotosAdapter */, ); path = Sources; sourceTree = "<group>"; };
-		A10000000000000000000005 /* Products */ = {isa = PBXGroup; children = (A10000000000000000000008 /* Nextcloud APC.app */, ); name = Products; sourceTree = "<group>"; };
-		A10000000000000000000006 /* Local Package Products */ = {isa = PBXGroup; children = (); name = "Local Package Products"; sourceTree = "<group>"; };
-		A10000000000000000000007 /* Resources */ = {isa = PBXGroup; children = (A10000000000000000000023 /* Info.plist */, ); path = Resources; sourceTree = "<group>"; };
-		A10000000000000000000008 /* Nextcloud APC.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Nextcloud APC.app"; sourceTree = BUILT_PRODUCTS_DIR; };
-		A10000000000000000000009 /* XCBuildConfiguration list */ = {isa = XCConfigurationList; buildConfigurations = (A10000000000000000000017, A10000000000000000000018, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
-		A10000000000000000000010 /* XCLocalSwiftPackageReference "../shared/InventoryCore" */ = {isa = XCLocalSwiftPackageReference; relativePath = ../shared/InventoryCore; };
-		A10000000000000000000011 /* Project configuration list */ = {isa = XCConfigurationList; buildConfigurations = (A10000000000000000000019, A1000000000000000000001A, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
-		A10000000000000000000012 /* Target configuration list */ = {isa = XCConfigurationList; buildConfigurations = (A1000000000000000000001B, A1000000000000000000001C, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
-		A10000000000000000000013 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000024, A10000000000000000000025, A10000000000000000000026, A10000000000000000000027, ); runOnlyForDeploymentPostprocessing = 0; };
-		A10000000000000000000014 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000028 /* InventoryCore in Frameworks */, ); runOnlyForDeploymentPostprocessing = 0; };
-		A10000000000000000000015 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
-		A10000000000000000000016 /* InventoryCore */ = {isa = XCSwiftPackageProductDependency; package = A10000000000000000000010; productName = InventoryCore; };
-		A10000000000000000000017 = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_STYLE = Automatic; IPHONEOS_DEPLOYMENT_TARGET = 17.0; PRODUCT_BUNDLE_IDENTIFIER = de.applephotosconnector.iosagent; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 6.0; }; name = Debug; };
-		A10000000000000000000018 = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_STYLE = Automatic; IPHONEOS_DEPLOYMENT_TARGET = 17.0; PRODUCT_BUNDLE_IDENTIFIER = de.applephotosconnector.iosagent; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 6.0; }; name = Release; };
-		A10000000000000000000019 = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; }; name = Debug; };
-		A1000000000000000000001A = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; }; name = Release; };
-		A1000000000000000000001B = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_FILE = Resources/Info.plist; INFOPLIST_KEY_CFBundleDisplayName = "Nextcloud APC"; INFOPLIST_KEY_LSApplicationCategoryType = public.app-category.photography; IPHONEOS_DEPLOYMENT_TARGET = 17.0; PRODUCT_BUNDLE_IDENTIFIER = de.applephotosconnector.iosagent; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Debug; };
-		A1000000000000000000001C = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_FILE = Resources/Info.plist; INFOPLIST_KEY_CFBundleDisplayName = "Nextcloud APC"; INFOPLIST_KEY_LSApplicationCategoryType = public.app-category.photography; IPHONEOS_DEPLOYMENT_TARGET = 17.0; PRODUCT_BUNDLE_IDENTIFIER = de.applephotosconnector.iosagent; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Release; };
-		A10000000000000000000020 /* App group */ = {isa = PBXGroup; children = (A10000000000000000000029, A1000000000000000000002A, ); path = App; sourceTree = "<group>"; };
-		A10000000000000000000021 /* Models group */ = {isa = PBXGroup; children = (A1000000000000000000002B, ); path = Models; sourceTree = "<group>"; };
-		A10000000000000000000022 /* Adapter group */ = {isa = PBXGroup; children = (A1000000000000000000002C, ); path = PhotosAdapter; sourceTree = "<group>"; };
+
+/* Begin PBXBuildFile section */
+		A10000000000000000000024 /* ApplePhotosConnectorApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000029 /* ApplePhotosConnectorApp.swift */; };
+		A10000000000000000000025 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000002A /* ContentView.swift */; };
+		A10000000000000000000026 /* GalleryModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000002B /* GalleryModels.swift */; };
+		A10000000000000000000027 /* PhotoLibraryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000002C /* PhotoLibraryModel.swift */; };
+		A10000000000000000000028 /* InventoryCore in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000016 /* InventoryCore */; };
+		A10000000000000000000030 /* ConnectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000035 /* ConnectionView.swift */; };
+		A10000000000000000000031 /* IOSConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000036 /* IOSConnection.swift */; };
+		A10000000000000000000032 /* InventoryCheck.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000037 /* InventoryCheck.swift */; };
+		A10000000000000000000041 /* IOSCoreFlowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000040 /* IOSCoreFlowTests.swift */; };
+		A10000000000000000000042 /* InventoryCore in Frameworks */ = {isa = PBXBuildFile; productRef = A1000000000000000000004F /* InventoryCore */; };
+		A10000000000000000000050 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000051 /* Assets.xcassets */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A1000000000000000000004D /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A10000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A10000000000000000000003;
+			remoteInfo = ApplePhotosConnector;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		A10000000000000000000008 /* ApplePhotosConnector.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ApplePhotosConnector.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000000000000000000023 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		A10000000000000000000024 /* ApplePhotosConnectorApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000029; };
-		A10000000000000000000025 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000002A; };
-		A10000000000000000000026 /* GalleryModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000002B; };
-		A10000000000000000000027 /* PhotoLibraryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000002C; };
-		A10000000000000000000028 /* InventoryCore in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000016; };
+		A10000000000000000000051 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A10000000000000000000029 /* ApplePhotosConnectorApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplePhotosConnectorApp.swift; sourceTree = "<group>"; };
 		A1000000000000000000002A /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A1000000000000000000002B /* GalleryModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryModels.swift; sourceTree = "<group>"; };
 		A1000000000000000000002C /* PhotoLibraryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoLibraryModel.swift; sourceTree = "<group>"; };
+		A10000000000000000000035 /* ConnectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionView.swift; sourceTree = "<group>"; };
+		A10000000000000000000036 /* IOSConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSConnection.swift; sourceTree = "<group>"; };
+		A10000000000000000000037 /* InventoryCheck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InventoryCheck.swift; sourceTree = "<group>"; };
+		A10000000000000000000040 /* IOSCoreFlowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSCoreFlowTests.swift; sourceTree = "<group>"; };
+		A10000000000000000000043 /* ApplePhotosConnectorTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ApplePhotosConnectorTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A10000000000000000000014 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000028 /* InventoryCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000000000000000000048 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000042 /* InventoryCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A10000000000000000000002 = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000004 /* Sources */,
+				A10000000000000000000006 /* Local Package Products */,
+				A10000000000000000000007 /* Resources */,
+				A10000000000000000000005 /* Products */,
+				A10000000000000000000045 /* Tests/ApplePhotosConnectorTests */,
+			);
+			sourceTree = "<group>";
+		};
+		A10000000000000000000004 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000020 /* App */,
+				A10000000000000000000021 /* Models */,
+				A10000000000000000000022 /* PhotosAdapter */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		A10000000000000000000005 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000008 /* ApplePhotosConnector.app */,
+				A10000000000000000000043 /* ApplePhotosConnectorTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A10000000000000000000006 /* Local Package Products */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = "Local Package Products";
+			sourceTree = "<group>";
+		};
+		A10000000000000000000007 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000023 /* Info.plist */,
+				A10000000000000000000051 /* Assets.xcassets */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		A10000000000000000000020 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000029 /* ApplePhotosConnectorApp.swift */,
+				A1000000000000000000002A /* ContentView.swift */,
+				A10000000000000000000035 /* ConnectionView.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		A10000000000000000000021 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				A1000000000000000000002B /* GalleryModels.swift */,
+				A10000000000000000000036 /* IOSConnection.swift */,
+				A10000000000000000000037 /* InventoryCheck.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		A10000000000000000000022 /* PhotosAdapter */ = {
+			isa = PBXGroup;
+			children = (
+				A1000000000000000000002C /* PhotoLibraryModel.swift */,
+			);
+			path = PhotosAdapter;
+			sourceTree = "<group>";
+		};
+		A10000000000000000000045 /* Tests/ApplePhotosConnectorTests */ = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000040 /* IOSCoreFlowTests.swift */,
+			);
+			path = Tests/ApplePhotosConnectorTests;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A10000000000000000000003 /* ApplePhotosConnector */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A10000000000000000000012 /* Build configuration list for PBXNativeTarget "ApplePhotosConnector" */;
+			buildPhases = (
+				A10000000000000000000013 /* Sources */,
+				A10000000000000000000014 /* Frameworks */,
+				A10000000000000000000015 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ApplePhotosConnector;
+			packageProductDependencies = (
+				A10000000000000000000016 /* InventoryCore */,
+			);
+			productName = "Nextcloud APC";
+			productReference = A10000000000000000000008 /* ApplePhotosConnector.app */;
+			productType = "com.apple.product-type.application";
+		};
+		A10000000000000000000046 /* ApplePhotosConnectorTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A1000000000000000000004A /* Build configuration list for PBXNativeTarget "ApplePhotosConnectorTests" */;
+			buildPhases = (
+				A10000000000000000000047 /* Sources */,
+				A10000000000000000000048 /* Frameworks */,
+				A10000000000000000000049 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A1000000000000000000004E /* PBXTargetDependency */,
+			);
+			name = ApplePhotosConnectorTests;
+			packageProductDependencies = (
+				A1000000000000000000004F /* InventoryCore */,
+			);
+			productName = ApplePhotosConnectorTests;
+			productReference = A10000000000000000000043 /* ApplePhotosConnectorTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A10000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastUpgradeCheck = 2700;
+				TargetAttributes = {
+					A10000000000000000000003 = {
+						CreatedOnToolsVersion = 27.0;
+					};
+				};
+			};
+			buildConfigurationList = A10000000000000000000011 /* Build configuration list for PBXProject "ApplePhotosConnector" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+				de,
+			);
+			mainGroup = A10000000000000000000002;
+			packageReferences = (
+				A10000000000000000000010 /* XCLocalSwiftPackageReference "../shared/InventoryCore" */,
+			);
+			productRefGroup = A10000000000000000000005 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A10000000000000000000003 /* ApplePhotosConnector */,
+				A10000000000000000000046 /* ApplePhotosConnectorTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A10000000000000000000015 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000050 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000000000000000000049 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A10000000000000000000013 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000024 /* ApplePhotosConnectorApp.swift in Sources */,
+				A10000000000000000000025 /* ContentView.swift in Sources */,
+				A10000000000000000000026 /* GalleryModels.swift in Sources */,
+				A10000000000000000000027 /* PhotoLibraryModel.swift in Sources */,
+				A10000000000000000000030 /* ConnectionView.swift in Sources */,
+				A10000000000000000000031 /* IOSConnection.swift in Sources */,
+				A10000000000000000000032 /* InventoryCheck.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000000000000000000047 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000041 /* IOSCoreFlowTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A1000000000000000000004E /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A10000000000000000000003 /* ApplePhotosConnector */;
+			targetProxy = A1000000000000000000004D /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		A10000000000000000000019 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+			};
+			name = Debug;
+		};
+		A1000000000000000000001A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+			};
+			name = Release;
+		};
+		A1000000000000000000001B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				DEVELOPMENT_TEAM = Q3PGXQ5B45;
+				ENABLE_TESTABILITY = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Resources/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Nextcloud APC";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Nextcloud APC benötigt Zugriff auf deine Fotomediathek, damit du Fotos, Videos und Alben für die Übernahme nach Nextcloud auswählen kannst.";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = de.applephotosconnector.iosagent;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A1000000000000000000001C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				DEVELOPMENT_TEAM = Q3PGXQ5B45;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Resources/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Nextcloud APC";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Nextcloud APC benötigt Zugriff auf deine Fotomediathek, damit du Fotos, Videos und Alben für die Übernahme nach Nextcloud auswählen kannst.";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = de.applephotosconnector.iosagent;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		A1000000000000000000004B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = de.applephotosconnector.iosagent.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ApplePhotosConnector.app/ApplePhotosConnector";
+			};
+			name = Debug;
+		};
+		A1000000000000000000004C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = de.applephotosconnector.iosagent.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ApplePhotosConnector.app/ApplePhotosConnector";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A10000000000000000000011 /* Build configuration list for PBXProject "ApplePhotosConnector" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000019 /* Debug */,
+				A1000000000000000000001A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A10000000000000000000012 /* Build configuration list for PBXNativeTarget "ApplePhotosConnector" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A1000000000000000000001B /* Debug */,
+				A1000000000000000000001C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A1000000000000000000004A /* Build configuration list for PBXNativeTarget "ApplePhotosConnectorTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A1000000000000000000004B /* Debug */,
+				A1000000000000000000004C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		A10000000000000000000010 /* XCLocalSwiftPackageReference "../shared/InventoryCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../shared/InventoryCore;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A10000000000000000000016 /* InventoryCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A10000000000000000000010 /* XCLocalSwiftPackageReference "../shared/InventoryCore" */;
+			productName = InventoryCore;
+		};
+		A1000000000000000000004F /* InventoryCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A10000000000000000000010 /* XCLocalSwiftPackageReference "../shared/InventoryCore" */;
+			productName = InventoryCore;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
-	rootObject = A10000000000000000000001;
+	rootObject = A10000000000000000000001 /* Project object */;
 }

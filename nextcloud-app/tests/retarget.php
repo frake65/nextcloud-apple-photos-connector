@@ -211,7 +211,10 @@ function retargetRaceScenario(): void {
         $pdo=new PDO('sqlite:'.$database);$pdo->exec('PRAGMA busy_timeout=5000');
         $schema=new TestHarness\Schema();
         (new OCA\ApplePhotosConnector\Migration\Version008000Date20260910000000())->changeSchema(new class implements OCP\Migration\IOutput {},fn()=>$schema,[]);
+        $contentMigration = new OCA\ApplePhotosConnector\Migration\Version008600Date20260918000000(new TestHarness\Connection($pdo));
+        $contentMigration->changeSchema(new class implements OCP\Migration\IOutput {},fn()=>$schema,[]);
         $schema->apply($pdo);
+        $contentMigration->postSchemaChange(new class implements OCP\Migration\IOutput {},fn()=>$schema,[]);
         $f=new RetargetFixture($pdo);$f->missing();$runs=[$f->scan(),$f->scan()];
         $pdo->exec('CREATE TABLE test_current_switches (asset_id INTEGER)');
         $pdo->exec('CREATE TRIGGER test_current_switch AFTER UPDATE OF current_upload_target_id ON apc_assets WHEN NEW.current_upload_target_id IS NOT OLD.current_upload_target_id BEGIN INSERT INTO test_current_switches VALUES (NEW.id); END');

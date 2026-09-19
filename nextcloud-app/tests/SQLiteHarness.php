@@ -78,7 +78,7 @@ namespace TestHarness {
         private string $operation = '';
         private string $table = '';
         private array $parameters = [], $values = [], $where = [], $joins = [];
-        private string $columns = '*';
+        private string $columns = '*', $order = '';
         public function __construct(private \PDO $pdo) {}
         public function select(string ...$columns): self { $this->operation = 'select'; $this->columns=implode(',', $columns) ?: '*'; return $this; }
         public function from(string $table, ?string $alias = null): self { $this->table = $table . ($alias ? ' ' . $alias : ''); return $this; }
@@ -87,6 +87,7 @@ namespace TestHarness {
         public function values(array $values): self { $this->values = $values; return $this; }
         public function set(string $key, string $value): self { $this->values[$key] = $value; return $this; }
         public function where(string ...$where): self { $this->where = $where; return $this; }
+        public function orderBy(string $column, string $direction = 'ASC'): self { $this->order = " ORDER BY $column $direction"; return $this; }
         public function expr(): self { return $this; }
         public function orX(string ...$where): string { return '(' . implode(' OR ', $where) . ')'; }
         public function eq(string $key, string $parameter): string { return "$key = $parameter"; }
@@ -105,6 +106,7 @@ namespace TestHarness {
                 'update' => 'UPDATE ' . $this->table . ' SET ' . implode(',', array_map(fn ($key) => "$key = " . $this->values[$key], array_keys($this->values))),
             };
             if ($this->where) { $sql .= ' WHERE ' . implode(' AND ', $this->where); }
+            $sql .= $this->order;
             $statement = $this->pdo->prepare($sql);
             $statement->execute($this->parameters);
             return $statement;

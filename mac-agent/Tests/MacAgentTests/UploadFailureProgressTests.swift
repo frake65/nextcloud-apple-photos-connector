@@ -122,8 +122,10 @@ final class UploadFailureProgressTests: XCTestCase {
     }
     func testUnknownInventoryFailureDoesNotClaimFileTransferFailed() {
         let failure = UploadFailure.capture(UploadError.diagnostic("inventory unavailable"), stage: .inventory)
-        XCTAssertEqual(failure.userMessage, L10n.text("inventoryFailureUnknown", language: "en"))
-        XCTAssertNotEqual(failure.userMessage, L10n.text("uploadFailureUnknown", language: "en"))
+        XCTAssertEqual(failure.stage, .inventory)
+        XCTAssertEqual(failure.category, .unknown)
+        XCTAssertEqual(failure.userMessage, L10n.text("inventoryFailureUnknown"))
+        XCTAssertNotEqual(failure.userMessage, L10n.text("uploadFailureUnknown"))
     }
     func testExportAndTimeoutFailuresReachFinalRows() async throws {
         for (mode, category, stage) in [(Mode.export, UploadFailure.Category.source, UploadFailure.Stage.export), (.timeout, .timeout, .put), (.prepare, .notFound, .target)] {

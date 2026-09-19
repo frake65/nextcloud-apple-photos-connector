@@ -7,15 +7,19 @@ function freshDatabase(): PDO {
     $schema = new TestHarness\Schema();
     (new OCA\ApplePhotosConnector\Migration\Version008000Date20260910000000())->changeSchema(
         new class implements OCP\Migration\IOutput {}, fn () => $schema, []);
+    $db = new TestHarness\Connection($pdo);
+    $contentMigration = new OCA\ApplePhotosConnector\Migration\Version008600Date20260918000000($db);
+    $contentMigration->changeSchema(new class implements OCP\Migration\IOutput {}, fn () => $schema, []);
     $schema->apply($pdo);
+    $contentMigration->postSchemaChange(new class implements OCP\Migration\IOutput {}, fn () => $schema, []);
     return $pdo;
 }
 
 function freshInstallScenarios(): void {
     $pdo = freshDatabase();
-    check(count(glob(__DIR__ . '/../lib/Migration/*.php')) === 1, 'F1: one fresh 0.8.0 initial migration, no historical chain');
+    check(count(glob(__DIR__ . '/../lib/Migration/*.php')) === 2, 'F1: fresh-install base schema plus one additive content-identity migration');
     $tables = $pdo->query("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'apc_%' ORDER BY name")->fetchAll(PDO::FETCH_COLUMN);
-    check($tables === ['apc_album_memberships','apc_assets','apc_import_runs','apc_nextcloud_album_map','apc_source_albums','apc_sources','apc_upload_targets','apc_uploads'], 'F2: all eight tables created from empty schema');
+    check($tables === ['apc_album_memberships','apc_assets','apc_content_identities','apc_content_targets','apc_import_runs','apc_nextcloud_album_map','apc_source_albums','apc_sources','apc_upload_targets','apc_uploads'], 'F2: ten tables created from empty schema including additive content identity');
     $columns = array_column($pdo->query('PRAGMA table_info(apc_assets)')->fetchAll(PDO::FETCH_ASSOC), null, 'name');
     check(isset($columns['current_upload_target_id']) && $columns['current_upload_target_id']['notnull'] === 0, 'F3: current_upload_target_id nullable');
     $pdo->exec("INSERT INTO apc_assets (user_id,source_id,local_identifier,media_type,first_seen_at,last_seen_at) VALUES ('u','s','a','image','now','now'),('v','s','b','image','now','now'),('u','t','c','image','now','now'),('u','s','d','image','now','now')");

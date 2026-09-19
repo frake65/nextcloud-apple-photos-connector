@@ -70,7 +70,7 @@ actor UploadCoordinator {
         }
     }
     enum SingleUploadResult: Sendable {
-        case success(path: String, filename: String)
+        case success(path: String, filename: String, contentAlreadyPresent: Bool)
         case failed(filename: String?, error: UploadFailure)
         case cancelled
     }
@@ -220,10 +220,10 @@ actor UploadCoordinator {
                                   connection: connection, debug: debug)
             try await gate.checkpoint()
             try Task.checkCancellation()
-            let path = try await WebDAVUploader(connection: connection, transport: UploadDisplayTransport(base: transport), debug: debug)
-                .upload(file: resource.url, filename: filename, assetId: entry.upload!.assetId, captureDate: resolution.date, targets: targets, targetRoot: baseFolder, folderCoordinator: folderCoordinator)
+            let prepared = try await WebDAVUploader(connection: connection, transport: UploadDisplayTransport(base: transport), debug: debug)
+                .uploadWithTarget(file: resource.url, filename: filename, assetId: entry.upload!.assetId, captureDate: resolution.date, targets: targets, targetRoot: baseFolder, folderCoordinator: folderCoordinator)
             debug?("upload.put.success")
-            return .success(path: path, filename: filename)
+            return .success(path: prepared.path, filename: filename, contentAlreadyPresent: prepared.state == "contentAlreadyPresent")
         } catch is CancellationError {
             debug?("upload.put.cancelled")
             return .cancelled
@@ -383,7 +383,18 @@ actor UploadCoordinator {
                 case .cancelled:
                     group.cancelAll()
                     break
-                case let .success(path, filename):
+                case let .success(path, filename, contentAlreadyPresent):
+                    if contentAlreadyPresent {
+                        let mediaType = assets[outcome.job.index]["mediaType"] as? String
+                        if mediaType == "image" { alreadyInCloudImages += 1 }
+                        else if mediaType == "video" { alreadyInCloudVideos += 1 }
+                        else { alreadyInCloudOther += 1 }
+                        completedUploads += 1
+                        await displayState.updateStatus(index: outcome.job.index, status: .alreadyInCloud, target: path)
+                        await displayState.complete()
+                        progress?(await displayState.snapshot(filename: filename))
+                        continue
+                    }
                     let receipt = Receipt(server: connection.base.absoluteString, user: connection.user,
                         sourceId: sourceId.lowercased(), runId: reply.runId, uploadId: ticket.uploadId, path: path)
                     var completionStage: UploadFailure.Stage = .receipt

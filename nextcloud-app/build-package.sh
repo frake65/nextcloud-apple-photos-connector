@@ -19,6 +19,10 @@ archive="$output_dir/apple_photos_connector-0.8.6.tar.gz"
 if tar --version | grep -q bsdtar; then
     COPYFILE_DISABLE=1 tar --no-xattrs --no-acls --no-fflags -czf "$archive" -C "$stage" apple_photos_connector
 else
-    tar -czf "$archive" -C "$stage" apple_photos_connector
+    COPYFILE_DISABLE=1 tar -czf "$archive" -C "$stage" apple_photos_connector
+fi
+if tar -tzf "$archive" | grep -E '(^|/)(\._[^/]*|\.DS_Store)$' >/dev/null; then
+    echo 'Refusing package containing AppleDouble or .DS_Store entries' >&2
+    exit 1
 fi
 printf 'Created: %s\n' "$archive"

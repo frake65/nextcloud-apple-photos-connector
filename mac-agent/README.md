@@ -142,3 +142,14 @@ Foto-/Video-Upload und Album-Abgleich sind separate Vorgänge. Der Album-Scan se
 Bei einem normalen Importlauf prüft der Server für die ausgewählten Medien, ob die zugeordnete Nextcloud-Datei vorhanden ist: vorhanden bedeutet `known`, fehlend bedeutet `new` mit Upload-Ticket. Die erneute Übertragung setzt ein weiterhin verfügbares Original in Apple Fotos voraus. Allein das Fehlen einer Datei startet keinen Import. Die frühere Einstellung wurde entfernt; alte gespeicherte Preference-Werte werden ignoriert. Es findet keine allgemeine Inhaltsprüfung aller bereits importierten Dateien statt.
 
 Die Oberfläche ist für Deutsch, Englisch, Französisch, Portugiesisch, Niederländisch und Spanisch lokalisiert; Englisch ist Fallback. Tests unter `Tests/InventoryCoreTests` behandeln unter anderem JSON, Login, Zugangsdaten, Importumfang, Fortschritt, Parallelität und Logging.
+
+## Current shared import and album behavior
+
+The macOS agent uses the shared InventoryCore contracts and retains its
+existing source identity (`cloudIdentifier` preferred, local fallback). Its
+confirmed upload targets now provide additive user-scoped content identity
+(`sha256` plus byte size) for server-side reconcile; this does not change the
+asset `new`/`known` decision or merge equal-byte assets. Album inventory and
+sync restore memberships for imported assets, including known assets, while
+skipping members that were not imported. The iOS foreground importer follows
+the same protocol; background upload/resume is not yet implemented.

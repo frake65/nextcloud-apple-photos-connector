@@ -48,6 +48,9 @@ class UploadService {
                         ]);
                     }
                     $this->repository->updateOwned('apc_uploads', $user, 'upload_id', $uploadId, ['status' => 'uploaded']);
+                    $this->repository->contentIdentities()->recordConfirmedTarget(
+                        $user, $sourceId, (int)$asset['id'], $target, $fileId, ImportRun::now()
+                    );
                 });
             } else {
                 $this->repository->updateOwned('apc_uploads', $user, 'upload_id', $uploadId, ['status' => 'failed']);

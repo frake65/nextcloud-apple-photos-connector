@@ -1,8 +1,45 @@
-# Nextcloud APC for iOS (PhotoKit proof of concept)
+# Nextcloud APC for iOS
 
-This Xcode project is a PhotoKit gallery proof of concept. It does not connect
-to Nextcloud or upload media. It uses the shared local Swift package at
-`../shared/InventoryCore`.
+This Xcode project configures an APC connection, selects accessible PhotoKit
+assets, and posts their metadata to the existing APC `/inventory` endpoint. It
+does not export originals, perform WebDAV PUTs, synchronize albums, or run
+background uploads. New assets may receive server-side upload tickets as part
+of the existing inventory response; this client ignores those tickets and has
+no UI or code path that transfers files. It uses the shared local Swift
+package at `../shared/InventoryCore`.
+
+The iOS 17 target provides a foreground PhotoKit import path: inventory,
+original export, SHA-256/byte-size calculation, upload prepare, WebDAV PUT
+when required, upload completion, content reconciliation, and album
+inventory/synchronization. It also contains the gallery and album UI with a
+3/4/5/6-column grid, shared selection markers, long-press drag selection, and
+edge auto-scroll. Background URLSession uploads and interruption recovery are
+not implemented; imports run in the foreground.
+
+## Source ID and Mac import history
+
+The APC server isolates history by Nextcloud user and `sourceId`. In
+**Verbindung → Quellen-ID**, enter the UUID from the Mac file
+`~/Library/Application Support/Apple Photos Connector/source.json` to check
+against that source's import history. The iOS app does not automatically read
+or synchronize the Mac's UUID. With that same UUID, PhotoKit cloud identifiers
+can match iCloud-synced assets across devices. Assets without a cloud identifier
+fall back to device-local PhotoKit identifiers and may be reported as new on
+the iPhone. See `../shared/InventoryCore/ARCHITECTURE.md` for the decision and
+limits.
+
+## Manual no-upload integration check
+
+Configure the same Nextcloud user and Mac `sourceId` on iOS, test the connection,
+then use **Auswahl prüfen**:
+
+1. Select a photo already imported by the Mac. Expected: **Bereits in
+   Nextcloud** (`known`).
+2. Select a photo never imported. Expected: **Neu** (`new`).
+3. Select both. Expected: **1 already known / 1 new**.
+
+This sends inventory JSON only. The app does not follow any returned upload
+ticket, and no file bytes are sent.
 
 ## Open and run
 
@@ -33,3 +70,34 @@ to Nextcloud or upload media. It uses the shared local Swift package at
 The app uses `NSPhotoLibraryUsageDescription` from `Resources/Info.plist`.
 PhotoKit does not require an additional iOS Photos entitlement or capability
 for this read-only proof of concept.
+
+## Album import semantics
+
+The configured source identity is used for inventory, upload reconciliation,
+and album membership. A `known` asset or a `contentAlreadyPresent` prepare
+result can proceed to album synchronization without another file transfer.
+Album sync restores imported memberships, skips non-imported members, retains
+empty albums, supports one asset in multiple albums, and performs no transitive
+selection. Album names are never identifiers.
+
+## Security and PhotoKit limits
+
+The Nextcloud password is stored in the iOS Keychain with
+`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`; credentials are not stored in
+`UserDefaults`. `sourceId` is an import namespace, not a secret. Server content
+identity is scoped by `user_id + sha256 + byte_size`, so users are never
+matched against one another. The adapter prefers `cloud:<cloudIdentifier>` and
+falls back to `local:<localIdentifier>`.
+
+Album cloud-identifier resolution is batched to avoid a per-member fetch. Some
+public PhotoKit fetches remain synchronous on the MainActor because the current
+UI model is MainActor-bound; no private PhotoKit APIs are used. Large-library
+performance, background uploads, and resume after interruption remain backlog
+items.
+
+## Verification
+
+The current tree is covered by 15 iOS tests, 24 shared-core tests, 125 macOS
+tests, and the standalone PHP/SQLite server suite. Debug and Release builds
+include the APC icon copied from the macOS artwork and the Photos usage
+description.

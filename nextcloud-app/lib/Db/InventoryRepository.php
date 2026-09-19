@@ -10,6 +10,8 @@ use OCA\ApplePhotosConnector\Service\UploadTicketPolicy;
 class InventoryRepository {
     public function __construct(private IDBConnection $db) {}
 
+    public function contentIdentities(): ContentIdentityRepository { return new ContentIdentityRepository($this->db); }
+
     public function transaction(callable $work): mixed {
         $this->db->beginTransaction();
         try {
@@ -109,9 +111,14 @@ class InventoryRepository {
     public function getCurrentTarget(string $user, string $source, int $assetId): ?array {
         $asset = $this->asset($user, $source, $assetId);
         if (!$asset || $asset['current_upload_target_id'] === null) { return null; }
-        foreach ($this->getTargetsForAsset($user, $source, $assetId) as $target) {
-            if ((int)$target['id'] === (int)$asset['current_upload_target_id']) { return $target; }
-        }
+        $qb = $this->db->getQueryBuilder();
+        $qb->select('*')->from('apc_upload_targets')->where(
+            $qb->expr()->eq('id', $qb->createNamedParameter((int)$asset['current_upload_target_id'], IQueryBuilder::PARAM_INT)),
+            $qb->expr()->eq('user_id', $qb->createNamedParameter($user))
+        );
+        $result = $qb->executeQuery();
+        try { $target = $result->fetch(); if ($target !== false) { return $target; } }
+        finally { $result->closeCursor(); }
         throw new \RuntimeException('Invalid current target ownership');
     }
     public function setCurrentTarget(string $user, string $source, int $assetId, int $targetId): void {

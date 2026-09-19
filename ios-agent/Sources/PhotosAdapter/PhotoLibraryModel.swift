@@ -2,6 +2,7 @@ import Foundation
 import Combine
 import Photos
 import UIKit
+import InventoryCore
 
 @MainActor
 final class PhotoLibraryModel: ObservableObject {
@@ -81,6 +82,177 @@ final class PhotoLibraryModel: ObservableObject {
         return assets.sorted { $0.creationDate > $1.creationDate }
     }
 
+    func inventory(for selection: [GalleryAsset]) throws -> [AssetInventory] {
+        let localIDs = selection.map(\.id)
+        guard Set(localIDs).count == localIDs.count else { throw InventoryCheckError.invalidResponse }
+        let fetched = PHAsset.fetchAssets(withLocalIdentifiers: localIDs, options: nil)
+        var available: [String: PHAsset] = [:]
+        fetched.enumerateObjects { asset, _, _ in available[asset.localIdentifier] = asset }
+        guard available.count == localIDs.count else { throw InventoryCheckError.unavailableAsset }
+
+        let cloudMappings = PHPhotoLibrary.shared().cloudIdentifierMappings(forLocalIdentifiers: localIDs)
+        return try localIDs.map { localID in
+            guard let asset = available[localID] else { throw InventoryCheckError.unavailableAsset }
+            let cloudIdentifier: String?
+            if case .success(let identifier)? = cloudMappings[localID] { cloudIdentifier = IOSCloudIdentifierCodec.encode(identifier) }
+            else { cloudIdentifier = nil }
+            let preferredType: PHAssetResourceType? = switch asset.mediaType {
+            case .image: .photo
+            case .video: .video
+            default: nil
+            }
+            let filename = preferredType.flatMap { type in PHAssetResource.assetResources(for: asset).first { $0.type == type }?.originalFilename }
+            let mediaType: String = asset.mediaType == .video ? "video" : "image"
+            return PhotoKitInventoryMapper.make(localIdentifier: localID, cloudIdentifier: cloudIdentifier, mediaType: mediaType, creationDate: asset.creationDate, filename: filename)
+        }
+    }
+
+    func albumInventory() throws -> [AlbumInventory] {
+        let collections = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil)
+        let albumIDs = (0..<collections.count).map { collections.object(at: $0).localIdentifier }
+        let mappings = PHPhotoLibrary.shared().cloudIdentifierMappings(forLocalIdentifiers: albumIDs)
+        var memberAssets: [(PHAssetCollection, [PHAsset])] = []
+        var memberIDs: [String] = []
+        collections.enumerateObjects { collection, _, _ in
+            let members = PHAsset.fetchAssets(in: collection, options: PHFetchOptions())
+            var filtered: [PHAsset] = []
+            members.enumerateObjects { asset, _, _ in
+                guard asset.mediaType == .image || asset.mediaType == .video else { return }
+                filtered.append(asset); memberIDs.append(asset.localIdentifier)
+            }
+            memberAssets.append((collection, filtered))
+        }
+        let memberMappings = PHPhotoLibrary.shared().cloudIdentifierMappings(forLocalIdentifiers: Array(Set(memberIDs)))
+        var result: [AlbumInventory] = []
+        for (collection, members) in memberAssets {
+            var identities: [String] = []
+            for asset in members {
+                if case .success(let cloud)? = memberMappings[asset.localIdentifier] {
+                    identities.append("cloud:\(IOSCloudIdentifierCodec.encode(cloud))")
+                } else { identities.append("local:\(asset.localIdentifier)") }
+            }
+            let cloudID: String? = mappings[collection.localIdentifier].flatMap { result in
+                if case .success(let cloud) = result { return IOSCloudIdentifierCodec.encode(cloud) }
+                return nil
+            }
+            result.append(AlbumInventory(localIdentifier: collection.localIdentifier, cloudIdentifier: cloudID, name: collection.localizedTitle ?? "Album", assetIdentities: identities))
+        }
+        return result
+    }
+
+    struct ExportedOriginal: Sendable {
+        let url: URL
+        let filename: String
+        let resourceType: PHAssetResourceType
+    }
+
+    /// Exports the same deterministic .photo/.video resource rule used by
+    /// the macOS PhotoOriginalExporter. The caller owns the temporary file
+    /// and must remove its containing directory when finished.
+    func exportOriginal(for galleryAsset: GalleryAsset, progress: (@Sendable (Double) -> Void)? = nil) async throws -> ExportedOriginal {
+        let fetched = PHAsset.fetchAssets(withLocalIdentifiers: [galleryAsset.id], options: nil)
+        guard let asset = fetched.firstObject else { throw InventoryCheckError.unavailableAsset }
+        let type: PHAssetResourceType = asset.mediaType == .video ? .video : .photo
+        guard let resource = PHAssetResource.assetResources(for: asset).first(where: { $0.type == type }) else { throw UploadError.invalidResponse }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        let url = directory.appendingPathComponent("original")
+        let options = PHAssetResourceRequestOptions()
+        options.isNetworkAccessAllowed = true
+        options.progressHandler = { value in progress?(value) }
+        do {
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                    PHAssetResourceManager.default().writeData(for: resource, toFile: url, options: options) { error in
+                        if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+                    }
+                }
+            } onCancel: { }
+            return ExportedOriginal(url: url, filename: resource.originalFilename, resourceType: type)
+        } catch {
+            try? FileManager.default.removeItem(at: directory)
+            throw error
+        }
+    }
+
+    #if DEBUG
+    func identityDiagnostics(for selection: [GalleryAsset]) throws -> [PhotoIdentityDiagnostic] {
+        let inventory = try inventory(for: selection)
+        return zip(selection, inventory).map { asset, record in
+            PhotoIdentityDiagnostic(
+                localIdentifier: record.localIdentifier,
+                cloudIdentifier: record.cloudIdentifier,
+                inventoryIdentifier: record.stableIdentity
+            )
+        }
+    }
+
+    func originalContentDiagnostic(
+        for selection: GalleryAsset,
+        progress: @escaping @MainActor (Double) -> Void
+    ) async throws -> OriginalContentDiagnostic {
+        let fetched = PHAsset.fetchAssets(withLocalIdentifiers: [selection.id], options: nil)
+        guard let asset = fetched.firstObject else { throw OriginalContentDiagnosticError.unavailableAsset }
+        let resourceType: PHAssetResourceType
+        switch asset.mediaType {
+        case .image: resourceType = .photo
+        case .video: resourceType = .video
+        default: throw OriginalContentDiagnosticError.unsupportedAsset
+        }
+        guard let resource = PHAssetResource.assetResources(for: asset).first(where: { $0.type == resourceType }) else {
+            throw OriginalContentDiagnosticError.originalUnavailable
+        }
+
+        let cloudMapping = PHPhotoLibrary.shared().cloudIdentifierMappings(forLocalIdentifiers: [asset.localIdentifier])[asset.localIdentifier]
+        let cloudIdentifier: String?
+        if case .success(let identifier)? = cloudMapping { cloudIdentifier = IOSCloudIdentifierCodec.encode(identifier) }
+        else { cloudIdentifier = nil }
+
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        let fileURL = directory.appendingPathComponent("original")
+        let options = PHAssetResourceRequestOptions()
+        options.isNetworkAccessAllowed = true
+        options.progressHandler = { value in
+            Task { @MainActor in progress(value) }
+        }
+
+        do {
+            defer { try? FileManager.default.removeItem(at: directory) }
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                PHAssetResourceManager.default().writeData(for: resource, toFile: fileURL, options: options) { error in
+                    if let error { continuation.resume(throwing: error) }
+                    else { continuation.resume() }
+                }
+            }
+            progress(1)
+            let identity = try await Task.detached(priority: .userInitiated) {
+                try ContentIdentity.read(fileURL)
+            }.value
+            return OriginalContentDiagnostic(
+                localIdentifier: asset.localIdentifier,
+                cloudIdentifier: cloudIdentifier,
+                resourceType: Self.resourceTypeName(resource.type),
+                filename: resource.originalFilename,
+                byteSize: identity.bytes,
+                sha256: identity.sha256
+            )
+        } catch {
+            try? FileManager.default.removeItem(at: directory)
+            if error is OriginalContentDiagnosticError { throw error }
+            throw OriginalContentDiagnosticError.exportFailed(error.localizedDescription)
+        }
+    }
+
+    private static func resourceTypeName(_ type: PHAssetResourceType) -> String {
+        switch type {
+        case .photo: "photo"
+        case .video: "video"
+        default: String(describing: type)
+        }
+    }
+    #endif
+
     func requestThumbnail(for asset: PHAsset, size: CGSize, completion: @escaping (UIImage?) -> Void) -> PHImageRequestID {
         let options = PHImageRequestOptions()
         options.deliveryMode = .opportunistic
@@ -90,4 +262,54 @@ final class PhotoLibraryModel: ObservableObject {
     }
 
     func cancelThumbnail(_ requestID: PHImageRequestID) { imageManager.cancelImageRequest(requestID) }
+}
+
+#if DEBUG
+struct PhotoIdentityDiagnostic: Identifiable {
+    var id: String { localIdentifier }
+    let localIdentifier: String
+    let cloudIdentifier: String?
+    let inventoryIdentifier: String
+}
+
+#if DEBUG
+struct OriginalContentDiagnostic: Identifiable {
+    var id: String { localIdentifier }
+    let localIdentifier: String
+    let cloudIdentifier: String?
+    let resourceType: String
+    let filename: String
+    let byteSize: Int64
+    let sha256: String
+}
+
+enum OriginalContentDiagnosticError: LocalizedError {
+    case unavailableAsset
+    case unsupportedAsset
+    case originalUnavailable
+    case exportFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .unavailableAsset: "Das ausgewählte Foto ist in der aktuellen Mediathek nicht verfügbar."
+        case .unsupportedAsset: "Für dieses Asset wird nur die Diagnose normaler Fotos und Videos unterstützt."
+        case .originalUnavailable: "Die passende Originalressource (.photo oder .video) ist nicht verfügbar."
+        case .exportFailed(let reason): "PhotoKit konnte das Original nicht exportieren: \(reason)"
+        }
+    }
+}
+#endif
+#endif
+
+private enum IOSCloudIdentifierCodec {
+    static func encode(_ identifier: PHCloudIdentifier) -> String {
+        if #available(iOS 18.2, *) { return identifier.archivalStringValue }
+        return identifier.stringValue
+    }
+}
+
+enum PhotoKitInventoryMapper {
+    static func make(localIdentifier: String, cloudIdentifier: String?, mediaType: String, creationDate: Date?, filename: String?) -> AssetInventory {
+        AssetInventory(localIdentifier: localIdentifier, cloudIdentifier: cloudIdentifier, mediaType: mediaType, creationDate: creationDate, filename: filename)
+    }
 }

@@ -12,9 +12,20 @@ actor PhotoOriginalExporter: PhotoOriginalExporting {
     struct Export: Sendable {
         let url: URL
         let filename: String
+        let resourceType: String
+
+        init(url: URL, filename: String, resourceType: String = "unknown") {
+            self.url = url
+            self.filename = filename
+            self.resourceType = resourceType
+        }
     }
 
     func export(localIdentifier: String) async throws -> Export {
+        try await export(localIdentifier: localIdentifier, progress: nil)
+    }
+
+    func export(localIdentifier: String, progress: (@Sendable (Double) -> Void)?) async throws -> Export {
         try await SettingsWorkGate.shared.checkpoint()
         let fetched = PHAsset.fetchAssets(withLocalIdentifiers: [localIdentifier], options: nil)
         guard let asset = fetched.firstObject else { throw ExportError.unavailable }
@@ -33,6 +44,7 @@ actor PhotoOriginalExporter: PhotoOriginalExporting {
         let url = directory.appendingPathComponent("original")
         let options = PHAssetResourceRequestOptions()
         options.isNetworkAccessAllowed = true
+        options.progressHandler = progress
         do {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
                 PHAssetResourceManager.default().writeData(for: resource, toFile: url, options: options) { error in
@@ -40,10 +52,19 @@ actor PhotoOriginalExporter: PhotoOriginalExporting {
                     else { continuation.resume() }
                 }
             }
-            return Export(url: url, filename: resource.originalFilename)
+            return Export(url: url, filename: resource.originalFilename, resourceType: Self.resourceTypeName(resource.type))
         } catch {
             try? FileManager.default.removeItem(at: directory)
             throw error
+        }
+    }
+
+    private static func resourceTypeName(_ type: PHAssetResourceType) -> String {
+        switch type {
+        case .photo: "photo"
+        case .video: "video"
+        case .audio: "audio"
+        default: String(describing: type)
         }
     }
 

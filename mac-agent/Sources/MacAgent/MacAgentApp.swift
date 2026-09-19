@@ -430,6 +430,11 @@ final class VisualLibraryModel: ObservableObject {
     }
 
     func uploadSnapshot() -> Set<String> { selectedAssetIDs }
+    func selectedIdentityDiagnostic() async throws -> (UUID, AssetIdentityDiagnostic)? {
+        guard let identity = selectedAssetIDs.sorted().first,
+              let diagnostic = try await library.identityDiagnostic(identity: identity) else { return nil }
+        return (try PhotoSourceStore.applicationStore().loadOrCreate().sourceId, diagnostic)
+    }
     func markSuccessfullyUploaded(_ identity: String) {
         successfullyUploadedAssetIDs.insert(identity)
         rebuildEffectiveSelection()
@@ -484,6 +489,11 @@ private struct InventoryView: View {
     @Environment(\.openWindow) private var openWindow
     @AppStorage(UploadPreferences.debugModeKey, store: UserDefaults(suiteName: ConnectionPreferences.preferencesSuite)) private var debugMode = false
     @State private var persistentDebugLogger: DebugFileLogger?
+    #if DEBUG
+    @State private var originalHashRunning = false
+    @State private var originalHashProgress = 0.0
+    @State private var originalHashStatus = ""
+    #endif
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -501,7 +511,33 @@ private struct InventoryView: View {
             }
             UploadTargetSummaryView(server: model.server, user: model.user, targetPath: model.targetPath)
             Divider()
-            if debugMode { Button(L10n.text("openDebugWindow")) { openWindow(id: "debug-window") } }
+            if debugMode {
+                HStack {
+                    Button(L10n.text("openDebugWindow")) { openWindow(id: "debug-window") }
+                    #if DEBUG
+                    Button("Ausgewählte Asset-Identität protokollieren") {
+                        Task {
+                            do {
+                                guard let (sourceId, value) = try await visual.selectedIdentityDiagnostic() else {
+                                    DebugLogStore.shared.append("identity.diagnostic no_selected_or_resolvable_asset", category: "photokit")
+                                    return
+                                }
+                                DebugLogStore.shared.append("identity.diagnostic sourceId=\(sourceId.uuidString.lowercased()) localIdentifier=\(value.localIdentifier) cloudPresent=\(value.cloudIdentifier != nil) cloudIdentifier=\(value.cloudIdentifier ?? "<none>") inventoryIdentifier=\(value.inventoryIdentifier)", category: "photokit")
+                            } catch {
+                                DebugLogStore.shared.append("identity.diagnostic failed error=\(error.localizedDescription)", category: "error")
+                            }
+                        }
+                    }.disabled(visual.selectedAssetIDs.isEmpty || visual.selectionBusy)
+                    Button(originalHashRunning ? "Original wird geladen…" : "Original-Hash berechnen") {
+                        Task { await calculateSelectedOriginalHash() }
+                    }.disabled(originalHashRunning || visual.selectedAssetIDs.count != 1 || visual.selectionBusy)
+                    #endif
+                }
+                #if DEBUG
+                if originalHashRunning { ProgressView(value: originalHashProgress).frame(maxWidth: 220) }
+                if !originalHashStatus.isEmpty { Text(originalHashStatus).font(.caption).textSelection(.enabled) }
+                #endif
+            }
             Button(model.scanning ? "Upload abbrechen" : uploadButtonTitle) {
                 if model.scanning {
                     print("CANCELLED stage=button")
@@ -739,6 +775,35 @@ private struct InventoryView: View {
         if let albums { parts.append("\(albums.membershipsCreated + albums.membershipsReused) Albumzuordnungen durchgeführt") }
         return parts.joined(separator: " · ")
     }
+
+    #if DEBUG
+    @MainActor
+    private func calculateSelectedOriginalHash() async {
+        guard visual.selectedAssetIDs.count == 1 else {
+            originalHashStatus = "Bitte genau ein verfügbares Foto oder Video auswählen."
+            return
+        }
+        originalHashRunning = true
+        originalHashProgress = 0
+        originalHashStatus = "Original wird lokal exportiert; iCloud-Download kann erforderlich sein."
+        defer { originalHashRunning = false }
+        do {
+            guard let diagnostic = try await visual.library.identityDiagnostic(identity: visual.selectedAssetIDs.first!) else {
+                originalHashStatus = "Das ausgewählte Foto oder Video ist nicht mehr verfügbar."
+                return
+            }
+            let exported = try await PhotoOriginalExporter().export(localIdentifier: diagnostic.localIdentifier) { value in
+                Task { @MainActor in originalHashProgress = value }
+            }
+            defer { try? FileManager.default.removeItem(at: exported.url.deletingLastPathComponent()) }
+            let identity = try ContentIdentity.read(exported.url)
+            originalHashStatus = "localIdentifier: \(diagnostic.localIdentifier)\ncloudIdentifier: \(diagnostic.cloudIdentifier ?? "<keine>")\nresourceType: \(exported.resourceType)\noriginalFilename: \(exported.filename)\nbyteSize: \(identity.bytes)\nSHA-256: \(identity.sha256)"
+            DebugLogStore.shared.append("content.identity localIdentifier=\(diagnostic.localIdentifier) cloudIdentifier=\(diagnostic.cloudIdentifier ?? "<none>") resourceType=\(exported.resourceType) originalFilename=\(exported.filename) byteSize=\(identity.bytes) sha256=\(identity.sha256)", category: "photokit")
+        } catch {
+            originalHashStatus = "Original-Hash fehlgeschlagen: \(error.localizedDescription)"
+        }
+    }
+    #endif
 }
 
 struct UploadTargetSummaryView: View {

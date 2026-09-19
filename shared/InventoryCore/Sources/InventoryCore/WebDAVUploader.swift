@@ -128,6 +128,10 @@ public struct WebDAVUploader: Sendable {
     }
 
     public func upload(file: URL, filename: String, assetId: String, captureDate: Date, targets: any UploadTargetProvider, targetRoot: String = "Photos/Apple Photos Connector", folderCoordinator: WebDAVFolderCoordinator? = nil) async throws -> String {
+        try await uploadWithTarget(file: file, filename: filename, assetId: assetId, captureDate: captureDate, targets: targets, targetRoot: targetRoot, folderCoordinator: folderCoordinator).path
+    }
+
+    public func uploadWithTarget(file: URL, filename: String, assetId: String, captureDate: Date, targets: any UploadTargetProvider, targetRoot: String = "Photos/Apple Photos Connector", folderCoordinator: WebDAVFolderCoordinator? = nil) async throws -> UploadTarget {
         let identity = try ContentIdentity.read(file)
         let root = ["remote.php", "dav", "files", connection.user]
         let rootComponents = try Self.safeComponents(targetRoot)
@@ -143,7 +147,7 @@ public struct WebDAVUploader: Sendable {
             let shaMatch = target.sha256 == identity.sha256
             let targetComponents = try Self.safeComponents(target.path)
             let pathPrefixMatch = Self.isValidTargetPath(target.path, under: targetRoot)
-            let stateMatch = ["missing", "present"].contains(target.state)
+            let stateMatch = ["missing", "present", "contentAlreadyPresent"].contains(target.state)
             debug?("upload.prepare.validate.assetId=\(assetIdMatch)")
             debug?("upload.prepare.validate.bytes=\(bytesMatch)")
             debug?("upload.prepare.validate.sha256=\(shaMatch)")
@@ -154,12 +158,17 @@ public struct WebDAVUploader: Sendable {
             debug?("upload.prepare.target.pathDepth=\(pathDepth)")
             debug?("upload.prepare.target.bytesMatch=\(bytesMatch)")
             guard assetIdMatch, bytesMatch, shaMatch, pathPrefixMatch, stateMatch else { throw UploadError.invalidResponse }
+            // A content reconciliation may legitimately point at the original
+            // filename from another device.  The server has already verified
+            // the bytes and path, so do not reject that target merely because
+            // the local PhotoKit filename differs.
+            if target.state == "contentAlreadyPresent" { return target }
             // Do not permit a server response to redirect uploads outside the fixed target directory.
             let names = try (0..<100).map { try Self.filename(filename, assetId: assetId, attempt: $0) }
             let filenameMatch = names.contains(target.path.split(separator: "/").last.map(String.init) ?? "")
             debug?("upload.prepare.validate.filename=\(filenameMatch)")
             guard filenameMatch else { throw UploadError.invalidResponse }
-            if target.state == "present" { return target.path }
+            if target.state == "present" || target.state == "contentAlreadyPresent" { return target }
             if targetComponents.count > rootComponents.count + 1 {
                 for count in (rootComponents.count + 1)..<(targetComponents.count - 1) {
                     let components = Array(targetComponents.prefix(count))
@@ -175,7 +184,7 @@ public struct WebDAVUploader: Sendable {
             let response = try await transport.send(request, file: file)
             debug?("upload.put.status=\(response.status)")
             debug?("Response PUT · status=\(response.status) · responseBytes=\(response.data.count)")
-            if response.status == 201 { return target.path }
+            if response.status == 201 { return target }
             // A concurrent successful PUT is rechecked by prepare. No speculative next filename.
             if response.status != 412 { throw UploadError.http(response.status) }
         }

@@ -14,15 +14,26 @@ public struct NextcloudConnectionClient: Sendable {
     public init(connection: ConnectorConnection, transport: any DAVTransport = NetworkTransport()) { self.connection = connection; self.transport = transport }
     public func statusRequest() -> URLRequest { connection.request(path: ["status.php"], method: "GET") }
     public func validate() async -> ConnectionValidation {
+        let response: DAVResponse
+        do { response = try await transport.send(statusRequest(), file: nil) }
+        catch let UploadError.http(status) { return Self.validation(for: status) }
+        catch let error as URLError where error.code == .secureConnectionFailed || error.code == .serverCertificateUntrusted { return ConnectionValidation(result: .tlsOrNetworkError) }
+        catch { return ConnectionValidation(result: .unreachable) }
         do {
-            let response = try await transport.send(statusRequest(), file: nil)
             guard (200..<300).contains(response.status) else {
                 if response.status == 401 || response.status == 403 { return ConnectionValidation(result: .authenticationFailed, statusCode: response.status) }
                 if response.status >= 500 { return ConnectionValidation(result: .unavailable, statusCode: response.status) }
                 return ConnectionValidation(result: .unexpectedResponse, statusCode: response.status)
             }
             guard let object = try? JSONSerialization.jsonObject(with: response.data) as? [String: Any], object["installed"] != nil else { return ConnectionValidation(result: .unexpectedResponse, statusCode: response.status) }
-            let appResponse = try await transport.send(connection.request(path: ["index.php", "apps", "apple_photos_connector", "api", "v1", "status"], method: "GET"), file: nil)
+            let appResponse: DAVResponse
+            do { appResponse = try await transport.send(connection.request(path: ["index.php", "apps", "apple_photos_connector", "api", "v1", "status"], method: "GET"), file: nil) }
+            catch let UploadError.http(status) {
+                if status == 401 || status == 403 { return ConnectionValidation(result: .authenticationFailed, statusCode: status, appStatusCode: status) }
+                if status == 404 { return ConnectionValidation(result: .appMissing, statusCode: response.status, appStatusCode: status) }
+                if status >= 500 { return ConnectionValidation(result: .unavailable, statusCode: response.status, appStatusCode: status) }
+                return ConnectionValidation(result: .unexpectedResponse, statusCode: response.status, appStatusCode: status)
+            }
             if appResponse.status == 401 || appResponse.status == 403 { return ConnectionValidation(result: .authenticationFailed, statusCode: appResponse.status, appStatusCode: appResponse.status) }
             if appResponse.status == 404 { return ConnectionValidation(result: .appMissing, statusCode: appResponse.status, appStatusCode: appResponse.status) }
             if appResponse.status >= 500 { return ConnectionValidation(result: .unavailable, statusCode: appResponse.status, appStatusCode: appResponse.status) }
@@ -30,6 +41,11 @@ public struct NextcloudConnectionClient: Sendable {
             return ConnectionValidation(result: .success, statusCode: response.status, appStatusCode: appResponse.status)
         } catch let error as URLError where error.code == .secureConnectionFailed || error.code == .serverCertificateUntrusted { return ConnectionValidation(result: .tlsOrNetworkError) }
         catch { return ConnectionValidation(result: .unreachable) }
+    }
+    private static func validation(for status: Int) -> ConnectionValidation {
+        if status == 401 || status == 403 { return ConnectionValidation(result: .authenticationFailed, statusCode: status) }
+        if status >= 500 { return ConnectionValidation(result: .unavailable, statusCode: status) }
+        return ConnectionValidation(result: .unexpectedResponse, statusCode: status)
     }
     public func listDirectories(path: [String] = []) async throws -> [DAVDirectory] {
         var request = connection.request(path: ["remote.php", "dav", "files", connection.user] + path, method: "PROPFIND")

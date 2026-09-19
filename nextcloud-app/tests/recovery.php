@@ -41,11 +41,11 @@ function recoveryScenarios(InventoryRepository $repo): void {
     $ack = (new UploadService($repo, $files))->acknowledge($user, $source['sourceId'], $later['runId'], $later['assets'][0]['upload']['uploadId'], 'uploaded', $collision['path']);
     check($ack['summary']['uploaded'] === 1, 'verified recovered content can be linked and counted');
 
-    // Another source with identical bytes must not adopt another asset's file/reservation.
+    // Phase 3 reconciles another source asset to the confirmed content without creating a new target.
     $other = array_replace($source, ['sourceId' => 'a50e8400-e29b-41d4-a716-446655440001']);
     $otherRun = $inventory->ingest($user, $other, [$asset]);
     $otherTarget = (new UploadTargetService($repo, $files))->prepare($user, $other['sourceId'], $otherRun['runId'], $otherRun['assets'][0]['upload']['uploadId'], 8, $hash);
-    check($otherTarget['state'] === 'missing' && $otherTarget['path'] !== $collision['path'], 'identical contents in different sources remain separate');
+    check($otherTarget['state'] === 'contentAlreadyPresent' && $otherTarget['path'] === $collision['path'], 'identical contents reconcile without merging source assets');
     foreach ([[$user . '-other', 8, $hash], [$user, 9, $hash], [$user, 8, str_repeat('0', 64)]] as [$owner, $bytes, $digest]) {
         try {
             (new UploadTargetService($repo, $files))->prepare($owner, $source['sourceId'], $later['runId'], $later['assets'][0]['upload']['uploadId'], $bytes, $digest);

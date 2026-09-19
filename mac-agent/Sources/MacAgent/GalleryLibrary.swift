@@ -84,6 +84,8 @@ protocol GalleryLibraryProviding: Sendable {
     func albumAssets(_ local: String) async throws -> GallerySelection
     func albumIDs(containing identities: Set<String>) async throws -> Set<String>
     func asset(local: String) async throws -> GalleryAsset?
+    func identityDiagnostic(local: String) async throws -> AssetIdentityDiagnostic?
+    func identityDiagnostic(identity: String) async throws -> AssetIdentityDiagnostic?
     func apply(change: PHChange) async -> GalleryChangeResult
     func applyAlbumChange(change: PHChange) async -> AlbumChangeDelta
     func setObservedAlbumIDs(_ ids: Set<String>) async
@@ -107,6 +109,8 @@ struct PhotoKitAuthorizationProvider: PhotoAuthorizationProviding {
 
 extension GalleryLibraryProviding {
     func currentCount() async -> Int { 0 }
+    func identityDiagnostic(local: String) async throws -> AssetIdentityDiagnostic? { nil }
+    func identityDiagnostic(identity: String) async throws -> AssetIdentityDiagnostic? { nil }
     func apply(change: PHChange) async -> GalleryChangeResult {
         GalleryChangeResult(requiresFullRefresh: true, changedAssetIDs: [], removedAssetIDs: [])
     }
@@ -116,6 +120,12 @@ extension GalleryLibraryProviding {
     func setObservedAlbumIDs(_ ids: Set<String>) async { }
     func applyMembershipChanges(change: PHChange) async -> [AlbumMembershipDelta] { [] }
     func albumIDs(containing identities: Set<String>) async throws -> Set<String> { [] }
+}
+
+struct AssetIdentityDiagnostic: Sendable {
+    let localIdentifier: String
+    let cloudIdentifier: String?
+    let inventoryIdentifier: String
 }
 
 enum GalleryDebug {
@@ -224,6 +234,33 @@ actor GalleryLibrary: GalleryLibraryProviding {
         let result = PHAsset.fetchAssets(withLocalIdentifiers: [local], options: options())
         guard let asset = result.firstObject else { return nil }
         return resolve([asset])[0]
+    }
+
+    func identityDiagnostic(local: String) async throws -> AssetIdentityDiagnostic? {
+        try await gate.checkpoint()
+        let result = PHAsset.fetchAssets(withLocalIdentifiers: [local], options: nil)
+        guard let asset = result.firstObject else { return nil }
+        let mapping = PHPhotoLibrary.shared().cloudIdentifierMappings(forLocalIdentifiers: [local])[local]
+        let cloudIdentifier: String?
+        if case .success(let cloud)? = mapping { cloudIdentifier = CloudIdentifierCodec.encode(cloud) }
+        else { cloudIdentifier = nil }
+        let record = AssetInventory(localIdentifier: local, cloudIdentifier: cloudIdentifier,
+                                    mediaType: asset.mediaType == .video ? "video" : "image",
+                                    creationDate: asset.creationDate,
+                                    filename: PHAssetResource.assetResources(for: asset).first?.originalFilename)
+        return AssetIdentityDiagnostic(localIdentifier: local, cloudIdentifier: cloudIdentifier,
+                                        inventoryIdentifier: record.stableIdentity)
+    }
+
+    func identityDiagnostic(identity: String) async throws -> AssetIdentityDiagnostic? {
+        if identity.hasPrefix("local:") {
+            return try await identityDiagnostic(local: String(identity.dropFirst("local:".count)))
+        }
+        guard identity.hasPrefix("cloud:"),
+              let cloud = CloudIdentifierCodec.decode(String(identity.dropFirst("cloud:".count))) else { return nil }
+        let mapping = PHPhotoLibrary.shared().localIdentifierMappings(for: [cloud])[cloud]
+        guard case .success(let local)? = mapping else { return nil }
+        return try await identityDiagnostic(local: local)
     }
 
     private func resolve(_ assets: [PHAsset]) -> [GalleryAsset] {

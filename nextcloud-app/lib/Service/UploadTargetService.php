@@ -33,6 +33,9 @@ class UploadTargetService {
             $this->repository->lockSource($user, $source);
             [$ticket, $asset, $current] = $this->repository->uploadContext($user, $source, $runId, $uploadId, $policy);
             $assetId = (int)$asset['id'];
+            $reconciled = $ticket['status'] === 'uploaded' || $current !== null ? null
+                : $this->reconcileConfirmedContent($user, $source, $runId, $ticket, $asset, $bytes, $sha256);
+            if ($reconciled !== null) { return $reconciled; }
             if ($current) { $this->checkIdentity($current, $bytes, $sha256); }
             if ($ticket['status'] === 'uploaded' || !InventoryRepository::sameTarget($current, $ticket['base_target_id'])) {
                 // Another completion won, or this is a replay. Never reopen a finished generation.
@@ -97,6 +100,41 @@ class UploadTargetService {
             }
             throw new \InvalidArgumentException('No free upload target');
         });
+    }
+
+    /** Atomically binds a new APC asset to a currently existing, confirmed file. */
+    private function reconcileConfirmedContent(string $user, string $source, string $runId, array $ticket, array $asset, int $bytes, string $sha256): ?array {
+        // Reconcile is for a genuinely new APC asset. Existing target history
+        // continues through the established recovery state machine.
+        if ($this->repository->getTargetsForAsset($user, $source, (int)$asset['id']) !== []) { return null; }
+        foreach ($this->repository->contentIdentities()->confirmedTargetCandidates($user, $sha256, $bytes) as $candidate) {
+            // Do not let a target confirmed moments ago by another asset in
+            // this same run cascade through the run; older confirmed content
+            // remains eligible for a genuinely new same-source asset.
+            $runStarted = (string)($this->repository->run($user, $runId)['started_at'] ?? '');
+            if ((string)$candidate['source_id'] === $source && (string)$candidate['confirmed_at'] >= $runStarted) { continue; }
+            try {
+                $verified = $this->files->withVerifiedFile($user, (string)$candidate['path'], function (array $actual, int $fileId) use ($bytes, $sha256): array {
+                    if ($actual['bytes'] !== $bytes || !hash_equals($sha256, $actual['sha256'])) { throw new \InvalidArgumentException('Content candidate changed'); }
+                    return ['fileId' => $fileId];
+                });
+            } catch (\Throwable) { continue; }
+            $targetId = (int)$candidate['upload_target_id'];
+            $this->repository->updateOwned('apc_assets', $user, 'id', $asset['id'], [
+                'current_upload_target_id' => $targetId, 'nextcloud_file_id' => $verified['fileId'],
+                'nextcloud_path' => $candidate['path'], 'uploaded_at' => ImportRun::now(),
+            ]);
+            $this->repository->updateOwned('apc_uploads', $user, 'upload_id', $ticket['upload_id'], [
+                'target_id' => $targetId, 'status' => 'uploaded',
+            ]);
+            $uploaded = $failed = 0;
+            foreach ($this->repository->uploads($user, $source) as $row) {
+                if ($row['run_id'] === $runId) { $uploaded += (int)($row['status'] === 'uploaded'); $failed += (int)($row['status'] === 'failed'); }
+            }
+            $this->repository->updateOwned('apc_import_runs', $user, 'run_id', $runId, ['assets_uploaded' => $uploaded, 'assets_failed' => $failed]);
+            return ['assetId' => (string)$asset['id'], 'path' => $candidate['path'], 'bytes' => $bytes, 'sha256' => $sha256, 'state' => 'contentAlreadyPresent'];
+        }
+        return null;
     }
 
     private function bind(string $user, array $ticket, int $targetId): void {

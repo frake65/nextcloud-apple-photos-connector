@@ -56,7 +56,9 @@ function uploadRollbackScenario(\OCP\IDBConnection $db): void {
     }
     check($repo->assets($user, $source['sourceId'])[0]['nextcloud_file_id'] === null
         && $repo->uploads($user, $source['sourceId'])[0]['status'] === 'pending'
-        && (int)$repo->run($user, $reply['runId'])['assets_uploaded'] === 0, 'upload mapping, ticket and counters roll back atomically');
+        && (int)$repo->run($user, $reply['runId'])['assets_uploaded'] === 0
+        && $repo->contentIdentities()->find($user, hash('sha256', 'ORIGINAL'), 8) === null,
+        'upload mapping, ticket, counters and content identity roll back atomically');
 }
 
 function uploadScenarios(\OCA\ApplePhotosConnector\Db\InventoryRepository $repo): void {
