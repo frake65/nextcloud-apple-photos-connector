@@ -4,6 +4,64 @@ import XCTest
 import InventoryCore
 
 final class IOSCoreFlowTests: XCTestCase {
+    private func queueRun(sourceID: UUID = UUID()) -> PersistedImportRun {
+        let asset = PersistedImportAsset(queueAssetID: UUID(), stableIdentity: "cloud:asset", localIdentifier: "local", cloudIdentifier: "asset", mediaType: "video", filenameHint: "clip.mov", captureDate: Date(timeIntervalSince1970: 1), state: .needsReconcile, serverAssetID: "7", uploadID: "8", targetPath: nil, expectedBytes: 42, expectedSHA256: String(repeating: "a", count: 64), lastConfirmedStep: "remote-state-unknown", retryCount: 1, lastErrorCode: nil)
+        return PersistedImportRun(schemaVersion: PersistedImportRun.currentSchemaVersion, localRunID: UUID(), account: ImportAccountReference(serverBaseURL: "https://cloud.example", username: "alice"), sourceID: sourceID, createdAt: Date(timeIntervalSince1970: 1), updatedAt: Date(timeIntervalSince1970: 1), state: .assetProcessing, serverRunID: "run", assetOrder: [asset.queueAssetID], albumSyncPending: false, assets: [asset])
+    }
+
+    func testImportQueueRoundTripsAndContainsNoCredentials() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ImportQueueStore(directoryURL: directory)
+        let run = queueRun()
+        try await store.save(run)
+        let runs = await store.allRuns()
+        let loaded = try XCTUnwrap(runs.first)
+        XCTAssertEqual(loaded, run)
+        let serialized = try await store.serializedData()
+        let text = String(decoding: serialized, as: UTF8.self)
+        XCTAssertFalse(text.contains("password")); XCTAssertFalse(text.contains("Authorization"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("import-queue-v1.json").path))
+    }
+
+    func testImportQueueCorruptFileLoadsEmptyWithoutCrash() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("not-json".utf8).write(to: directory.appendingPathComponent("import-queue-v1.json"))
+        let runs = await ImportQueueStore(directoryURL: directory).allRuns()
+        XCTAssertTrue(runs.isEmpty)
+    }
+
+    func testImportQueueRecoveryActionsDoNotTreatUploadingAsCompleted() {
+        let run = queueRun()
+        XCTAssertEqual(ImportRecoveryCoordinator.action(for: run, asset: run.assets[0]), .reconcile)
+        var completed = run; completed.state = .assetsComplete
+        XCTAssertEqual(ImportRecoveryCoordinator.action(for: completed, asset: run.assets[0]), .albumSync)
+    }
+
+    func testImportQueuePreservesAssetOrderAndAlbumPendingState() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ImportQueueStore(directoryURL: directory); var run = queueRun(); run.albumSyncPending = true; run.state = .albumSyncPending
+        try await store.save(run)
+        let runs = await store.recoverableRuns()
+        let loaded = try XCTUnwrap(runs.first)
+        XCTAssertEqual(loaded.assetOrder, run.assetOrder); XCTAssertTrue(loaded.albumSyncPending)
+    }
+
+    func testImportQueueSelectsNewestRecoverableRunPerAccountAndSource() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ImportQueueStore(directoryURL: directory)
+        let sourceID = UUID()
+        var older = queueRun(sourceID: sourceID); older.updatedAt = Date(timeIntervalSince1970: 2)
+        var newer = queueRun(sourceID: sourceID); newer.updatedAt = Date(timeIntervalSince1970: 3)
+        try await store.save(older); try await store.save(newer)
+        let runs = await store.recoverableRuns()
+        XCTAssertEqual(runs.count, 1); XCTAssertEqual(runs.first?.localRunID, newer.localRunID)
+    }
+
     func testImportProgressAggregationIsMonotoneAndByteBased() {
         var progress = IOSImportProgressAggregation()
         progress.update(job: 0, sent: 40, total: 100)

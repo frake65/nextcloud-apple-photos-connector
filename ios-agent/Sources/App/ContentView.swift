@@ -673,6 +673,7 @@ private struct InventoryReviewScreen: View {
     @State private var result: InventoryCheckResult?
     @State private var error: String?
     @StateObject private var importer = IOSForegroundImportCoordinator()
+    @State private var interruptedRun: PersistedImportRun?
     #if DEBUG
     @State private var identityDiagnostics: [PhotoIdentityDiagnostic] = []
     @State private var identityDiagnosticError: String?
@@ -759,6 +760,14 @@ private struct InventoryReviewScreen: View {
             #endif
             if let error { Section { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red) } }
             Section("Import") {
+                if let interruptedRun {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Unterbrochener Import")
+                        Text("Ein vorheriger Import kann fortgesetzt werden.").font(.caption).foregroundStyle(.secondary)
+                        Button("Fortsetzen") { resumeImport(interruptedRun) }
+                            .disabled(importer.isRunning)
+                    }
+                }
                 if importer.phase != .idle {
                     Text(importer.currentFilename ?? "")
                     ProgressView(value: importer.overallProgress)
@@ -807,6 +816,7 @@ private struct InventoryReviewScreen: View {
         }
         .navigationTitle("Inventar prüfen")
         .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Fertig") { dismiss() } } }
+        .task { await loadInterruptedRun() }
     }
 
     @MainActor
@@ -842,6 +852,27 @@ private struct InventoryReviewScreen: View {
         guard let sourceID = connection.parsedSourceId else { error = InventoryCheckError.invalidSourceIdentifier.localizedDescription; return }
         guard let serverConnection = try? connection.makeConnection() else { error = InventoryCheckError.noServerConfiguration.localizedDescription; return }
         importer.start(selection: selection.assets, library: library, connection: serverConnection, source: PhotoSource(sourceId: sourceID, name: "Apple Photos"))
+    }
+
+    @MainActor
+    private func loadInterruptedRun() async {
+        guard let sourceID = connection.parsedSourceId else { return }
+        let runs = await importer.recoverableRuns()
+        interruptedRun = runs.first { run in
+            run.sourceID == sourceID && run.account.serverBaseURL == connection.server && run.account.username == connection.username
+                && run.assets.allSatisfy { persistedAsset in library.assets.contains { galleryAsset in galleryAsset.id == persistedAsset.localIdentifier } }
+        }
+    }
+
+    @MainActor
+    private func resumeImport(_ run: PersistedImportRun) {
+        guard let sourceID = connection.parsedSourceId,
+              let serverConnection = try? connection.makeConnection() else { return }
+        let byID = Dictionary(uniqueKeysWithValues: library.assets.map { ($0.id, $0) })
+        let assets = run.assets.compactMap { byID[$0.localIdentifier] }
+        guard assets.count == run.assets.count else { return }
+        interruptedRun = nil
+        importer.start(selection: assets, library: library, connection: serverConnection, source: PhotoSource(sourceId: sourceID, name: "Apple Photos"), resumeRun: run)
     }
 
     private var connectionHasConfiguration: Bool { connection.parsedSourceId != nil }
