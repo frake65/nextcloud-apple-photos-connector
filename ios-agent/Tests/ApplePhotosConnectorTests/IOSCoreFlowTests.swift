@@ -4,6 +4,48 @@ import XCTest
 import InventoryCore
 
 final class IOSCoreFlowTests: XCTestCase {
+    func testAssetJobSchedulerCapsConcurrencyAndPreservesInputOrder() async throws {
+        let probe = SchedulerProbe()
+        let results = try await IOSAssetJobScheduler.run(count: 6, maxConcurrent: 2) { index in
+            await probe.enter()
+            await Task.yield()
+            await probe.leave()
+            return index
+        }
+        XCTAssertEqual(results, Array(0..<6))
+        let maximum = await probe.maximum
+        XCTAssertLessThanOrEqual(maximum, 2)
+    }
+
+    func testAssetJobSchedulerFailsFastAndDoesNotReturnPartialResults() async {
+        do {
+            _ = try await IOSAssetJobScheduler.run(count: 3, maxConcurrent: 2) { index in
+                if index == 0 { throw SchedulerTestError.failed }
+                try Task.checkCancellation()
+                return index
+            }
+            XCTFail("Expected the first job error")
+        } catch is SchedulerTestError {
+            // The throwing task group cancels sibling jobs and propagates the error.
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    func testAssetJobSchedulerDoesNotStartJobsAfterCancellation() async {
+        let probe = SchedulerProbe()
+        let task = Task {
+            try await IOSAssetJobScheduler.run(count: 4, maxConcurrent: 2) { index in
+                await probe.enter()
+                return index
+            }
+        }
+        task.cancel()
+        do { _ = try await task.value } catch is CancellationError { } catch { XCTFail("Unexpected error: \(error)") }
+        let started = await probe.started
+        XCTAssertEqual(started, 0)
+    }
+
     @MainActor
     func testConnectionPreferencesKeepPasswordOutOfUserDefaults() throws {
         let suite = "apc-ios-tests-\(UUID().uuidString)"
@@ -157,6 +199,16 @@ final class IOSCoreFlowTests: XCTestCase {
         XCTAssertTrue(requests.allSatisfy { !$0.file })
     }
 }
+
+private actor SchedulerProbe {
+    private var active = 0
+    private(set) var started = 0
+    private(set) var maximum = 0
+    func enter() { active += 1; started += 1; maximum = max(maximum, active) }
+    func leave() { active -= 1 }
+}
+
+private enum SchedulerTestError: Error { case failed }
 
 private final class TestPasswordStore: IOSPasswordStore, @unchecked Sendable {
     private let lock = NSLock()

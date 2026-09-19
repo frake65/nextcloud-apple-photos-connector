@@ -142,6 +142,33 @@ enum IOSAlbumSyncClient {
     }
 }
 
+/// Runs a bounded set of independent jobs without creating an unbounded task set.
+/// Results are returned in input order; completion order has no semantic meaning.
+struct IOSAssetJobScheduler {
+    static func run<Result: Sendable>(count: Int, maxConcurrent: Int = 2, operation: @escaping @Sendable (Int) async throws -> Result) async throws -> [Result] {
+        guard count >= 0, maxConcurrent > 0 else { return [] }
+        return try await withThrowingTaskGroup(of: (Int, Result).self) { group in
+            var results = Array<Result?>(repeating: nil, count: count)
+            var next = 0
+            var running = 0
+            try Task.checkCancellation()
+            func launch(_ index: Int) {
+                group.addTask { (index, try await operation(index)) }
+                running += 1
+            }
+            while next < count && running < maxConcurrent { launch(next); next += 1 }
+            while running > 0 {
+                try Task.checkCancellation()
+                guard let (index, result) = try await group.next() else { break }
+                results[index] = result
+                running -= 1
+                if next < count { launch(next); next += 1 }
+            }
+            return results.compactMap { $0 }
+        }
+    }
+}
+
 /// Foreground-only iOS import.  It deliberately keeps orchestration in the
 /// iOS target while reusing the shared WebDAV uploader and content identity.
 @MainActor
@@ -157,6 +184,12 @@ final class IOSForegroundImportCoordinator: ObservableObject {
     @Published private(set) var failure: String?
     private var task: Task<Void, Never>?
 
+    private enum AssetJobOutcome: Sendable {
+        case known
+        case uploaded
+        case reconciled
+    }
+
     func cancel() { phase = .cancelled; task?.cancel() }
 
     func start(selection: [GalleryAsset], library: PhotoLibraryModel, connection: ConnectorConnection, source: PhotoSource, transport: any DAVTransport = NetworkTransport()) {
@@ -171,51 +204,76 @@ final class IOSForegroundImportCoordinator: ObservableObject {
                 do { assets = try library.inventory(for: selection); IOSImportDiagnostics.finish("asset-inventory-build", started: inventoryPhase, detail: "assets=\(assets.count)") }
                 catch { IOSImportDiagnostics.failure("asset-inventory-build", started: inventoryPhase, error: error); throw error }
                 let reply = try await InventoryCheckClient.check(connection: connection, source: source, assets: assets, transport: transport)
-                for (index, selected) in selection.enumerated() {
-                    try Task.checkCancellation()
-                    guard reply.assets.indices.contains(index) else { throw InventoryCheckError.invalidResponse }
-                    let entry = reply.assets[index]
-                    await self.setCurrent(selected.asset, filename: assets[index].filename)
-                    if entry.state == .known { await self.markAlready(); continue }
-                    guard let ticket = entry.upload else { throw InventoryCheckError.invalidResponse }
-                    await self.setPhase(.exporting)
-                    let exportPhase = IOSImportDiagnostics.start("photo-original-export")
-                    let exported: PhotoLibraryModel.ExportedOriginal
-                    do { exported = try await library.exportOriginal(for: selected) { [weak self] value in Task { @MainActor in self?.setProgress(value) } }; IOSImportDiagnostics.finish("photo-original-export", started: exportPhase, detail: "bytes=pending") }
-                    catch { IOSImportDiagnostics.failure("photo-original-export", started: exportPhase, error: error); throw error }
-                    defer { try? FileManager.default.removeItem(at: exported.url.deletingLastPathComponent()) }
-                    await self.setPhase(.hashing)
-                    let hashPhase = IOSImportDiagnostics.start("sha256")
-                    let identity: ContentIdentity
-                    do { identity = try await Task.detached { try ContentIdentity.read(exported.url) }.value; IOSImportDiagnostics.finish("sha256", started: hashPhase, detail: "bytes=\(identity.bytes)") }
-                    catch { IOSImportDiagnostics.failure("sha256", started: hashPhase, error: error); throw error }
-                    let calendar = Calendar(identifier: .gregorian)
-                    let date = selected.creationDate
-                    let folder = "Photos/Apple Photos Connector/\(calendar.component(.year, from: date))/\(String(format: "%02d", calendar.component(.month, from: date)))"
-                    let provider = IOSUploadTargets(connection: connection, transport: transport, source: source.sourceId.uuidString.lowercased(), runId: reply.runId, uploadId: ticket.uploadId, folder: folder)
-                    await self.setPhase(.preparing)
-                    await self.setPhase(.uploading)
-                    let putPhase = IOSImportDiagnostics.start("webdav-transfer")
-                    let target: UploadTarget
-                    do { target = try await uploader.uploadWithTarget(file: exported.url, filename: exported.filename, assetId: ticket.assetId, captureDate: date, targets: provider, targetRoot: "Photos/Apple Photos Connector"); IOSImportDiagnostics.finish("webdav-transfer", started: putPhase, detail: "bytes=\(identity.bytes)") }
-                    catch { IOSImportDiagnostics.failure("webdav-transfer", started: putPhase, error: error); throw error }
-                    if target.state == "contentAlreadyPresent" { await self.markReconciled() }
-                    else if target.state == "missing" { await self.markUploaded() }
-                    else { await self.markUploaded() }
-                    if target.state != "contentAlreadyPresent" {
-                        await self.setPhase(.completing)
-                        try await IOSUploadHTTP.complete(connection: connection, transport: transport, source: source.sourceId.uuidString.lowercased(), runId: reply.runId, uploadId: ticket.uploadId, path: target.path)
-                    }
-                }
-                await self.setPhase(.completing)
+                self.setPhase(.uploading)
+                try await self.runAssetJobs(selection: selection, assets: assets, reply: reply, library: library, connection: connection, source: source, transport: transport, uploader: uploader)
+                self.setPhase(.completing)
                 let albumBuild = IOSImportDiagnostics.start("album-inventory-build")
                 let albums: [AlbumInventory]
                 do { albums = try library.albumInventory(); IOSImportDiagnostics.finish("album-inventory-build", started: albumBuild, detail: "albums=\(albums.count) memberships=\(albums.reduce(0) { $0 + $1.assetIdentities.count })") }
                 catch { IOSImportDiagnostics.failure("album-inventory-build", started: albumBuild, error: error); throw error }
                 try await IOSAlbumSyncClient.inventoryAndSync(connection: connection, source: source, albums: albums, selectedAssets: assets, transport: transport)
-                await self.finish()
-            } catch is CancellationError { await self.cancelled() }
-            catch { await self.failed(error.localizedDescription) }
+                self.finish()
+            } catch is CancellationError { self.cancelled() }
+            catch { self.failed(error.localizedDescription) }
+        }
+    }
+
+    private func runAssetJobs(selection: [GalleryAsset], assets: [AssetInventory], reply: InventoryReply, library: PhotoLibraryModel, connection: ConnectorConnection, source: PhotoSource, transport: any DAVTransport, uploader: WebDAVUploader) async throws {
+        let outcomes = try await IOSAssetJobScheduler.run(count: selection.count, maxConcurrent: 2) { [weak self] index in
+            guard let self else { throw CancellationError() }
+            let selected = selection[index]
+            let asset = assets[index]
+            let entry = reply.assets[index]
+            IOSImportDiagnostics.log("asset-job[\(index + 1)] START")
+            let started = ContinuousClock.now
+            do {
+                let outcome = try await self.runAssetJob(index: index, selected: selected, asset: asset, entry: entry, reply: reply, library: library, connection: connection, source: source, transport: transport, uploader: uploader)
+                IOSImportDiagnostics.log("asset-job[\(index + 1)] OK elapsed=\(started.duration(to: .now))")
+                return (index, outcome)
+            } catch {
+                IOSImportDiagnostics.log("asset-job[\(index + 1)] ERROR elapsed=\(started.duration(to: .now)) error=\(String(describing: type(of: error)))")
+                throw error
+            }
+        }
+        for (index, outcome) in outcomes.enumerated() {
+            self.apply(outcome.1, filename: assets[index].filename ?? selection[index].asset.localIdentifier)
+        }
+    }
+
+    private func runAssetJob(index: Int, selected: GalleryAsset, asset: AssetInventory, entry: InventoryAssetReply, reply: InventoryReply, library: PhotoLibraryModel, connection: ConnectorConnection, source: PhotoSource, transport: any DAVTransport, uploader: WebDAVUploader) async throws -> AssetJobOutcome {
+        try Task.checkCancellation()
+        guard reply.assets.indices.contains(index) else { throw InventoryCheckError.invalidResponse }
+        if entry.state == .known { return .known }
+        guard let ticket = entry.upload else { throw InventoryCheckError.invalidResponse }
+        let exportPhase = IOSImportDiagnostics.start("asset-job[\(index + 1)] photo-original-export")
+        let exported: PhotoLibraryModel.ExportedOriginal
+        do { exported = try await library.exportOriginal(for: selected); IOSImportDiagnostics.finish("asset-job[\(index + 1)] photo-original-export", started: exportPhase, detail: "bytes=pending") }
+        catch { IOSImportDiagnostics.failure("asset-job[\(index + 1)] photo-original-export", started: exportPhase, error: error); throw error }
+        defer { try? FileManager.default.removeItem(at: exported.url.deletingLastPathComponent()) }
+        let hashPhase = IOSImportDiagnostics.start("asset-job[\(index + 1)] sha256")
+        let identity: ContentIdentity
+        do { identity = try await Task.detached { try ContentIdentity.read(exported.url) }.value; IOSImportDiagnostics.finish("asset-job[\(index + 1)] sha256", started: hashPhase, detail: "bytes=\(identity.bytes)") }
+        catch { IOSImportDiagnostics.failure("asset-job[\(index + 1)] sha256", started: hashPhase, error: error); throw error }
+        let calendar = Calendar(identifier: .gregorian)
+        let date = selected.creationDate
+        let folder = "Photos/Apple Photos Connector/\(calendar.component(.year, from: date))/\(String(format: "%02d", calendar.component(.month, from: date)))"
+        let provider = IOSUploadTargets(connection: connection, transport: transport, source: source.sourceId.uuidString.lowercased(), runId: reply.runId, uploadId: ticket.uploadId, folder: folder)
+        let putPhase = IOSImportDiagnostics.start("asset-job[\(index + 1)] webdav-transfer")
+        let target: UploadTarget
+        do { target = try await uploader.uploadWithTarget(file: exported.url, filename: exported.filename, assetId: ticket.assetId, captureDate: date, targets: provider, targetRoot: "Photos/Apple Photos Connector"); IOSImportDiagnostics.finish("asset-job[\(index + 1)] webdav-transfer", started: putPhase, detail: "bytes=\(identity.bytes)") }
+        catch { IOSImportDiagnostics.failure("asset-job[\(index + 1)] webdav-transfer", started: putPhase, error: error); throw error }
+        if target.state == "contentAlreadyPresent" { return .reconciled }
+        try Task.checkCancellation()
+        try await IOSUploadHTTP.complete(connection: connection, transport: transport, source: source.sourceId.uuidString.lowercased(), runId: reply.runId, uploadId: ticket.uploadId, path: target.path)
+        return .uploaded
+    }
+
+    private func apply(_ outcome: AssetJobOutcome, filename: String) {
+        currentFilename = filename
+        switch outcome {
+        case .known: markAlready()
+        case .uploaded: markUploaded()
+        case .reconciled: markReconciled()
         }
     }
 
