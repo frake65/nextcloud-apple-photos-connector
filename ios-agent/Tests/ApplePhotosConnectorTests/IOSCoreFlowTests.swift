@@ -30,7 +30,14 @@ final class IOSCoreFlowTests: XCTestCase {
         progress.update(job: 0, sent: 30, total: 100)
         progress.update(job: 1, sent: 200, total: 1000)
         XCTAssertEqual(progress.activeEntries.map(\.total), [100, 1000])
-        XCTAssertEqual(progress.activeFraction, 0.23, accuracy: 0.0001)
+        XCTAssertEqual(progress.activeFraction, 0.5, accuracy: 0.0001)
+    }
+
+    @MainActor
+    func testCompleteVerificationStatusDoesNotHideParallelPut() {
+        XCTAssertTrue(IOSForegroundImportCoordinator.isVerifyingCompletedUpload(pendingCompletionCount: 1, activeTransferCount: 0))
+        XCTAssertFalse(IOSForegroundImportCoordinator.isVerifyingCompletedUpload(pendingCompletionCount: 1, activeTransferCount: 1))
+        XCTAssertFalse(IOSForegroundImportCoordinator.isVerifyingCompletedUpload(pendingCompletionCount: 0, activeTransferCount: 0))
     }
 
     #if DEBUG

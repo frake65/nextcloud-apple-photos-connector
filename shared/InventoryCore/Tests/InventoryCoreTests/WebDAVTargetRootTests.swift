@@ -2,6 +2,15 @@ import XCTest
 @testable import InventoryCore
 
 final class WebDAVTargetRootTests: XCTestCase {
+    func testNetworkTimeoutClassesKeepNormalAndLongRunningSemantics() {
+        XCTAssertEqual(NetworkTransport.timeout(for: .api).request, 20)
+        XCTAssertEqual(NetworkTransport.timeout(for: .api).resource, 30)
+        XCTAssertEqual(NetworkTransport.timeout(for: .longRunningVerification).request, 1800)
+        XCTAssertEqual(NetworkTransport.timeout(for: .longRunningVerification).resource, 1800)
+        XCTAssertEqual(NetworkTransport.timeout(for: .fileTransfer).request, 1800)
+        XCTAssertEqual(NetworkTransport.timeout(for: .fileTransfer).resource, 1800)
+    }
+
     func testConfiguredRootsAndBoundaryAreComponentSafe() {
         XCTAssertTrue(WebDAVUploader.isValidTargetPath("Photos/Apple Photos Connector/2026/09/a.jpg", under: "Photos/Apple Photos Connector"))
         XCTAssertTrue(WebDAVUploader.isValidTargetPath("Archive/Camera A/2026/09/a.jpg", under: "Archive/Camera A"))

@@ -205,6 +205,14 @@ final class IOSForegroundImportCoordinator: ObservableObject {
     }
     var isRunning: Bool { ![.idle, .finished, .failed, .cancelled].contains(phase) }
     var activeTransfers: [(job: Int, sent: Int64, total: Int64)] { transferProgress.activeEntries }
+    /// The server-side verification is only the visible phase when no other
+    /// asset is still sending PUT bytes.
+    var isVerifyingCompletedUpload: Bool {
+        Self.isVerifyingCompletedUpload(pendingCompletionCount: pendingCompletion.count, activeTransferCount: transferProgress.activeEntries.count)
+    }
+    static func isVerifyingCompletedUpload(pendingCompletionCount: Int, activeTransferCount: Int) -> Bool {
+        pendingCompletionCount > 0 && activeTransferCount == 0
+    }
 
     private enum AssetJobOutcome: Sendable {
         case known
@@ -358,7 +366,7 @@ private enum IOSUploadHTTP {
         request.httpBody = try JSONSerialization.data(withJSONObject: ["sourceId": source, "runId": runId, "uploadId": uploadId, "status": "uploaded", "path": path])
         let phase = IOSImportDiagnostics.start("uploads/complete")
         let response: DAVResponse
-        do { response = try await transport.send(request, file: nil); IOSImportDiagnostics.finish("uploads/complete", started: phase, detail: "status=\(response.status)") }
+        do { response = try await transport.send(request, file: nil, kind: .longRunningVerification, progress: nil); IOSImportDiagnostics.finish("uploads/complete", started: phase, detail: "status=\(response.status)") }
         catch { IOSImportDiagnostics.failure("uploads/complete", started: phase, error: error); throw error }
         guard (200..<300).contains(response.status) else { throw UploadError.http(response.status) }
     }

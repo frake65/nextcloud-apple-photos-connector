@@ -7,21 +7,38 @@ public struct DAVResponse: Sendable {
     public init(status: Int, data: Data = Data(), headers: [String: String] = [:]) { self.status = status; self.data = data; self.headers = headers }
 }
 
+public enum DAVRequestKind: Sendable {
+    case api
+    case longRunningVerification
+    case fileTransfer
+}
+
 public protocol DAVTransport: Sendable {
     func send(_ request: URLRequest, file: URL?) async throws -> DAVResponse
     func send(_ request: URLRequest, file: URL?, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> DAVResponse
+    func send(_ request: URLRequest, file: URL?, kind: DAVRequestKind, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> DAVResponse
 }
 
 public extension DAVTransport {
     func send(_ request: URLRequest, file: URL?, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> DAVResponse {
-        try await send(request, file: file)
+        try await send(request, file: file, kind: file == nil ? .api : .fileTransfer, progress: progress)
+    }
+    func send(_ request: URLRequest, file: URL?, kind: DAVRequestKind, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> DAVResponse {
+        try await send(request, file: file, progress: progress)
     }
 }
 
 /// Redirects are rejected, including same-origin redirects, to preserve conditional PUT semantics.
 public final class NetworkTransport: NSObject, DAVTransport, URLSessionTaskDelegate, @unchecked Sendable {
     private static let requestTimeout: TimeInterval = 20
+    public static func timeout(for kind: DAVRequestKind) -> (request: TimeInterval, resource: TimeInterval) {
+        switch kind {
+        case .api: (20, 30)
+        case .longRunningVerification, .fileTransfer: (1800, 1800)
+        }
+    }
     private var apiSession: URLSession!
+    private var verificationSession: URLSession!
     private var transferSession: URLSession!
     private let progressLock = NSLock()
     private var progressHandlers: [Int: @Sendable (Int64, Int64) -> Void] = [:]
@@ -29,19 +46,25 @@ public final class NetworkTransport: NSObject, DAVTransport, URLSessionTaskDeleg
     public override init() {
         let apiConfiguration = URLSessionConfiguration.ephemeral
         apiConfiguration.httpCookieStorage = nil
-        apiConfiguration.timeoutIntervalForRequest = Self.requestTimeout
-        apiConfiguration.timeoutIntervalForResource = 30
+        apiConfiguration.timeoutIntervalForRequest = Self.timeout(for: .api).request
+        apiConfiguration.timeoutIntervalForResource = Self.timeout(for: .api).resource
         let transferConfiguration = URLSessionConfiguration.ephemeral
         transferConfiguration.httpCookieStorage = nil
-        transferConfiguration.timeoutIntervalForRequest = Self.requestTimeout
-        transferConfiguration.timeoutIntervalForResource = 1800
+        transferConfiguration.timeoutIntervalForRequest = Self.timeout(for: .fileTransfer).request
+        transferConfiguration.timeoutIntervalForResource = Self.timeout(for: .fileTransfer).resource
+        let verificationConfiguration = URLSessionConfiguration.ephemeral
+        verificationConfiguration.httpCookieStorage = nil
+        verificationConfiguration.timeoutIntervalForRequest = Self.timeout(for: .longRunningVerification).request
+        verificationConfiguration.timeoutIntervalForResource = Self.timeout(for: .longRunningVerification).resource
         super.init()
         apiSession = URLSession(configuration: apiConfiguration, delegate: self, delegateQueue: nil)
+        verificationSession = URLSession(configuration: verificationConfiguration, delegate: self, delegateQueue: nil)
         transferSession = URLSession(configuration: transferConfiguration, delegate: self, delegateQueue: nil)
     }
 
     deinit {
         apiSession?.invalidateAndCancel()
+        verificationSession?.invalidateAndCancel()
         transferSession?.invalidateAndCancel()
     }
 
@@ -57,12 +80,19 @@ public final class NetworkTransport: NSObject, DAVTransport, URLSessionTaskDeleg
         progressLock.lock(); progressHandlers.removeValue(forKey: task.taskIdentifier); progressLock.unlock()
     }
     public func send(_ request: URLRequest, file: URL?) async throws -> DAVResponse {
-        try await send(request, file: file, progress: nil)
+        try await send(request, file: file, kind: file == nil ? .api : .fileTransfer, progress: nil)
     }
     public func send(_ request: URLRequest, file: URL?, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> DAVResponse {
-        let session: URLSession = (file == nil ? apiSession : transferSession)!
+        try await send(request, file: file, kind: file == nil ? .api : .fileTransfer, progress: progress)
+    }
+    public func send(_ request: URLRequest, file: URL?, kind: DAVRequestKind, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> DAVResponse {
+        let session: URLSession = switch kind {
+        case .api: apiSession!
+        case .longRunningVerification: verificationSession!
+        case .fileTransfer: transferSession!
+        }
         var request = request
-        request.timeoutInterval = file == nil ? Self.requestTimeout : 1800
+        request.timeoutInterval = kind == .api ? Self.requestTimeout : 1800
         let result: (Data, URLResponse)
         if let file { result = try await upload(session: session, request: request, file: file, progress: progress) }
         else { result = try await session.data(for: request) }

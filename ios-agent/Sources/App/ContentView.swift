@@ -769,7 +769,15 @@ private struct InventoryReviewScreen: View {
                         }
                     }
                     Text("\(importer.completed) von \(importer.total) verarbeitet").font(.caption).foregroundStyle(.secondary)
-                    Text(importerStatusText).font(.caption).foregroundStyle(.secondary)
+                    if importer.isVerifyingCompletedUpload {
+                        Text("Übertragung abgeschlossen")
+                        Text("Datei wird auf dem Server überprüft …")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Text("Bei großen Videos kann dies etwas dauern.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Text(importerStatusText).font(.caption).foregroundStyle(.secondary)
+                    }
                     if importer.uploaded > 0 { Text("Hochgeladen: \(importer.uploaded)") }
                     if importer.alreadyPresent > 0 { Text("Bereits vorhanden: \(importer.alreadyPresent)") }
                     if importer.reconciled > 0 { Text("Reconciled: \(importer.reconciled)") }
