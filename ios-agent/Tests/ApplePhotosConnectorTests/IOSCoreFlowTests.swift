@@ -4,6 +4,48 @@ import XCTest
 import InventoryCore
 
 final class IOSCoreFlowTests: XCTestCase {
+    func testImportProgressAggregationIsMonotoneAndByteBased() {
+        var progress = IOSImportProgressAggregation()
+        progress.update(job: 0, sent: 40, total: 100)
+        XCTAssertEqual(progress.sentBytes, 40)
+        progress.update(job: 0, sent: 100, total: 100)
+        progress.update(job: 1, sent: 25, total: 200)
+        XCTAssertEqual(progress.sentBytes, 125)
+        XCTAssertEqual(progress.totalBytes, 300)
+        XCTAssertEqual(progress.fraction, 125.0 / 300.0, accuracy: 0.0001)
+    }
+
+    func testImportProgressAggregationRemovesCompletedJobs() {
+        var progress = IOSImportProgressAggregation()
+        progress.update(job: 0, sent: 50, total: 100)
+        progress.update(job: 1, sent: 20, total: 100)
+        XCTAssertEqual(progress.activeFraction, 0.7, accuracy: 0.0001)
+        progress.remove(job: 0)
+        XCTAssertEqual(progress.activeFraction, 0.2, accuracy: 0.0001)
+        XCTAssertEqual(progress.activeEntries.map(\.job), [1])
+    }
+
+    func testImportProgressKeepsParallelPutDenominatorsPerAsset() {
+        var progress = IOSImportProgressAggregation()
+        progress.update(job: 0, sent: 30, total: 100)
+        progress.update(job: 1, sent: 200, total: 1000)
+        XCTAssertEqual(progress.activeEntries.map(\.total), [100, 1000])
+        XCTAssertEqual(progress.activeFraction, 0.23, accuracy: 0.0001)
+    }
+
+    #if DEBUG
+    func testImportDiagnosticsUsesSharedDefaultsKey() {
+        let defaults = UserDefaults.standard
+        let key = IOSImportDiagnostics.defaultsKey
+        let old = defaults.object(forKey: key)
+        defer { if let old { defaults.set(old, forKey: key) } else { defaults.removeObject(forKey: key) } }
+        defaults.set(false, forKey: key)
+        XCTAssertFalse(IOSImportDiagnostics.enabled)
+        defaults.set(true, forKey: key)
+        XCTAssertTrue(IOSImportDiagnostics.enabled)
+    }
+    #endif
+
     func testAssetJobSchedulerCapsConcurrencyAndPreservesInputOrder() async throws {
         let probe = SchedulerProbe()
         let results = try await IOSAssetJobScheduler.run(count: 6, maxConcurrent: 2) { index in
@@ -81,6 +123,24 @@ final class IOSCoreFlowTests: XCTestCase {
         XCTAssertEqual(selection.values, Set(["photo-local-id"]))
         selection.remove("photo-local-id")
         XCTAssertTrue(selection.values.isEmpty)
+    }
+
+    func testSelectionScopeSelectAllAndDeselectOnlyCurrentAlbum() {
+        var selection = AssetSelectionIDs()
+        selection.insert("outside")
+        selection.insertAll(["album-a", "album-b"])
+        XCTAssertTrue(selection.allSelected(in: ["album-a", "album-b"]))
+        selection.removeAll(["album-a", "album-b"])
+        XCTAssertEqual(selection.values, Set(["outside"]))
+        XCTAssertFalse(selection.allSelected(in: ["album-a", "album-b"]))
+    }
+
+    func testSelectionScopeSelectAllDecisionForEmptyAndPartialContexts() {
+        var selection = AssetSelectionIDs()
+        XCTAssertFalse(selection.allSelected(in: []))
+        XCTAssertFalse(selection.allSelected(in: ["a", "b"]))
+        selection.insertAll(["a", "b"])
+        XCTAssertTrue(selection.allSelected(in: ["a", "b"]))
     }
 
     func testAutoScrollVelocityIsNegativeAtTop() {

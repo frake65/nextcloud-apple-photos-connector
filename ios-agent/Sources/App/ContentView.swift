@@ -15,9 +15,9 @@ struct ContentView: View {
             if library.authorization.canRead {
                 TabView {
                     NavigationStack {
-                        GalleryScreen(library: library, selection: selection, assets: library.assets, title: "Fotos", onCheck: { showingInventoryReview = true })
+                        GalleryScreen(library: library, selection: selection, assets: library.assets, title: "Fotos & Videos", canImport: connection.parsedSourceId != nil, onCheck: { showingInventoryReview = true })
                     }.tabItem { Label("Fotos", systemImage: "photo.on.rectangle.angled") }
-                    NavigationStack { AlbumsScreen(library: library, selection: selection, onCheck: { showingInventoryReview = true }) }
+                    NavigationStack { AlbumsScreen(library: library, selection: selection, canImport: connection.parsedSourceId != nil, onCheck: { showingInventoryReview = true }) }
                         .tabItem { Label("Alben", systemImage: "rectangle.stack") }
                     NavigationStack { ConnectionView(model: connection) }
                         .tabItem { Label("Verbindung", systemImage: "server.rack") }
@@ -60,12 +60,13 @@ struct ContentView: View {
 private struct AlbumsScreen: View {
     @ObservedObject var library: PhotoLibraryModel
     @ObservedObject var selection: AssetSelectionModel
+    let canImport: Bool
     let onCheck: () -> Void
 
     var body: some View {
         List(library.albums) { album in
             NavigationLink {
-                GalleryScreen(library: library, selection: selection, assets: library.assets(in: album), title: album.title, onCheck: onCheck)
+                GalleryScreen(library: library, selection: selection, assets: library.assets(in: album), title: album.title, canImport: canImport, onCheck: onCheck)
             } label: {
                 HStack(spacing: 14) {
                     if let cover = album.cover { ThumbnailView(asset: cover, library: library, dimension: 60) }
@@ -83,8 +84,8 @@ private struct AlbumsScreen: View {
     }
 
     private var selectionButton: some View {
-        Button(action: onCheck) { Label("\(selection.count) ausgewählt · Auswahl prüfen", systemImage: "checkmark.circle") }
-            .disabled(selection.count == 0)
+        Button(action: onCheck) { Label("Fotos & Alben übernehmen", systemImage: "icloud.and.arrow.up") }
+            .disabled(selection.count == 0 || !canImport)
     }
 }
 
@@ -93,6 +94,7 @@ private struct GalleryScreen: View {
     @ObservedObject var selection: AssetSelectionModel
     let assets: [GalleryAsset]
     let title: String
+    let canImport: Bool
     let onCheck: () -> Void
     @AppStorage("apc.ios.gallery.columnCount") private var columnCount = 3
     private var columns: [GridItem] {
@@ -164,6 +166,19 @@ private struct GalleryScreen: View {
         .navigationTitle(title)
         .toolbar {
             if library.authorization == .limited { ToolbarItem(placement: .topBarLeading) { Label("Eingeschränkter Zugriff", systemImage: "person.crop.circle.badge.checkmark").labelStyle(.iconOnly) } }
+            ToolbarItem(placement: .principal) {
+                VStack(spacing: 0) {
+                    Text(title).font(.headline)
+                    Text("Apple Photos Connector").font(.caption2).foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .combine)
+            }
+            ToolbarItem(placement: .topBarLeading) {
+                Button(action: toggleAll) {
+                    Label(allSelected ? "Alle abwählen" : "Alle auswählen", systemImage: allSelected ? "checkmark.circle.fill" : "checkmark.circle")
+                }
+                .disabled(assets.isEmpty)
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Text("Darstellung")
@@ -172,19 +187,44 @@ private struct GalleryScreen: View {
                             Label("\(count) Spalten", systemImage: columnCount == count ? "checkmark" : "circle")
                         }
                     }
-                    Divider()
-                    Button(action: onCheck) { Label("\(selection.count) ausgewählt", systemImage: "checkmark.circle") }
-                        .disabled(selection.count == 0)
                 } label: {
                     Label("Darstellung", systemImage: "square.grid.3x3")
                 }
             }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            importAction
         }
     }
 
     private var limitedAccessNotice: some View {
         Label("Eingeschränkter Zugriff: Es werden nur freigegebene Fotos und Videos angezeigt.", systemImage: "person.crop.circle.badge.checkmark")
             .font(.footnote).foregroundStyle(.secondary).padding()
+    }
+
+    private var allSelected: Bool { selection.allSelected(in: assets) }
+
+    private var importAction: some View {
+        HStack(spacing: 12) {
+            Text("\(selection.count) ausgewählt")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(selection.count == 0 ? .secondary : .primary)
+            Spacer()
+            Button(action: onCheck) {
+                Label("Fotos & Alben übernehmen", systemImage: "icloud.and.arrow.up")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(selection.count == 0 || !canImport)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 10)
+        .background(.bar)
+    }
+
+    private func toggleAll() {
+        if allSelected { selection.deselectAll(in: assets) }
+        else { selection.selectAll(in: assets) }
     }
 
     private func selectionIndicator(for item: GalleryAsset) -> some View {
@@ -668,7 +708,7 @@ private struct InventoryReviewScreen: View {
                 }
             }
             #if DEBUG
-            Section("DEBUG: PhotoKit-Identität") {
+            if IOSImportDiagnostics.enabled { Section("DEBUG: PhotoKit-Identität") {
                 Button("Identität der Auswahl anzeigen") {
                     do {
                         identityDiagnostics = try library.identityDiagnostics(for: selection.assets)
@@ -693,8 +733,8 @@ private struct InventoryReviewScreen: View {
                     }.font(.caption.monospaced())
                 }
                 Text("sourceId: \(connection.parsedSourceId?.uuidString.lowercased() ?? "ungültig")").textSelection(.enabled)
-            }
-            Section("DEBUG: Original-Hash") {
+            } }
+            if IOSImportDiagnostics.enabled { Section("DEBUG: Original-Hash") {
                 Button {
                     Task { await calculateOriginalHash() }
                 } label: {
@@ -715,14 +755,21 @@ private struct InventoryReviewScreen: View {
                     }.font(.caption.monospaced())
                 }
                 if selection.count != 1 { Text("Genau ein Foto oder Video auswählen.").font(.footnote).foregroundStyle(.secondary) }
-            }
+            } }
             #endif
             if let error { Section { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red) } }
             Section("Import") {
                 if importer.phase != .idle {
                     Text(importer.currentFilename ?? "")
-                    ProgressView(value: importer.total == 0 ? 0 : Double(importer.completed) / Double(importer.total))
-                    Text("Phase: \(String(describing: importer.phase)) · \(importer.completed)/\(importer.total)").font(.caption).foregroundStyle(.secondary)
+                    ProgressView(value: importer.overallProgress)
+                    if !importer.activeTransfers.isEmpty {
+                        ForEach(importer.activeTransfers, id: \.job) { transfer in
+                            Text("Asset \(transfer.job + 1): \(ByteCountFormatter.string(fromByteCount: transfer.sent, countStyle: .file)) von \(ByteCountFormatter.string(fromByteCount: transfer.total, countStyle: .file))")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    Text("\(importer.completed) von \(importer.total) verarbeitet").font(.caption).foregroundStyle(.secondary)
+                    Text(importerStatusText).font(.caption).foregroundStyle(.secondary)
                     if importer.uploaded > 0 { Text("Hochgeladen: \(importer.uploaded)") }
                     if importer.alreadyPresent > 0 { Text("Bereits vorhanden: \(importer.alreadyPresent)") }
                     if importer.reconciled > 0 { Text("Reconciled: \(importer.reconciled)") }
@@ -730,12 +777,12 @@ private struct InventoryReviewScreen: View {
                 }
                 Button {
                     startImport()
-                } label: { Label("Auswahl importieren", systemImage: "icloud.and.arrow.up") }
-                    .disabled(selection.count == 0 || importer.phase == .exporting || importer.phase == .uploading || importer.phase == .preparing || importer.phase == .completing || importer.phase == .inventory)
+                } label: { Label(importer.isRunning ? "Import läuft…" : "Fotos & Alben übernehmen", systemImage: importer.isRunning ? "arrow.triangle.2.circlepath" : "icloud.and.arrow.up") }
+                    .disabled(selection.count == 0 || !connectionHasConfiguration || importer.isRunning)
                 if importer.phase != .idle && importer.phase != .finished && importer.phase != .failed && importer.phase != .cancelled {
                     Button("Import abbrechen") { importer.cancel() }
                 }
-                Text("Der Import läuft im Vordergrund. Alben werden in diesem iOS-MVP nicht synchronisiert.")
+                Text("Der Import läuft im Vordergrund. Danach werden die betroffenen Alben abgeglichen.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section {
@@ -787,6 +834,18 @@ private struct InventoryReviewScreen: View {
         guard let sourceID = connection.parsedSourceId else { error = InventoryCheckError.invalidSourceIdentifier.localizedDescription; return }
         guard let serverConnection = try? connection.makeConnection() else { error = InventoryCheckError.noServerConfiguration.localizedDescription; return }
         importer.start(selection: selection.assets, library: library, connection: serverConnection, source: PhotoSource(sourceId: sourceID, name: "Apple Photos"))
+    }
+
+    private var connectionHasConfiguration: Bool { connection.parsedSourceId != nil }
+    private var importerStatusText: String {
+        switch importer.phase {
+        case .inventory: "Inventar wird geprüft"
+        case .exporting, .hashing, .preparing: "Dateien werden vorbereitet"
+        case .uploading: "Übertragung läuft"
+        case .completing: "Übertragung wird abgeschlossen"
+        case .finished: "Alben werden abgeglichen"
+        default: ""
+        }
     }
 
     #if DEBUG

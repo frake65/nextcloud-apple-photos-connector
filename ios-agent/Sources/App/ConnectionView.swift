@@ -2,6 +2,9 @@ import SwiftUI
 
 struct ConnectionView: View {
     @ObservedObject var model: IOSConnectionModel
+    #if DEBUG
+    @State private var diagnosticsEnabled = IOSImportDiagnostics.enabled
+    #endif
 
     var body: some View {
         Form {
@@ -40,6 +43,18 @@ struct ConnectionView: View {
                 }
                 .disabled(model.password.isEmpty || model.username.isEmpty || model.parsedSourceId == nil)
             }
+
+            #if DEBUG
+            Section("Diagnose") {
+                Toggle("Diagnoseprotokoll", isOn: Binding(
+                    get: { diagnosticsEnabled },
+                    set: { value in
+                        diagnosticsEnabled = value
+                        UserDefaults.standard.set(value, forKey: IOSImportDiagnostics.defaultsKey)
+                    }
+                ))
+            }
+            #endif
         }
         .navigationTitle("Verbindung")
         .onChange(of: model.server) { _, _ in model.markEdited() }

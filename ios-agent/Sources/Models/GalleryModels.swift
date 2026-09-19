@@ -64,6 +64,24 @@ final class AssetSelectionModel: ObservableObject {
 
     func clear() { identifiers.removeAll(); selected.removeAll() }
 
+    func allSelected(in context: [GalleryAsset]) -> Bool {
+        identifiers.allSelected(in: context.map(\.id))
+    }
+
+    func selectAll(in context: [GalleryAsset]) {
+        identifiers.insertAll(context.map(\.id))
+        for asset in context {
+            selected[asset.id] = asset
+        }
+    }
+
+    func deselectAll(in context: [GalleryAsset]) {
+        identifiers.removeAll(context.map(\.id))
+        for asset in context {
+            selected.removeValue(forKey: asset.id)
+        }
+    }
+
     func beginDrag(at asset: GalleryAsset) {
         dragVisited.removeAll()
         dragMode = identifiers.contains(asset.id) ? .deselect : .select
@@ -88,6 +106,9 @@ struct AssetSelectionIDs: Equatable {
     func contains(_ identifier: String) -> Bool { values.contains(identifier) }
     mutating func insert(_ identifier: String) { values.insert(identifier) }
     mutating func remove(_ identifier: String) { values.remove(identifier) }
+    func allSelected(in identifiers: [String]) -> Bool { !identifiers.isEmpty && identifiers.allSatisfy(values.contains) }
+    mutating func insertAll(_ identifiers: [String]) { values.formUnion(identifiers) }
+    mutating func removeAll(_ identifiers: [String]) { values.subtract(identifiers) }
     mutating func removeAll() { values.removeAll() }
 }
 

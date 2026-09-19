@@ -69,6 +69,17 @@ struct InventoryCheckResult {
     let states: [InventoryAssetReply.State]
 }
 
+struct IOSImportProgressAggregation: Sendable {
+    private var jobs: [Int: (sent: Int64, total: Int64)] = [:]
+    var sentBytes: Int64 { jobs.values.reduce(0) { $0 + $1.sent } }
+    var totalBytes: Int64 { jobs.values.reduce(0) { $0 + $1.total } }
+    var fraction: Double { totalBytes > 0 ? Double(sentBytes) / Double(totalBytes) : 0 }
+    mutating func update(job: Int, sent: Int64, total: Int64) { jobs[job] = (max(0, sent), max(0, total)) }
+    mutating func remove(job: Int) { jobs.removeValue(forKey: job) }
+    var activeFraction: Double { jobs.values.reduce(0) { $0 + ($1.total > 0 ? min(1, Double($1.sent) / Double($1.total)) : 0) } }
+    var activeEntries: [(job: Int, sent: Int64, total: Int64)] { jobs.keys.sorted().compactMap { key in guard let value = jobs[key] else { return nil }; return (key, value.sent, value.total) } }
+}
+
 enum InventoryCheckError: LocalizedError {
     case noServerConfiguration, unavailableAsset, invalidSourceIdentifier, authenticationFailed, endpointUnavailable, network, invalidResponse
 
@@ -181,8 +192,19 @@ final class IOSForegroundImportCoordinator: ObservableObject {
     @Published private(set) var uploaded = 0
     @Published private(set) var alreadyPresent = 0
     @Published private(set) var reconciled = 0
+    @Published private(set) var transferSentBytes: Int64 = 0
+    @Published private(set) var transferTotalBytes: Int64 = 0
     @Published private(set) var failure: String?
     private var task: Task<Void, Never>?
+    private var transferProgress = IOSImportProgressAggregation()
+    private var pendingCompletion = Set<Int>()
+    var overallProgress: Double {
+        guard total > 0 else { return 0 }
+        if completed >= total { return 1 }
+        return min(0.999, (Double(completed + pendingCompletion.count) + transferProgress.activeFraction) / Double(total))
+    }
+    var isRunning: Bool { ![.idle, .finished, .failed, .cancelled].contains(phase) }
+    var activeTransfers: [(job: Int, sent: Int64, total: Int64)] { transferProgress.activeEntries }
 
     private enum AssetJobOutcome: Sendable {
         case known
@@ -194,7 +216,7 @@ final class IOSForegroundImportCoordinator: ObservableObject {
 
     func start(selection: [GalleryAsset], library: PhotoLibraryModel, connection: ConnectorConnection, source: PhotoSource, transport: any DAVTransport = NetworkTransport()) {
         IOSImportDiagnostics.announceIfEnabled()
-        cancel(); phase = .inventory; failure = nil; completed = 0; uploaded = 0; alreadyPresent = 0; reconciled = 0; total = selection.count
+        cancel(); phase = .inventory; failure = nil; completed = 0; uploaded = 0; alreadyPresent = 0; reconciled = 0; transferProgress = IOSImportProgressAggregation(); pendingCompletion = []; transferSentBytes = 0; transferTotalBytes = 0; total = selection.count
         task = Task { [weak self] in
             guard let self else { return }
             do {
@@ -236,14 +258,14 @@ final class IOSForegroundImportCoordinator: ObservableObject {
             }
         }
         for (index, outcome) in outcomes.enumerated() {
-            self.apply(outcome.1, filename: assets[index].filename ?? selection[index].asset.localIdentifier)
+            self.apply(outcome.1, job: index, filename: assets[index].filename ?? selection[index].asset.localIdentifier)
         }
     }
 
     private func runAssetJob(index: Int, selected: GalleryAsset, asset: AssetInventory, entry: InventoryAssetReply, reply: InventoryReply, library: PhotoLibraryModel, connection: ConnectorConnection, source: PhotoSource, transport: any DAVTransport, uploader: WebDAVUploader) async throws -> AssetJobOutcome {
         try Task.checkCancellation()
         guard reply.assets.indices.contains(index) else { throw InventoryCheckError.invalidResponse }
-        if entry.state == .known { return .known }
+        if entry.state == .known { self.markAlready(); return .known }
         guard let ticket = entry.upload else { throw InventoryCheckError.invalidResponse }
         let exportPhase = IOSImportDiagnostics.start("asset-job[\(index + 1)] photo-original-export")
         let exported: PhotoLibraryModel.ExportedOriginal
@@ -260,21 +282,42 @@ final class IOSForegroundImportCoordinator: ObservableObject {
         let provider = IOSUploadTargets(connection: connection, transport: transport, source: source.sourceId.uuidString.lowercased(), runId: reply.runId, uploadId: ticket.uploadId, folder: folder)
         let putPhase = IOSImportDiagnostics.start("asset-job[\(index + 1)] webdav-transfer")
         let target: UploadTarget
-        do { target = try await uploader.uploadWithTarget(file: exported.url, filename: exported.filename, assetId: ticket.assetId, captureDate: date, targets: provider, targetRoot: "Photos/Apple Photos Connector"); IOSImportDiagnostics.finish("asset-job[\(index + 1)] webdav-transfer", started: putPhase, detail: "bytes=\(identity.bytes)") }
+        do { target = try await uploader.uploadWithTarget(file: exported.url, filename: exported.filename, assetId: ticket.assetId, captureDate: date, targets: provider, targetRoot: "Photos/Apple Photos Connector", progress: { [weak self] sent, total in
+            Task { @MainActor in self?.updateTransferProgress(job: index, sent: sent, total: total) }
+        }); IOSImportDiagnostics.finish("asset-job[\(index + 1)] webdav-transfer", started: putPhase, detail: "bytes=\(identity.bytes)") }
         catch { IOSImportDiagnostics.failure("asset-job[\(index + 1)] webdav-transfer", started: putPhase, error: error); throw error }
-        if target.state == "contentAlreadyPresent" { return .reconciled }
+        if target.state == "contentAlreadyPresent" { self.markReconciled(); return .reconciled }
+        pendingCompletion.insert(index)
+        transferProgress.remove(job: index)
+        transferSentBytes = transferProgress.sentBytes
+        transferTotalBytes = transferProgress.totalBytes
         try Task.checkCancellation()
-        try await IOSUploadHTTP.complete(connection: connection, transport: transport, source: source.sourceId.uuidString.lowercased(), runId: reply.runId, uploadId: ticket.uploadId, path: target.path)
+        do {
+            try await IOSUploadHTTP.complete(connection: connection, transport: transport, source: source.sourceId.uuidString.lowercased(), runId: reply.runId, uploadId: ticket.uploadId, path: target.path)
+        } catch {
+            pendingCompletion.remove(index)
+            throw error
+        }
+        pendingCompletion.remove(index)
+        self.markUploaded()
         return .uploaded
     }
 
-    private func apply(_ outcome: AssetJobOutcome, filename: String) {
+    private func apply(_ outcome: AssetJobOutcome, job: Int, filename: String) {
         currentFilename = filename
+        pendingCompletion.remove(job)
+        transferProgress.remove(job: job)
+        transferSentBytes = transferProgress.sentBytes
+        transferTotalBytes = transferProgress.totalBytes
         switch outcome {
-        case .known: markAlready()
-        case .uploaded: markUploaded()
-        case .reconciled: markReconciled()
+        case .known, .uploaded, .reconciled: break
         }
+    }
+
+    private func updateTransferProgress(job: Int, sent: Int64, total: Int64) {
+        transferProgress.update(job: job, sent: sent, total: total)
+        transferSentBytes = transferProgress.sentBytes
+        transferTotalBytes = transferProgress.totalBytes
     }
 
     private func setCurrent(_ asset: PHAsset, filename: String?) { currentFilename = filename ?? asset.localIdentifier }
