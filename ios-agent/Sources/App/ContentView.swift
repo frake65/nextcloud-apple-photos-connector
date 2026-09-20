@@ -9,9 +9,15 @@ struct ContentView: View {
     @StateObject private var connection = IOSConnectionModel()
     @Environment(\.scenePhase) private var scenePhase
     @State private var showingInventoryReview = false
+    @State private var showingStartup = true
 
     var body: some View {
         Group {
+            if showingStartup && !library.hasLoadedInitialState {
+                StartupView(isLoadingLibrary: library.isLoading) {
+                    if library.authorization == .notDetermined { library.requestAccess() }
+                }
+            } else {
             if library.authorization.canRead {
                 TabView {
                     NavigationStack {
@@ -25,6 +31,7 @@ struct ContentView: View {
             } else {
                 permissionView
             }
+            }
         }
         .sheet(isPresented: $showingInventoryReview) {
             NavigationStack {
@@ -32,9 +39,18 @@ struct ContentView: View {
             }
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { library.refreshAuthorizationAndLoad() }
+            if phase == .active {
+                library.refreshAuthorizationAndLoad()
+                Task { await presentRecoveryIfNeeded() }
+            }
         }
-        .onAppear { library.refreshAuthorizationAndLoad() }
+        .onAppear {
+            library.refreshAuthorizationAndLoad()
+            Task { await presentRecoveryIfNeeded() }
+        }
+        .onChange(of: library.hasLoadedInitialState) { _, loaded in
+            if loaded { showingStartup = false }
+        }
     }
 
     private var permissionView: some View {
@@ -54,6 +70,57 @@ struct ContentView: View {
             case .authorized, .limited: EmptyView()
             }
         }.padding(28).navigationTitle("Nextcloud APC")
+    }
+
+    @MainActor
+    private func presentRecoveryIfNeeded() async {
+        guard !showingInventoryReview,
+              connection.parsedSourceId != nil,
+              !library.assets.isEmpty else { return }
+        let store = ImportQueueStore()
+        let coordinator = BackgroundTransferCoordinator.shared
+        _ = await coordinator.reconcileTasks(queueStore: store)
+        guard await coordinator.activeBindings().isEmpty else { return }
+        let sourceID = connection.parsedSourceId!
+        let hasRecoverableRun = (await store.recoverableRuns()).contains { run in
+            run.sourceID == sourceID &&
+            run.account.serverBaseURL == connection.server &&
+            run.account.username == connection.username &&
+            run.assets.allSatisfy { persistedAsset in
+                library.assets.contains { galleryAsset in galleryAsset.id == persistedAsset.localIdentifier }
+            }
+        }
+        if hasRecoverableRun { showingInventoryReview = true }
+    }
+}
+
+private struct StartupView: View {
+    let isLoadingLibrary: Bool
+    let onVisible: () -> Void
+    private let launchBlue = Color(red: 0.0, green: 0.4784313725, blue: 1.0)
+
+    var body: some View {
+        ZStack {
+            launchBlue.ignoresSafeArea()
+            VStack(spacing: 20) {
+                Image("PhotosConnectorLogo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 140, height: 140)
+                Text("Photos Connector")
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundStyle(.white)
+                if isLoadingLibrary {
+                    ProgressView()
+                        .tint(.white)
+                    Text("Mediathek wird geladen …")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.9))
+                }
+            }
+        }
+        .preferredColorScheme(.light)
+        .task { onVisible() }
     }
 }
 
@@ -131,7 +198,7 @@ private struct GalleryScreen: View {
                                         .frame(width: side, height: side)
                                         .clipped()
                                         .overlay(alignment: .topTrailing) { selectionIndicator(for: item) }
-                                    if item.isVideo { Label("Video", systemImage: "play.fill").font(.caption2.bold()).padding(5).background(.black.opacity(0.65), in: Capsule()).foregroundStyle(.white).padding(6).frame(maxWidth: .infinity, alignment: .leading) }
+                                    if item.isVideo { Label(item.durationLabel, systemImage: "play.fill").font(.caption2.bold()).padding(5).background(.black.opacity(0.65), in: Capsule()).foregroundStyle(.white).padding(6).frame(maxWidth: .infinity, alignment: .leading) }
                                 }
                                 .frame(width: side, height: side)
                                 .clipped()
@@ -257,12 +324,16 @@ private struct GalleryScreen: View {
         case .began:
             debugLog("SELECT BEGIN location=\(point.x),\(point.y)")
             #if DEBUG
-            print("SELECT COORD touchRecognizer=(\(point.x),\(point.y)) touchWindow=(\(point.x),\(point.y))")
+            let scroll = galleryScrollView
+            print("SELECT COORD touchGlobal=(\(point.x),\(point.y)) contentOffset=(\(scroll?.contentOffset.x ?? 0),\(scroll?.contentOffset.y ?? 0)) adjustedInset=(\(scroll?.adjustedContentInset.top ?? 0),\(scroll?.adjustedContentInset.left ?? 0),\(scroll?.adjustedContentInset.bottom ?? 0),\(scroll?.adjustedContentInset.right ?? 0))")
             #endif
             guard let item = asset(at: point) else {
                 debugLog("SELECT BEGIN NO ASSET location=\(point.x),\(point.y) frames=\(cellFrames.prefix(4))")
                 return
             }
+            #if DEBUG
+            logSelectionHit(item: item, touch: point)
+            #endif
             dragLocation = point
             selection.beginDrag(at: item)
             updateAutoScroll()
@@ -316,6 +387,20 @@ private struct GalleryScreen: View {
         #endif
         return gestureData.assets.first { $0.id == key }
     }
+
+    #if DEBUG
+    private func logSelectionHit(item: GalleryAsset, touch: CGPoint) {
+        guard let frame = gestureData.frames[item.id] else { return }
+        let left = gestureData.frames
+            .filter { $0.key != item.id && $0.value.maxX <= frame.minX && $0.value.intersects(frame.insetBy(dx: 0, dy: -1)) }
+            .max { $0.value.maxX < $1.value.maxX }
+        let right = gestureData.frames
+            .filter { $0.key != item.id && $0.value.minX >= frame.maxX && $0.value.intersects(frame.insetBy(dx: 0, dy: -1)) }
+            .min { $0.value.minX < $1.value.minX }
+        func shortID(_ id: String?) -> String { id.map { String($0.prefix(8)) } ?? "-" }
+        print("SELECT HIT touch=(\(touch.x),\(touch.y)) asset=\(shortID(item.id)) frame=(\(frame.minX),\(frame.minY),\(frame.width),\(frame.height)) center=(\(frame.midX),\(frame.midY)) delta=(\(touch.x - frame.midX),\(touch.y - frame.midY)) left=\(shortID(left?.key)) frame=\(String(describing: left?.value)) right=\(shortID(right?.key)) frame=\(String(describing: right?.value))")
+    }
+    #endif
 }
 
 private final class GalleryGestureData: ObservableObject {
@@ -380,8 +465,10 @@ private struct SelectionLongPressBridge: UIViewRepresentable {
             print("SELECT GESTURE \(stateName(recognizer.state)) duration=\(recognizer.duration) distance=\(recognizer.distance)")
             #endif
             let localLocation = recognizer.location(in: view)
-            let windowLocation = view.window.map { view.convert(localLocation, to: $0) } ?? localLocation
-            action?(recognizer.state, windowLocation)
+            // SwiftUI frame(in: .global) is in the global screen coordinate
+            // space. Convert the recognizer location to that same space.
+            let globalLocation = view.convert(localLocation, to: nil)
+            action?(recognizer.state, globalLocation)
         }
 
         @objc private func handlePan(_ recognizer: UIPanGestureRecognizer) {
@@ -665,6 +752,7 @@ private struct ThumbnailView: View {
 }
 
 private struct InventoryReviewScreen: View {
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var library: PhotoLibraryModel
     @ObservedObject var selection: AssetSelectionModel
@@ -692,7 +780,8 @@ private struct InventoryReviewScreen: View {
                     LabeledContent("Neu", value: "\(result.new)")
                 }
             }
-            if let result {
+            #if DEBUG
+            if IOSImportDiagnostics.enabled, let result {
                 Section("Ergebnis je Asset") {
                     ForEach(Array(result.assets.enumerated()), id: \.offset) { index, asset in
                         HStack {
@@ -708,6 +797,7 @@ private struct InventoryReviewScreen: View {
                     }
                 }
             }
+            #endif
             #if DEBUG
             if IOSImportDiagnostics.enabled { Section("DEBUG: PhotoKit-Identität") {
                 Button("Identität der Auswahl anzeigen") {
@@ -762,34 +852,39 @@ private struct InventoryReviewScreen: View {
             Section("Import") {
                 if let interruptedRun {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Unterbrochener Import")
-                        Text("Ein vorheriger Import kann fortgesetzt werden.").font(.caption).foregroundStyle(.secondary)
+                        Text("Unterbrochene Übertragung")
+                        Text("Die Übertragung wurde unterbrochen und kann fortgesetzt werden.").font(.caption).foregroundStyle(.secondary)
                         Button("Fortsetzen") { resumeImport(interruptedRun) }
                             .disabled(importer.isRunning)
                     }
                 }
-                if importer.phase != .idle {
+                if importer.hasActiveBackgroundTransfer {
+                    Text("Übertragung läuft …").font(.caption).foregroundStyle(.secondary)
+                    Text("Die Übertragung läuft weiter.").font(.caption).foregroundStyle(.secondary)
+                } else if importer.phase != .idle {
                     Text(importer.currentFilename ?? "")
                     ProgressView(value: importer.overallProgress)
                     if !importer.activeTransfers.isEmpty {
                         ForEach(importer.activeTransfers, id: \.job) { transfer in
-                            Text("Asset \(transfer.job + 1): \(ByteCountFormatter.string(fromByteCount: transfer.sent, countStyle: .file)) von \(ByteCountFormatter.string(fromByteCount: transfer.total, countStyle: .file))")
+                            Text("\(ByteCountFormatter.string(fromByteCount: transfer.sent, countStyle: .file)) von \(ByteCountFormatter.string(fromByteCount: transfer.total, countStyle: .file))")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     }
-                    Text("\(importer.completed) von \(importer.total) verarbeitet").font(.caption).foregroundStyle(.secondary)
+                    Text("\(importer.completed) von \(importer.total) übertragen").font(.caption).foregroundStyle(.secondary)
                     if importer.isVerifyingCompletedUpload {
                         Text("Übertragung abgeschlossen")
-                        Text("Datei wird auf dem Server überprüft …")
+                        Text("Datei wird in Nextcloud überprüft …")
                             .font(.caption).foregroundStyle(.secondary)
                         Text("Bei großen Videos kann dies etwas dauern.")
                             .font(.caption).foregroundStyle(.secondary)
                     } else {
                         Text(importerStatusText).font(.caption).foregroundStyle(.secondary)
                     }
-                    if importer.uploaded > 0 { Text("Hochgeladen: \(importer.uploaded)") }
+                    if importer.uploaded > 0 { Text("Übertragen: \(importer.uploaded)") }
                     if importer.alreadyPresent > 0 { Text("Bereits vorhanden: \(importer.alreadyPresent)") }
-                    if importer.reconciled > 0 { Text("Reconciled: \(importer.reconciled)") }
+                    #if DEBUG
+                    if IOSImportDiagnostics.enabled, importer.reconciled > 0 { Text("Überprüft: \(importer.reconciled)") }
+                    #endif
                     if let failure = importer.failure { Text(failure).foregroundStyle(.red) }
                 }
                 Button {
@@ -799,10 +894,11 @@ private struct InventoryReviewScreen: View {
                 if importer.phase != .idle && importer.phase != .finished && importer.phase != .failed && importer.phase != .cancelled {
                     Button("Import abbrechen") { importer.cancel() }
                 }
-                Text("Der Import läuft im Vordergrund. Danach werden die betroffenen Alben abgeglichen.")
+                Text("Die Übertragung läuft im Vordergrund. Danach werden die betroffenen Alben abgeglichen.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
-            Section {
+            #if DEBUG
+            if IOSImportDiagnostics.enabled { Section {
                 Button {
                     Task { await checkSelection() }
                 } label: {
@@ -812,11 +908,15 @@ private struct InventoryReviewScreen: View {
                 .disabled(isChecking || selection.count == 0)
                 Text("Es werden nur Inventarmetadaten an Nextcloud gesendet. Diese Aktion überträgt keine Dateien.")
                     .font(.footnote).foregroundStyle(.secondary)
-            }
+            } }
+            #endif
         }
-        .navigationTitle("Inventar prüfen")
+        .navigationTitle("Fotos & Videos übertragen")
         .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Fertig") { dismiss() } } }
         .task { await loadInterruptedRun() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await loadInterruptedRun() } }
+        }
     }
 
     @MainActor
@@ -851,12 +951,15 @@ private struct InventoryReviewScreen: View {
     private func startImport() {
         guard let sourceID = connection.parsedSourceId else { error = InventoryCheckError.invalidSourceIdentifier.localizedDescription; return }
         guard let serverConnection = try? connection.makeConnection() else { error = InventoryCheckError.noServerConfiguration.localizedDescription; return }
+        interruptedRun = nil
         importer.start(selection: selection.assets, library: library, connection: serverConnection, source: PhotoSource(sourceId: sourceID, name: "Apple Photos"))
     }
 
     @MainActor
     private func loadInterruptedRun() async {
         guard let sourceID = connection.parsedSourceId else { return }
+        await importer.reconcileBackgroundTasks()
+        if importer.hasActiveBackgroundTransfer { interruptedRun = nil; return }
         let runs = await importer.recoverableRuns()
         interruptedRun = runs.first { run in
             run.sourceID == sourceID && run.account.serverBaseURL == connection.server && run.account.username == connection.username
@@ -878,11 +981,11 @@ private struct InventoryReviewScreen: View {
     private var connectionHasConfiguration: Bool { connection.parsedSourceId != nil }
     private var importerStatusText: String {
         switch importer.phase {
-        case .inventory: "Inventar wird geprüft"
-        case .exporting, .hashing, .preparing: "Dateien werden vorbereitet"
-        case .uploading: "Übertragung läuft"
-        case .completing: "Übertragung wird abgeschlossen"
-        case .finished: "Alben werden abgeglichen"
+        case .inventory: "Übertragung wird vorbereitet …"
+        case .exporting, .hashing, .preparing: "Dateien werden vorbereitet …"
+        case .uploading: "Übertragung läuft …"
+        case .completing: "Übertragung wird geprüft …"
+        case .finished: "Alben werden abgeglichen …"
         default: ""
         }
     }

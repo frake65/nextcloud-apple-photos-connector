@@ -4,6 +4,89 @@ import XCTest
 import InventoryCore
 
 final class IOSCoreFlowTests: XCTestCase {
+    func testBackgroundTransferFileStorePublishesOnlyCompleteFile() async throws {
+#if targetEnvironment(simulator)
+        throw XCTSkip("iOS Simulator does not expose NSFileProtection attributes; verify on a real device")
+#else
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("source.mov")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data(repeating: 7, count: 32).write(to: source)
+        let store = BackgroundTransferFileStore(directoryURL: directory.appendingPathComponent("Transfers"))
+        let prepared = try await store.prepare(source: source, uploadAttemptID: UUID())
+        XCTAssertEqual(try Data(contentsOf: prepared.url).count, 32)
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: prepared.url.path)[.protectionKey] as? FileProtectionType, .completeUntilFirstUserAuthentication)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: prepared.url.deletingLastPathComponent().appendingPathComponent(".\(prepared.relativePath).staging").path))
+#endif
+    }
+
+    func testQueueAndBindingMetadataKeepCompleteFileProtection() async throws {
+#if targetEnvironment(simulator)
+        throw XCTSkip("iOS Simulator does not expose NSFileProtection attributes; verify on a real device")
+#else
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let run = queueRun()
+        try await ImportQueueStore(directoryURL: directory).save(run)
+        let queueURL = directory.appendingPathComponent("import-queue-v1.json")
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: queueURL.path)[.protectionKey] as? FileProtectionType, .completeUntilFirstUserAuthentication)
+        try FileManager.default.setAttributes([.protectionKey: FileProtectionType.complete], ofItemAtPath: queueURL.path)
+        let migratedQueue = ImportQueueStore(directoryURL: directory)
+        XCTAssertEqual(await migratedQueue.allRuns(), [run])
+        try await migratedQueue.save(run)
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: queueURL.path)[.protectionKey] as? FileProtectionType, .completeUntilFirstUserAuthentication)
+        let bindings = BackgroundTaskBindingStore(directoryURL: directory)
+        try await bindings.upsert(BackgroundTaskBinding(queueAssetID: UUID(), localRunID: UUID(), uploadAttemptID: UUID(), sessionIdentifier: BackgroundTransferCoordinator.sessionIdentifier, taskIdentifier: 9, relativeTransferPath: "attempt.upload", expectedHost: "cloud.example", targetPath: "/remote.php/dav/files/alice/Photos/clip.mov", createdAt: Date()))
+        let bindingURL = directory.appendingPathComponent("background-task-bindings-v1.json")
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: bindingURL.path)[.protectionKey] as? FileProtectionType, .completeUntilFirstUserAuthentication)
+#endif
+    }
+
+    func testFailedPutRemainsNeedsReconcileAndRecoverable() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ImportQueueStore(directoryURL: directory)
+        let run = queueRun(); try await store.save(run)
+        try await store.markAsset(runID: run.localRunID, assetID: run.assets[0].queueAssetID, state: .needsReconcile, lastConfirmedStep: "http-502")
+        let runs = await store.allRuns()
+        let recovered = try XCTUnwrap(runs.first)
+        XCTAssertEqual(recovered.assets[0].state, .needsReconcile)
+        XCTAssertEqual(ImportRecoveryCoordinator.action(for: recovered, asset: recovered.assets[0]), .reconcile)
+        XCTAssertNotEqual(recovered.assets[0].state, .completed)
+    }
+
+    func testSuccessfulPutCancelledBeforeCompleteRemainsRecoverable() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ImportQueueStore(directoryURL: directory)
+        let run = queueRun(); try await store.save(run)
+        try await store.markAsset(runID: run.localRunID, assetID: run.assets[0].queueAssetID, state: .needsReconcile, lastConfirmedStep: "put-201-before-complete")
+        let runs = await store.allRuns()
+        let recovered = try XCTUnwrap(runs.first)
+        XCTAssertEqual(recovered.assets[0].state, .needsReconcile)
+        XCTAssertEqual(ImportRecoveryCoordinator.action(for: recovered, asset: recovered.assets[0]), .reconcile)
+    }
+
+    func testBackgroundTaskBindingRoundTripsWithoutCredentials() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = BackgroundTaskBindingStore(directoryURL: directory)
+        let binding = BackgroundTaskBinding(queueAssetID: UUID(), localRunID: UUID(), uploadAttemptID: UUID(), sessionIdentifier: BackgroundTransferCoordinator.sessionIdentifier, taskIdentifier: 17, relativeTransferPath: "attempt.upload", expectedHost: "cloud.example", targetPath: "/remote.php/dav/files/alice/Photos/clip.mov", createdAt: Date(timeIntervalSince1970: 1))
+        try await store.upsert(binding)
+        let loaded = await store.all()
+        XCTAssertEqual(loaded, [binding])
+        let data = try Data(contentsOf: directory.appendingPathComponent("background-task-bindings-v1.json"))
+        let text = String(decoding: data, as: UTF8.self)
+        XCTAssertFalse(text.contains("Authorization")); XCTAssertFalse(text.contains("password"))
+    }
+
+    func testBackgroundTaskBindingDoesNotRepresentCompletedAsset() {
+        let binding = BackgroundTaskBinding(queueAssetID: UUID(), localRunID: UUID(), uploadAttemptID: UUID(), sessionIdentifier: BackgroundTransferCoordinator.sessionIdentifier, taskIdentifier: 1, relativeTransferPath: "attempt.upload", expectedHost: "cloud.example", targetPath: "/remote.php/dav/files/alice/Photos/clip.mov", createdAt: Date())
+        XCTAssertNotEqual(binding.taskIdentifier, 0)
+        XCTAssertEqual(ImportAssetState.needsReconcile, .needsReconcile)
+    }
+
     private func queueRun(sourceID: UUID = UUID()) -> PersistedImportRun {
         let asset = PersistedImportAsset(queueAssetID: UUID(), stableIdentity: "cloud:asset", localIdentifier: "local", cloudIdentifier: "asset", mediaType: "video", filenameHint: "clip.mov", captureDate: Date(timeIntervalSince1970: 1), state: .needsReconcile, serverAssetID: "7", uploadID: "8", targetPath: nil, expectedBytes: 42, expectedSHA256: String(repeating: "a", count: 64), lastConfirmedStep: "remote-state-unknown", retryCount: 1, lastErrorCode: nil)
         return PersistedImportRun(schemaVersion: PersistedImportRun.currentSchemaVersion, localRunID: UUID(), account: ImportAccountReference(serverBaseURL: "https://cloud.example", username: "alice"), sourceID: sourceID, createdAt: Date(timeIntervalSince1970: 1), updatedAt: Date(timeIntervalSince1970: 1), state: .assetProcessing, serverRunID: "run", assetOrder: [asset.queueAssetID], albumSyncPending: false, assets: [asset])
@@ -48,6 +131,18 @@ final class IOSCoreFlowTests: XCTestCase {
         let runs = await store.recoverableRuns()
         let loaded = try XCTUnwrap(runs.first)
         XCTAssertEqual(loaded.assetOrder, run.assetOrder); XCTAssertTrue(loaded.albumSyncPending)
+    }
+
+    func testPersistedIncompleteRunRemainsRecoverableWithoutBackgroundBinding() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ImportQueueStore(directoryURL: directory)
+        let run = queueRun()
+        try await store.save(run)
+
+        let recoverable = await store.recoverableRuns()
+        XCTAssertEqual(recoverable.map(\.localRunID), [run.localRunID])
+        XCTAssertEqual(recoverable.first?.assets.first?.state, .needsReconcile)
     }
 
     func testImportQueueSelectsNewestRecoverableRunPerAccountAndSource() async throws {

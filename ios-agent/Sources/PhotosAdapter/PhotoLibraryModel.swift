@@ -10,6 +10,7 @@ final class PhotoLibraryModel: ObservableObject {
     @Published private(set) var assets: [GalleryAsset] = []
     @Published private(set) var albums: [GalleryAlbum] = []
     @Published private(set) var isLoading = false
+    @Published private(set) var hasLoadedInitialState = false
     @Published private(set) var errorMessage: String?
 
     private let imageManager = PHCachingImageManager()
@@ -17,6 +18,7 @@ final class PhotoLibraryModel: ObservableObject {
 
     init() {
         authorization = PhotoAuthorizationState(status: PHPhotoLibrary.authorizationStatus(for: .readWrite))
+        hasLoadedInitialState = authorization != .notDetermined && !authorization.canRead
     }
 
     func requestAccess() {
@@ -26,6 +28,7 @@ final class PhotoLibraryModel: ObservableObject {
                 guard let self else { return }
                 self.authorization = PhotoAuthorizationState(status: status)
                 if self.authorization.canRead { self.loadLibrary() }
+                else { self.hasLoadedInitialState = true }
             }
         }
     }
@@ -33,7 +36,10 @@ final class PhotoLibraryModel: ObservableObject {
     func refreshAuthorizationAndLoad() {
         authorization = PhotoAuthorizationState(status: PHPhotoLibrary.authorizationStatus(for: .readWrite))
         if authorization.canRead { loadLibrary() }
-        else { assets = []; albums = [] }
+        else {
+            assets = []; albums = []
+            if authorization != .notDetermined { hasLoadedInitialState = true }
+        }
     }
 
     func loadLibrary() {
@@ -43,7 +49,7 @@ final class PhotoLibraryModel: ObservableObject {
             guard let self else { return }
             self.isLoading = true
             self.errorMessage = nil
-            defer { self.isLoading = false }
+            defer { self.isLoading = false; self.hasLoadedInitialState = true }
             let fetched = await Task.detached(priority: .userInitiated) { () -> ([PHAsset], [GalleryAlbum]) in
                 let options = PHFetchOptions()
                 options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]

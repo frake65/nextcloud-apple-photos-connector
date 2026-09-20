@@ -28,6 +28,21 @@ struct GalleryAsset: Identifiable {
     var id: String { asset.localIdentifier }
     var isVideo: Bool { asset.mediaType == .video }
     var creationDate: Date { asset.creationDate ?? .distantPast }
+    var durationLabel: String { VideoDurationFormatter.string(from: asset.duration) }
+}
+
+enum VideoDurationFormatter {
+    static func string(from duration: TimeInterval) -> String {
+        let totalSeconds = max(0, Int(duration.rounded()))
+        let seconds = totalSeconds % 60
+        let totalMinutes = totalSeconds / 60
+        if totalMinutes >= 60 {
+            let hours = totalMinutes / 60
+            let minutes = totalMinutes % 60
+            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
+        }
+        return String(format: "%d:%02d", totalMinutes, seconds)
+    }
 }
 
 struct GalleryAlbum: Identifiable {

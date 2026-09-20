@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(UIKit)
+import UIKit
+#endif
 import InventoryCore
 import Photos
 
@@ -162,6 +165,7 @@ struct ImportQueueDocument: Codable, Equatable, Sendable {
 /// Small, versioned JSON persistence for recovery metadata. It intentionally
 /// stores no credentials, task handles, progress values, or temporary paths.
 actor ImportQueueStore {
+    static let metadataProtection: FileProtectionType = .completeUntilFirstUserAuthentication
     private let fileURL: URL
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
@@ -180,9 +184,11 @@ actor ImportQueueStore {
         } else {
             document = ImportQueueDocument(schemaVersion: ImportQueueDocumentSchema.current, runs: [])
         }
+        try? FileManager.default.setAttributes([.protectionKey: Self.metadataProtection], ofItemAtPath: fileURL.path)
     }
 
     func allRuns() -> [PersistedImportRun] { document.runs }
+    func fileExists() -> Bool { FileManager.default.fileExists(atPath: fileURL.path) }
     func recoverableRuns() -> [PersistedImportRun] {
         var seen = Set<String>()
         return document.runs
@@ -215,7 +221,8 @@ actor ImportQueueStore {
         let directory = fileURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let data = try encoder.encode(document)
-        try data.write(to: fileURL, options: [.atomic, .completeFileProtection])
+        try data.write(to: fileURL, options: [.atomic])
+        try FileManager.default.setAttributes([.protectionKey: Self.metadataProtection], ofItemAtPath: fileURL.path)
     }
 }
 
@@ -226,6 +233,224 @@ enum ImportRecoveryAction: Equatable, Sendable {
     case reconcile
     case albumSync
     case none
+}
+
+struct BackgroundTaskBinding: Codable, Equatable, Sendable, Identifiable {
+    let queueAssetID: UUID
+    let localRunID: UUID
+    let uploadAttemptID: UUID
+    let sessionIdentifier: String
+    let taskIdentifier: Int
+    let relativeTransferPath: String
+    let expectedHost: String
+    let targetPath: String
+    let createdAt: Date
+    var id: UUID { uploadAttemptID }
+}
+
+/// Owns completed PhotoKit exports used by background URLSession. The URL is
+/// only published after an atomic move from a private staging file.
+actor BackgroundTransferFileStore {
+    private let root: URL
+    init(directoryURL: URL? = nil) {
+        root = directoryURL ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("ApplePhotosConnector", isDirectory: true)
+            .appendingPathComponent("Transfers", isDirectory: true)
+    }
+    func prepare(source: URL, uploadAttemptID: UUID) throws -> (url: URL, relativePath: String) {
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let relative = "\(uploadAttemptID.uuidString).upload"
+        let staging = root.appendingPathComponent(".\(relative).staging")
+        let destination = root.appendingPathComponent(relative)
+        try? FileManager.default.removeItem(at: staging)
+        try FileManager.default.copyItem(at: source, to: staging)
+        try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: staging.path)
+        try FileManager.default.moveItem(at: staging, to: destination)
+        return (destination, relative)
+    }
+    func remove(relativePath: String) throws {
+        let url = root.appendingPathComponent(relativePath)
+        guard url.standardizedFileURL.path.hasPrefix(root.standardizedFileURL.path + "/") else { return }
+        try? FileManager.default.removeItem(at: url)
+    }
+    func url(relativePath: String) -> URL { root.appendingPathComponent(relativePath) }
+}
+
+actor BackgroundTaskBindingStore {
+    static let metadataProtection: FileProtectionType = .completeUntilFirstUserAuthentication
+    private let fileURL: URL
+    private var bindings: [BackgroundTaskBinding] = []
+    init(directoryURL: URL? = nil) {
+        let directory = directoryURL ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("ApplePhotosConnector", isDirectory: true)
+        fileURL = directory.appendingPathComponent("background-task-bindings-v1.json")
+        if let data = try? Data(contentsOf: fileURL), let loaded = try? JSONDecoder().decode([BackgroundTaskBinding].self, from: data) { bindings = loaded }
+        try? FileManager.default.setAttributes([.protectionKey: Self.metadataProtection], ofItemAtPath: fileURL.path)
+    }
+    func all() -> [BackgroundTaskBinding] { bindings }
+    func binding(uploadAttemptID: UUID) -> BackgroundTaskBinding? { bindings.first { $0.uploadAttemptID == uploadAttemptID } }
+    func upsert(_ binding: BackgroundTaskBinding) throws { bindings.removeAll { $0.uploadAttemptID == binding.uploadAttemptID }; bindings.append(binding); try persist() }
+    func remove(taskIdentifier: Int, sessionIdentifier: String) throws { bindings.removeAll { $0.taskIdentifier == taskIdentifier && $0.sessionIdentifier == sessionIdentifier }; try persist() }
+    func remove(uploadAttemptID: UUID) throws { bindings.removeAll { $0.uploadAttemptID == uploadAttemptID }; try persist() }
+    func persist() throws {
+        let directory = fileURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let data = try JSONEncoder().encode(bindings)
+        try data.write(to: fileURL, options: [.atomic])
+        try FileManager.default.setAttributes([.protectionKey: Self.metadataProtection], ofItemAtPath: fileURL.path)
+    }
+}
+
+enum BackgroundTransferOutcome: Equatable, Sendable { case success, failure, unknown }
+enum BackgroundTaskReconciliation: Equatable, Sendable { case attached, missingTask, orphanTask, conflictingBinding }
+
+/// Background URLSession adapter for the existing WebDAV PUT contract.
+/// Prepare and Complete remain on the existing DAVTransport path.
+final class BackgroundTransferCoordinator: NSObject, URLSessionTaskDelegate, URLSessionDataDelegate, @unchecked Sendable {
+    static let sessionIdentifier = "com.applephotosconnector.background-webdav-put.v1"
+    static let shared = BackgroundTransferCoordinator()
+    private let bindingStore: BackgroundTaskBindingStore
+    private let fileStore: BackgroundTransferFileStore
+    private let queueStore: ImportQueueStore?
+    private let lock = NSLock()
+    private var continuations: [Int: CheckedContinuation<DAVResponse, Error>] = [:]
+    private var responses: [Int: (Data, HTTPURLResponse)] = [:]
+    private var progressHandlers: [Int: @Sendable (Int64, Int64) -> Void] = [:]
+    private var completionInFlight = Set<UUID>()
+    private let lifecycleLock = NSLock()
+    private var backgroundEventsCompletionHandler: (() -> Void)?
+    private lazy var session: URLSession = {
+        IOSImportDiagnostics.log("background session create identifier=\(Self.sessionIdentifier)")
+        let configuration = URLSessionConfiguration.background(withIdentifier: Self.sessionIdentifier)
+        configuration.httpCookieStorage = nil
+        configuration.timeoutIntervalForRequest = 1800
+        configuration.timeoutIntervalForResource = 1800
+        return URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+    }()
+    init(bindingStore: BackgroundTaskBindingStore = BackgroundTaskBindingStore(), fileStore: BackgroundTransferFileStore = BackgroundTransferFileStore(), queueStore: ImportQueueStore? = nil) {
+        self.bindingStore = bindingStore; self.fileStore = fileStore; self.queueStore = queueStore
+        IOSImportDiagnostics.log("background session coordinator initialized/reconstructed identifier=\(Self.sessionIdentifier)")
+    }
+    func send(_ request: URLRequest, file: URL, queueAssetID: UUID, localRunID: UUID, uploadAttemptID: UUID, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> DAVResponse {
+        guard let url = request.url, url.scheme == "https", let host = url.host else { throw UploadError.invalidConfiguration }
+        let prepared = try await fileStore.prepare(source: file, uploadAttemptID: uploadAttemptID)
+        IOSImportDiagnostics.log("transfer file prepared queueAssetID=\(queueAssetID.uuidString.prefix(8)) uploadAttemptID=\(uploadAttemptID.uuidString) bytes=\(try? FileManager.default.attributesOfItem(atPath: prepared.url.path)[.size] as? NSNumber ?? 0)")
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let task = session.uploadTask(with: request, fromFile: prepared.url)
+                lock.lock(); continuations[task.taskIdentifier] = continuation; progressHandlers[task.taskIdentifier] = progress; lock.unlock()
+                task.taskDescription = uploadAttemptID.uuidString
+                IOSImportDiagnostics.log("background task start taskIdentifier=\(task.taskIdentifier) queueAssetID=\(queueAssetID.uuidString.prefix(8)) uploadAttemptID=\(uploadAttemptID.uuidString) session=\(Self.sessionIdentifier)")
+                Task { let binding = BackgroundTaskBinding(queueAssetID: queueAssetID, localRunID: localRunID, uploadAttemptID: uploadAttemptID, sessionIdentifier: Self.sessionIdentifier, taskIdentifier: task.taskIdentifier, relativeTransferPath: prepared.relativePath, expectedHost: host, targetPath: request.url?.path ?? "", createdAt: Date()); try? await bindingStore.upsert(binding); IOSImportDiagnostics.log("binding created taskIdentifier=\(task.taskIdentifier) queueAssetID=\(queueAssetID.uuidString.prefix(8)) uploadAttemptID=\(uploadAttemptID.uuidString)") }
+                task.resume()
+            }
+        } onCancel: {
+            self.cancelAll(for: uploadAttemptID)
+        }
+    }
+    func reconcileTasks(queueStore: ImportQueueStore? = nil) async -> [BackgroundTaskReconciliation] {
+        IOSImportDiagnostics.log("reconciliation started session=\(Self.sessionIdentifier)")
+        let tasks = await withCheckedContinuation { (continuation: CheckedContinuation<[URLSessionTask], Never>) in session.getAllTasks { continuation.resume(returning: $0) } }
+        let persisted = await bindingStore.all()
+        IOSImportDiagnostics.log("startup reconciliation tasks=\(tasks.count) bindings=\(persisted.count)")
+        let byID = Dictionary(uniqueKeysWithValues: tasks.map { ($0.taskIdentifier, $0) })
+        var result: [BackgroundTaskReconciliation] = []
+        for binding in persisted {
+            guard let task = byID[binding.taskIdentifier] else {
+                let completeIsInFlight = isCompleteInFlight(binding.uploadAttemptID)
+                if completeIsInFlight {
+                    IOSImportDiagnostics.log("reconciliation deferred binding without task during complete queueAssetID=\(binding.queueAssetID.uuidString.prefix(8)) uploadAttemptID=\(binding.uploadAttemptID.uuidString)")
+                    result.append(.attached); continue
+                }
+                IOSImportDiagnostics.log("binding without task taskIdentifier=\(binding.taskIdentifier) queueAssetID=\(binding.queueAssetID.uuidString.prefix(8)) uploadAttemptID=\(binding.uploadAttemptID.uuidString)")
+                if let queueStore { try? await queueStore.markAsset(runID: binding.localRunID, assetID: binding.queueAssetID, state: .needsReconcile, lastConfirmedStep: "background-task-missing") }
+                try? await bindingStore.remove(uploadAttemptID: binding.uploadAttemptID)
+                IOSImportDiagnostics.log("asset -> needsReconcile queueAssetID=\(binding.queueAssetID.uuidString.prefix(8)) reason=background-task-missing; binding removed")
+                result.append(.missingTask); continue
+            }
+            guard task.taskDescription == binding.uploadAttemptID.uuidString,
+                  task.originalRequest?.url?.host == binding.expectedHost else {
+                IOSImportDiagnostics.log("conflicting binding taskIdentifier=\(binding.taskIdentifier) queueAssetID=\(binding.queueAssetID.uuidString.prefix(8)) uploadAttemptID=\(binding.uploadAttemptID.uuidString)")
+                task.cancel()
+                if let queueStore { try? await queueStore.markAsset(runID: binding.localRunID, assetID: binding.queueAssetID, state: .needsReconcile, lastConfirmedStep: "background-binding-conflict") }
+                try? await bindingStore.remove(uploadAttemptID: binding.uploadAttemptID)
+                IOSImportDiagnostics.log("asset -> needsReconcile queueAssetID=\(binding.queueAssetID.uuidString.prefix(8)) reason=background-binding-conflict; binding removed")
+                result.append(.conflictingBinding); continue
+            }
+            IOSImportDiagnostics.log("task + binding taskIdentifier=\(binding.taskIdentifier) queueAssetID=\(binding.queueAssetID.uuidString.prefix(8)) uploadAttemptID=\(binding.uploadAttemptID.uuidString)")
+            result.append(.attached)
+        }
+        let boundIDs = Set(persisted.map(\.taskIdentifier))
+        for task in tasks where !boundIDs.contains(task.taskIdentifier) { IOSImportDiagnostics.log("task without binding taskIdentifier=\(task.taskIdentifier)"); task.cancel(); result.append(.orphanTask) }
+        return result
+    }
+    func setBackgroundEventsCompletionHandler(_ handler: @escaping () -> Void) {
+        _ = session
+        lifecycleLock.lock(); backgroundEventsCompletionHandler = handler; lifecycleLock.unlock()
+        IOSImportDiagnostics.log("background events completion handler received")
+    }
+    func activeBindings() async -> [BackgroundTaskBinding] {
+        let tasks = await withCheckedContinuation { (continuation: CheckedContinuation<[URLSessionTask], Never>) in session.getAllTasks { continuation.resume(returning: $0) } }
+        let bindings = await bindingStore.all()
+        let taskIDs = Set(tasks.map(\.taskIdentifier))
+        let completing = completionInFlightSnapshot()
+        let active = bindings.filter { taskIDs.contains($0.taskIdentifier) || completing.contains($0.uploadAttemptID) }
+        for binding in active { IOSImportDiagnostics.log("task reattached taskIdentifier=\(binding.taskIdentifier) queueAssetID=\(binding.queueAssetID.uuidString.prefix(8)) uploadAttemptID=\(binding.uploadAttemptID.uuidString)") }
+        return active
+    }
+    func cancelAll(for uploadAttemptID: UUID) { Task { for binding in await bindingStore.all() where binding.uploadAttemptID == uploadAttemptID { session.getAllTasks { tasks in tasks.first { $0.taskIdentifier == binding.taskIdentifier }?.cancel() } } } }
+    func cancelAll() { session.getAllTasks { $0.forEach { $0.cancel() } } }
+    func beginComplete(uploadAttemptID: UUID) { lock.lock(); completionInFlight.insert(uploadAttemptID); lock.unlock() }
+    func endComplete(uploadAttemptID: UUID) { lock.lock(); completionInFlight.remove(uploadAttemptID); lock.unlock() }
+    private func isCompleteInFlight(_ uploadAttemptID: UUID) -> Bool { lock.lock(); defer { lock.unlock() }; return completionInFlight.contains(uploadAttemptID) }
+    private func completionInFlightSnapshot() -> Set<UUID> { lock.lock(); defer { lock.unlock() }; return completionInFlight }
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) { completionHandler(nil) }
+    func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64, totalBytesExpectedToSend: Int64) { lock.lock(); let handler = progressHandlers[task.taskIdentifier]; lock.unlock(); IOSImportDiagnostics.log("background progress taskIdentifier=\(task.taskIdentifier) sent=\(totalBytesSent) total=\(totalBytesExpectedToSend)"); handler?(totalBytesSent, totalBytesExpectedToSend) }
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) { lock.lock(); if let current = responses[dataTask.taskIdentifier] { responses[dataTask.taskIdentifier] = (current.0 + data, current.1) }; lock.unlock() }
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        lock.lock(); let continuation = continuations.removeValue(forKey: task.taskIdentifier); let response = responses.removeValue(forKey: task.taskIdentifier); progressHandlers.removeValue(forKey: task.taskIdentifier); lock.unlock()
+        if let error { IOSImportDiagnostics.log("delegate completion taskIdentifier=\(task.taskIdentifier) error=\((error as NSError).code)"); continuation?.resume(throwing: error); return }
+        guard let http = (task.response as? HTTPURLResponse) else { IOSImportDiagnostics.log("delegate completion taskIdentifier=\(task.taskIdentifier) error=invalid-response"); continuation?.resume(throwing: UploadError.invalidResponse); return }
+        IOSImportDiagnostics.log("HTTP response taskIdentifier=\(task.taskIdentifier) status=\(http.statusCode)")
+        guard http.statusCode < 400 else { continuation?.resume(throwing: UploadError.http(http.statusCode)); return }
+        let davResponse = DAVResponse(status: http.statusCode, data: response?.0 ?? Data(), headers: http.allHeaderFields.reduce(into: [:]) { $0[String(describing: $1.key)] = String(describing: $1.value) })
+        Task {
+            if http.statusCode == 201 || http.statusCode == 204, let binding = await bindingStore.all().first(where: { $0.taskIdentifier == task.taskIdentifier }) {
+                try? await queueStore?.markAsset(runID: binding.localRunID, assetID: binding.queueAssetID, state: .needsReconcile, lastConfirmedStep: "put-succeeded-needs-complete", targetPath: binding.targetPath)
+                IOSImportDiagnostics.log("completed PUT recovered queueAssetID=\(binding.queueAssetID.uuidString.prefix(8)) uploadAttemptID=\(binding.uploadAttemptID.uuidString) state=needsReconcile")
+            }
+            IOSImportDiagnostics.log("delegate completion taskIdentifier=\(task.taskIdentifier) status=\(http.statusCode)")
+            continuation?.resume(returning: davResponse)
+        }
+    }
+    func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+        IOSImportDiagnostics.log("urlSessionDidFinishEvents identifier=\(Self.sessionIdentifier)")
+        lifecycleLock.lock(); let handler = backgroundEventsCompletionHandler; backgroundEventsCompletionHandler = nil; lifecycleLock.unlock()
+        if let handler { IOSImportDiagnostics.log("background events completion handler invoked"); handler() }
+    }
+    func cleanup(uploadAttemptID: UUID, deleteFile: Bool) async {
+        guard let binding = await bindingStore.binding(uploadAttemptID: uploadAttemptID) else { return }
+        if deleteFile { try? await fileStore.remove(relativePath: binding.relativeTransferPath); IOSImportDiagnostics.log("transfer file removed uploadAttemptID=\(uploadAttemptID.uuidString) queueAssetID=\(binding.queueAssetID.uuidString.prefix(8))") }
+        else { IOSImportDiagnostics.log("transfer file retained uploadAttemptID=\(uploadAttemptID.uuidString) queueAssetID=\(binding.queueAssetID.uuidString.prefix(8))") }
+        try? await bindingStore.remove(uploadAttemptID: uploadAttemptID)
+        IOSImportDiagnostics.log("binding removed uploadAttemptID=\(uploadAttemptID.uuidString) queueAssetID=\(binding.queueAssetID.uuidString.prefix(8))")
+    }
+}
+
+final class IOSBackgroundDAVTransport: DAVTransport, @unchecked Sendable {
+    private let base: any DAVTransport
+    private let background: BackgroundTransferCoordinator
+    private let queueAssetID: UUID
+    private let localRunID: UUID
+    let uploadAttemptID = UUID()
+    init(base: any DAVTransport, background: BackgroundTransferCoordinator, queueAssetID: UUID, localRunID: UUID) { self.base = base; self.background = background; self.queueAssetID = queueAssetID; self.localRunID = localRunID }
+    func send(_ request: URLRequest, file: URL?) async throws -> DAVResponse { try await send(request, file: file, kind: file == nil ? .api : .fileTransfer, progress: nil) }
+    func send(_ request: URLRequest, file: URL?, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> DAVResponse { try await send(request, file: file, kind: file == nil ? .api : .fileTransfer, progress: progress) }
+    func send(_ request: URLRequest, file: URL?, kind: DAVRequestKind, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> DAVResponse {
+        guard kind == .fileTransfer, let file else { return try await base.send(request, file: file, kind: kind, progress: progress) }
+        return try await background.send(request, file: file, queueAssetID: queueAssetID, localRunID: localRunID, uploadAttemptID: uploadAttemptID, progress: progress)
+    }
+    func cleanup(deleteFile: Bool) async { await background.cleanup(uploadAttemptID: uploadAttemptID, deleteFile: deleteFile) }
 }
 
 enum ImportRecoveryCoordinator {
@@ -342,18 +567,24 @@ final class IOSForegroundImportCoordinator: ObservableObject {
     @Published private(set) var transferSentBytes: Int64 = 0
     @Published private(set) var transferTotalBytes: Int64 = 0
     @Published private(set) var failure: String?
+    @Published private(set) var hasActiveBackgroundTransfer = false
     private var task: Task<Void, Never>?
     private let queueStore: ImportQueueStore
+    private let backgroundTransfer: BackgroundTransferCoordinator
     private var activeRunID: UUID?
     private var transferProgress = IOSImportProgressAggregation()
     private var pendingCompletion = Set<Int>()
-    init(queueStore: ImportQueueStore = ImportQueueStore()) { self.queueStore = queueStore }
+    init(queueStore: ImportQueueStore? = nil) {
+        let store = queueStore ?? ImportQueueStore()
+        self.queueStore = store
+        self.backgroundTransfer = queueStore == nil ? BackgroundTransferCoordinator.shared : BackgroundTransferCoordinator(queueStore: store)
+    }
     var overallProgress: Double {
         guard total > 0 else { return 0 }
         if completed >= total { return 1 }
         return min(0.999, (Double(completed + pendingCompletion.count) + transferProgress.activeFraction) / Double(total))
     }
-    var isRunning: Bool { ![.idle, .finished, .failed, .cancelled].contains(phase) }
+    var isRunning: Bool { hasActiveBackgroundTransfer || ![.idle, .finished, .failed, .cancelled].contains(phase) }
     var activeTransfers: [(job: Int, sent: Int64, total: Int64)] { transferProgress.activeEntries }
     /// The server-side verification is only the visible phase when no other
     /// asset is still sending PUT bytes.
@@ -378,6 +609,13 @@ final class IOSForegroundImportCoordinator: ObservableObject {
     }
 
     func recoverableRuns() async -> [PersistedImportRun] { await queueStore.recoverableRuns() }
+    func reconcileBackgroundTasks() async {
+        let result = await backgroundTransfer.reconcileTasks(queueStore: queueStore)
+        let active = await backgroundTransfer.activeBindings()
+        hasActiveBackgroundTransfer = !active.isEmpty
+        if !active.isEmpty { IOSImportDiagnostics.log("run exposed as active count=\(active.count)") }
+        else if !result.isEmpty { IOSImportDiagnostics.log("run exposed as recoverable") }
+    }
 
     func start(selection: [GalleryAsset], library: PhotoLibraryModel, connection: ConnectorConnection, source: PhotoSource, transport: any DAVTransport = NetworkTransport(), resumeRun: PersistedImportRun? = nil) {
         IOSImportDiagnostics.announceIfEnabled()
@@ -481,24 +719,30 @@ final class IOSForegroundImportCoordinator: ObservableObject {
         let putPhase = IOSImportDiagnostics.start("asset-job[\(index + 1)] webdav-transfer")
         try await queueStore.markAsset(runID: runID, assetID: queueAssetID, state: .needsReconcile, lastConfirmedStep: "remote-state-unknown")
         let target: UploadTarget
-        do { target = try await uploader.uploadWithTarget(file: exported.url, filename: exported.filename, assetId: ticket.assetId, captureDate: date, targets: provider, targetRoot: "Photos/Apple Photos Connector", progress: { [weak self] sent, total in
+        let backgroundTransport = IOSBackgroundDAVTransport(base: transport, background: backgroundTransfer, queueAssetID: queueAssetID, localRunID: runID)
+        let backgroundUploader = WebDAVUploader(connection: connection, transport: backgroundTransport, debug: { message in IOSImportDiagnostics.log(message) })
+        do { target = try await backgroundUploader.uploadWithTarget(file: exported.url, filename: exported.filename, assetId: ticket.assetId, captureDate: date, targets: provider, targetRoot: "Photos/Apple Photos Connector", progress: { [weak self] sent, total in
             Task { @MainActor in self?.updateTransferProgress(job: index, sent: sent, total: total) }
         }); IOSImportDiagnostics.finish("asset-job[\(index + 1)] webdav-transfer", started: putPhase, detail: "bytes=\(identity.bytes)") }
         catch { IOSImportDiagnostics.failure("asset-job[\(index + 1)] webdav-transfer", started: putPhase, error: error); throw error }
-        if target.state == "contentAlreadyPresent" { try await queueStore.markAsset(runID: runID, assetID: queueAssetID, state: .completed, lastConfirmedStep: "content-reconciled", targetPath: target.path); self.markReconciled(); return .reconciled }
+        if target.state == "contentAlreadyPresent" { try await queueStore.markAsset(runID: runID, assetID: queueAssetID, state: .completed, lastConfirmedStep: "content-reconciled", targetPath: target.path); await backgroundTransport.cleanup(deleteFile: true); self.markReconciled(); return .reconciled }
         pendingCompletion.insert(index)
         transferProgress.remove(job: index)
         transferSentBytes = transferProgress.sentBytes
         transferTotalBytes = transferProgress.totalBytes
         try Task.checkCancellation()
+        backgroundTransfer.beginComplete(uploadAttemptID: backgroundTransport.uploadAttemptID)
         do {
-            try await IOSUploadHTTP.complete(connection: connection, transport: transport, source: source.sourceId.uuidString.lowercased(), runId: reply.runId, uploadId: ticket.uploadId, path: target.path)
+            try await IOSUploadHTTP.complete(connection: connection, transport: transport, source: source.sourceId.uuidString.lowercased(), runId: reply.runId, uploadId: ticket.uploadId, path: target.path, queueAssetID: queueAssetID, uploadAttemptID: backgroundTransport.uploadAttemptID)
         } catch {
+            backgroundTransfer.endComplete(uploadAttemptID: backgroundTransport.uploadAttemptID)
             pendingCompletion.remove(index)
             throw error
         }
+        backgroundTransfer.endComplete(uploadAttemptID: backgroundTransport.uploadAttemptID)
         pendingCompletion.remove(index)
         try await queueStore.markAsset(runID: runID, assetID: queueAssetID, state: .completed, lastConfirmedStep: "complete-confirmed", targetPath: target.path)
+        await backgroundTransport.cleanup(deleteFile: true)
         self.markUploaded()
         return .uploaded
     }
@@ -552,11 +796,12 @@ private enum IOSUploadHTTP {
         guard (200..<300).contains(response.status) else { throw UploadError.http(response.status) }
         return try JSONDecoder().decode(UploadTarget.self, from: response.data)
     }
-    static func complete(connection: ConnectorConnection, transport: any DAVTransport, source: String, runId: String, uploadId: String, path: String) async throws {
+    static func complete(connection: ConnectorConnection, transport: any DAVTransport, source: String, runId: String, uploadId: String, path: String, queueAssetID: UUID? = nil, uploadAttemptID: UUID? = nil) async throws {
         var request = connection.request(path: ["index.php", "apps", "apple_photos_connector", "api", "v1", "uploads", "complete"], method: "POST")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: ["sourceId": source, "runId": runId, "uploadId": uploadId, "status": "uploaded", "path": path])
-        let phase = IOSImportDiagnostics.start("uploads/complete")
+        let correlation = [queueAssetID.map { "queueAssetID=\($0.uuidString.prefix(8))" }, uploadAttemptID.map { "uploadAttemptID=\($0.uuidString)" }].compactMap { $0 }.joined(separator: " ")
+        let phase = IOSImportDiagnostics.start("uploads/complete \(correlation)")
         let response: DAVResponse
         do { response = try await transport.send(request, file: nil, kind: .longRunningVerification, progress: nil); IOSImportDiagnostics.finish("uploads/complete", started: phase, detail: "status=\(response.status)") }
         catch { IOSImportDiagnostics.failure("uploads/complete", started: phase, error: error); throw error }
