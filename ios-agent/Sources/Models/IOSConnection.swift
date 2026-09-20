@@ -2,12 +2,15 @@ import Foundation
 import Security
 import Combine
 import InventoryCore
+import UIKit
 
 struct IOSConnectionDetails: Codable, Equatable {
     var server: String
     var username: String
     var sourceId: UUID
+    var userId: String?
 }
+
 
 protocol IOSPasswordStore: Sendable {
     func save(_ password: String, account: String) throws
@@ -68,18 +71,18 @@ final class IOSConnectionPreferences {
 
     func load() -> (details: IOSConnectionDetails, password: String) {
         let details = defaults.data(forKey: key).flatMap { try? JSONDecoder().decode(IOSConnectionDetails.self, from: $0) }
-            ?? IOSConnectionDetails(server: "", username: "", sourceId: UUID())
+            ?? IOSConnectionDetails(server: "", username: "", sourceId: UUID(), userId: nil)
         let password: String
         do { password = try passwordStore.load(account: account(server: details.server, username: details.username)) ?? "" }
         catch { password = "" }
         return (details, password)
     }
 
-    func save(server: String, username: String, password: String, sourceId: UUID) throws {
+    func save(server: String, username: String, password: String, sourceId: UUID, userId: String? = nil) throws {
         let normalizedServer = server.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         _ = try ConnectorConnection(server: normalizedServer, user: username, password: password)
         try passwordStore.save(password, account: account(server: normalizedServer, username: username))
-        let details = IOSConnectionDetails(server: normalizedServer, username: username, sourceId: sourceId)
+        let details = IOSConnectionDetails(server: normalizedServer, username: username, sourceId: sourceId, userId: userId)
         defaults.set(try JSONEncoder().encode(details), forKey: key)
     }
 
@@ -127,9 +130,13 @@ final class IOSConnectionModel: ObservableObject {
     @Published var username: String
     @Published var password: String
     @Published var sourceId: String
+    @Published private(set) var userId: String?
+    @Published private(set) var loginFlowState: IOSLoginFlowState = .idle
     @Published private(set) var state: IOSConnectionState = .notConfigured
     @Published var isShowingSaveError = false
     private let preferences: IOSConnectionPreferences
+    private var loginTask: Task<Void, Never>?
+    private var validatedConnection: (server: String, username: String, password: String)?
 
     init(preferences: IOSConnectionPreferences = IOSConnectionPreferences()) {
         self.preferences = preferences
@@ -137,35 +144,110 @@ final class IOSConnectionModel: ObservableObject {
         server = saved.details.server
         username = saved.details.username
         password = saved.password
+        userId = saved.details.userId
         sourceId = saved.details.sourceId.uuidString.lowercased()
         state = server.isEmpty || username.isEmpty || password.isEmpty ? .notConfigured : .notTested
     }
 
+    deinit { loginTask?.cancel() }
+
     var parsedSourceId: UUID? { UUID(uuidString: sourceId.trimmingCharacters(in: .whitespacesAndNewlines)) }
+    var hasConfiguredConnection: Bool { !server.isEmpty && !username.isEmpty && !password.isEmpty }
 
     func save() throws {
         guard let parsedSourceId else { throw UploadError.invalidConfiguration }
-        try preferences.save(server: server, username: username, password: password, sourceId: parsedSourceId)
+        try preferences.save(server: server, username: username, password: password, sourceId: parsedSourceId, userId: nil)
+        userId = nil
+        validatedConnection = nil
     }
 
     func saved() { state = server.isEmpty || username.isEmpty || password.isEmpty ? .notConfigured : .notTested }
-    func markEdited() { state = server.isEmpty || username.isEmpty || password.isEmpty ? .notConfigured : .notTested }
+    func markEdited() {
+        if let validatedConnection,
+           validatedConnection.server == server,
+           validatedConnection.username == username,
+           validatedConnection.password == password {
+            return
+        }
+        self.validatedConnection = nil
+        loginFlowState = .idle
+        state = server.isEmpty || username.isEmpty || password.isEmpty ? .notConfigured : .notTested
+    }
+    func markConnectionValidated(userID: String? = nil) {
+        validatedConnection = (server, username, password)
+        self.userId = userID
+        state = .connected
+    }
     func showSaveError() { isShowingSaveError = true }
 
     func testConnection() async {
         guard !server.isEmpty, !username.isEmpty, !password.isEmpty, let parsedSourceId else { state = .notConfigured; return }
         state = .checking
         do {
-            try preferences.save(server: server, username: username, password: password, sourceId: parsedSourceId)
+            try preferences.save(server: server, username: username, password: password, sourceId: parsedSourceId, userId: nil)
             let connection = try ConnectorConnection(server: server, user: username, password: password)
             let validation = await NextcloudConnectionClient(connection: connection).validate()
             state = IOSConnectionState(validation: validation.result)
+            if validation.result == .success { markConnectionValidated() }
         } catch {
             state = .notConfigured
         }
     }
 
-    func makeConnection() throws -> ConnectorConnection {
-        try ConnectorConnection(server: server, user: username, password: password)
+    func startBrowserLogin() {
+        loginTask?.cancel()
+        loginTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            loginFlowState = .starting
+            do {
+                let service = NextcloudLoginFlowService()
+                let start = try await service.initiate(server: server)
+                guard await UIApplication.shared.open(start.login) else { throw LoginFlowError.network }
+                loginFlowState = .waiting
+                let credentials = try await service.poll(start)
+                let userID = try await Self.fetchUserID(server: credentials.server, loginName: credentials.loginName, appPassword: credentials.appPassword)
+                let connection = try ConnectorConnection(server: credentials.server.absoluteString, authUser: credentials.loginName, davUser: userID, password: credentials.appPassword)
+                let validation = await NextcloudConnectionClient(connection: connection).validate()
+                guard validation.result == .success else { throw LoginFlowError.http(validation.statusCode ?? 0) }
+                guard let sourceID = parsedSourceId else { throw UploadError.invalidConfiguration }
+                try preferences.save(server: credentials.server.absoluteString, username: credentials.loginName, password: credentials.appPassword, sourceId: sourceID, userId: userID)
+                server = credentials.server.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                username = credentials.loginName
+                password = credentials.appPassword
+                userId = userID
+                markConnectionValidated(userID: userID)
+                loginFlowState = .connected(userID: userID)
+            } catch is CancellationError { loginFlowState = .idle }
+            catch LoginFlowError.cancelled { loginFlowState = .idle }
+            catch { loginFlowState = .failed }
+        }
     }
+
+    func cancelBrowserLogin() { loginTask?.cancel(); loginTask = nil; loginFlowState = .idle }
+
+    private static func fetchUserID(server: URL, loginName: String, appPassword: String) async throws -> String {
+        let connection = try ConnectorConnection(server: server.absoluteString, user: loginName, password: appPassword)
+        var components = URLComponents(url: connection.base.appendingPathComponent("ocs/v1.php/cloud/user"), resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "format", value: "json")]
+        guard let url = components?.url else { throw LoginFlowError.invalidResponse }
+        var requestWithHeaders = URLRequest(url: url)
+        requestWithHeaders.httpMethod = "GET"
+        requestWithHeaders.setValue("Basic " + Data("\(loginName):\(appPassword)".utf8).base64EncodedString(), forHTTPHeaderField: "Authorization")
+        requestWithHeaders.setValue("true", forHTTPHeaderField: "OCS-APIRequest")
+        requestWithHeaders.setValue("application/json", forHTTPHeaderField: "Accept")
+        let response = try await NetworkTransport().send(requestWithHeaders, file: nil)
+        guard let object = try JSONSerialization.jsonObject(with: response.data) as? [String: Any],
+              let ocs = object["ocs"] as? [String: Any], let data = ocs["data"] as? [String: Any],
+              let id = data["id"] as? String, !id.isEmpty else { throw LoginFlowError.invalidResponse }
+        return id
+    }
+
+    func makeConnection() throws -> ConnectorConnection {
+        try ConnectorConnection(server: server, authUser: username, davUser: userId ?? username, password: password)
+    }
+}
+
+enum IOSLoginFlowState: Equatable {
+    case idle, starting, waiting, failed
+    case connected(userID: String)
 }

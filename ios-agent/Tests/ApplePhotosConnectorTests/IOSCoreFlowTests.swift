@@ -4,6 +4,8 @@ import XCTest
 import InventoryCore
 
 final class IOSCoreFlowTests: XCTestCase {
+
+
     func testBackgroundTransferFileStorePublishesOnlyCompleteFile() async throws {
 #if targetEnvironment(simulator)
         throw XCTSkip("iOS Simulator does not expose NSFileProtection attributes; verify on a real device")
@@ -266,6 +268,8 @@ final class IOSCoreFlowTests: XCTestCase {
         XCTAssertEqual(preferences.load().details.sourceId, source)
     }
 
+
+
     func testAssetInventoryUsesCloudIdentityAndLocalFallback() {
         let macObservation = AssetInventory(localIdentifier: "mac-local", cloudIdentifier: "shared-cloud-id", mediaType: "image", creationDate: nil, filename: "image.jpg")
         let phoneObservation = AssetInventory(localIdentifier: "phone-local", cloudIdentifier: "shared-cloud-id", mediaType: "image", creationDate: nil, filename: "image.jpg")
@@ -351,6 +355,44 @@ final class IOSCoreFlowTests: XCTestCase {
         let preferences = IOSConnectionPreferences(defaults: defaults, passwordStore: TestPasswordStore())
         try preferences.save(server: "https://cloud.example", username: "alice", password: "app-password", sourceId: UUID())
         XCTAssertEqual(IOSConnectionModel(preferences: preferences).state, .notTested)
+    }
+
+    @MainActor
+    func testSuccessfulLoginValidationRemainsConnectedUntilCredentialsChange() throws {
+        let suite = "apc-ios-login-state-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let model = IOSConnectionModel(preferences: IOSConnectionPreferences(defaults: defaults, passwordStore: TestPasswordStore()))
+        model.server = "https://cloud.example"
+        model.username = "login-name"
+        model.password = "app-password"
+        model.markConnectionValidated(userID: "canonical-user")
+        model.markEdited()
+        XCTAssertEqual(model.state, .connected)
+        model.username = "changed-login"
+        model.markEdited()
+        XCTAssertEqual(model.state, .notTested)
+    }
+
+    @MainActor
+    func testPersistedCredentialsCountAsConfiguredBeforeRuntimeValidation() throws {
+        let suite = "apc-ios-configured-connection-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = IOSConnectionPreferences(defaults: defaults, passwordStore: TestPasswordStore())
+        try preferences.save(server: "https://cloud.example", username: "alice", password: "app-password", sourceId: UUID())
+        let model = IOSConnectionModel(preferences: preferences)
+        XCTAssertTrue(model.hasConfiguredConnection)
+        XCTAssertEqual(model.state, .notTested)
+    }
+
+    @MainActor
+    func testEmptyConnectionIsNotConfigured() throws {
+        let suite = "apc-ios-empty-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let model = IOSConnectionModel(preferences: IOSConnectionPreferences(defaults: defaults, passwordStore: TestPasswordStore()))
+        XCTAssertFalse(model.hasConfiguredConnection)
     }
 
     func testInventoryCheckOnlyPostsMetadataAndNeverProvidesAFile() async throws {

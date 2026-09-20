@@ -140,11 +140,15 @@ public struct ConnectorConnection: Sendable {
     public let user: String
     private let authorization: String
     public init(server: String, user: String, password: String) throws {
+        try self.init(server: server, authUser: user, davUser: user, password: password)
+    }
+    public init(server: String, authUser: String, davUser: String, password: String) throws {
         guard let url = URL(string: server), url.scheme == "https", url.host != nil,
               url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,
-              !user.isEmpty, !user.contains(":"), !user.contains("/"), !password.isEmpty else { throw UploadError.invalidConfiguration }
-        base = url; self.user = user
-        authorization = "Basic " + Data("\(user):\(password)".utf8).base64EncodedString()
+              !authUser.isEmpty, !authUser.contains(":"), !authUser.contains("/"),
+              !davUser.isEmpty, !davUser.contains(":"), !davUser.contains("/"), !password.isEmpty else { throw UploadError.invalidConfiguration }
+        base = url; user = davUser
+        authorization = "Basic " + Data("\(authUser):\(password)".utf8).base64EncodedString()
     }
     public func request(path: [String], method: String) -> URLRequest {
         let url = path.reduce(base) { $0.appendingPathComponent($1) }

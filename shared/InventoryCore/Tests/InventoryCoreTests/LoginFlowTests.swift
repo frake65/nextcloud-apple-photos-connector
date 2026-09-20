@@ -39,6 +39,20 @@ final class LoginFlowTests: XCTestCase {
         catch LoginFlowError.invalidServer { }
         catch { XCTFail("unexpected error: \(error)") }
     }
+
+    func testInsecureReturnedURLsAreRejected() async throws {
+        let transport = LoginFlowTransport([DAVResponse(status: 200, data: Data(#"{"poll":{"token":"temporary","endpoint":"http://cloud.example/poll"},"login":"https://cloud.example/login"}"#.utf8))])
+        do {
+            _ = try await NextcloudLoginFlowService(transport: transport).initiate(server: "https://cloud.example")
+            XCTFail("expected insecure poll URL rejection")
+        } catch LoginFlowError.invalidReturnedURL { }
+    }
+
+    func testConnectorSeparatesLoginNameFromDAVUserID() throws {
+        let connection = try ConnectorConnection(server: "https://cloud.example", authUser: "login-name", davUser: "canonical-id", password: "app-password")
+        XCTAssertEqual(connection.user, "canonical-id")
+        XCTAssertEqual(connection.request(path: ["status.php"], method: "GET").value(forHTTPHeaderField: "Authorization"), "Basic " + Data("login-name:app-password".utf8).base64EncodedString())
+    }
 }
 
 private actor PendingLoginTransport: DAVTransport {

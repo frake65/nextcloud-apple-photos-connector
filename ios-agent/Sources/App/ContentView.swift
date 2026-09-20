@@ -4,12 +4,15 @@ import UIKit
 import InventoryCore
 
 struct ContentView: View {
+    private enum AppTab: Hashable { case photos, albums, connection }
     @StateObject private var library = PhotoLibraryModel()
     @StateObject private var selection = AssetSelectionModel()
     @StateObject private var connection = IOSConnectionModel()
     @Environment(\.scenePhase) private var scenePhase
     @State private var showingInventoryReview = false
     @State private var showingStartup = true
+    @State private var selectedTab: AppTab = .photos
+
 
     var body: some View {
         Group {
@@ -19,14 +22,14 @@ struct ContentView: View {
                 }
             } else {
             if library.authorization.canRead {
-                TabView {
+                TabView(selection: $selectedTab) {
                     NavigationStack {
                         GalleryScreen(library: library, selection: selection, assets: library.assets, title: "Fotos & Videos", canImport: connection.parsedSourceId != nil, onCheck: { showingInventoryReview = true })
-                    }.tabItem { Label("Fotos", systemImage: "photo.on.rectangle.angled") }
+                    }.tabItem { Label("Fotos", systemImage: "photo.on.rectangle.angled") }.tag(AppTab.photos)
                     NavigationStack { AlbumsScreen(library: library, selection: selection, canImport: connection.parsedSourceId != nil, onCheck: { showingInventoryReview = true }) }
-                        .tabItem { Label("Alben", systemImage: "rectangle.stack") }
+                        .tabItem { Label("Alben", systemImage: "rectangle.stack") }.tag(AppTab.albums)
                     NavigationStack { ConnectionView(model: connection) }
-                        .tabItem { Label("Verbindung", systemImage: "server.rack") }
+                        .tabItem { Label("Verbindung", systemImage: "server.rack") }.tag(AppTab.connection)
                 }
             } else {
                 permissionView
@@ -47,10 +50,19 @@ struct ContentView: View {
         .onAppear {
             library.refreshAuthorizationAndLoad()
             Task { await presentRecoveryIfNeeded() }
+            routeToInitialConnectionIfNeeded()
         }
         .onChange(of: library.hasLoadedInitialState) { _, loaded in
-            if loaded { showingStartup = false }
+            if loaded {
+                showingStartup = false
+                routeToInitialConnectionIfNeeded()
+            }
         }
+    }
+
+    private func routeToInitialConnectionIfNeeded() {
+        guard library.hasLoadedInitialState, library.authorization.canRead, !connection.hasConfiguredConnection else { return }
+        selectedTab = .connection
     }
 
     private var permissionView: some View {
