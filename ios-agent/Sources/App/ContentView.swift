@@ -763,6 +763,32 @@ private struct ThumbnailView: View {
     }
 }
 
+enum ImportPresentationPhase: Equatable {
+    case idle
+    case transferring
+    case serverVerification
+    case albumSync
+    case completed
+    case stopped
+
+    static func resolve(
+        phase: IOSForegroundImportCoordinator.Phase,
+        completed: Int,
+        total: Int,
+        isVerifyingCompletedUpload: Bool
+    ) -> Self {
+        switch phase {
+        case .idle: return .idle
+        case .completing:
+            if completed > 0, completed >= total { return .albumSync }
+            return isVerifyingCompletedUpload ? .serverVerification : .transferring
+        case .finished: return .completed
+        case .failed, .cancelled: return .stopped
+        default: return .transferring
+        }
+    }
+}
+
 private struct InventoryReviewScreen: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
@@ -870,25 +896,32 @@ private struct InventoryReviewScreen: View {
                             .disabled(importer.isRunning)
                     }
                 }
+                let presentation = ImportPresentationPhase.resolve(phase: importer.phase, completed: importer.completed, total: importer.total, isVerifyingCompletedUpload: importer.isVerifyingCompletedUpload)
                 if importer.hasActiveBackgroundTransfer {
                     Text("Übertragung läuft …").font(.caption).foregroundStyle(.secondary)
                     Text("Die Übertragung läuft weiter.").font(.caption).foregroundStyle(.secondary)
-                } else if importer.phase != .idle {
-                    Text(importer.currentFilename ?? "")
-                    ProgressView(value: importer.overallProgress)
-                    if !importer.activeTransfers.isEmpty {
-                        ForEach(importer.activeTransfers, id: \.job) { transfer in
-                            Text("\(ByteCountFormatter.string(fromByteCount: transfer.sent, countStyle: .file)) von \(ByteCountFormatter.string(fromByteCount: transfer.total, countStyle: .file))")
-                                .font(.caption).foregroundStyle(.secondary)
+                } else if presentation == .albumSync {
+                    Text("Übertragung abgeschlossen")
+                    ProgressView()
+                    Text("Alben werden abgeglichen …").font(.caption).foregroundStyle(.secondary)
+                } else if presentation == .completed {
+                    Text("Übertragung abgeschlossen")
+                } else if presentation != .idle {
+                    if presentation != .serverVerification, let filename = importer.currentFilename {
+                        Text(filename)
+                        ProgressView(value: importer.overallProgress)
+                        if !importer.activeTransfers.isEmpty {
+                            ForEach(importer.activeTransfers, id: \.job) { transfer in
+                                Text("\(ByteCountFormatter.string(fromByteCount: transfer.sent, countStyle: .file)) von \(ByteCountFormatter.string(fromByteCount: transfer.total, countStyle: .file))")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
                         }
                     }
                     Text("\(importer.completed) von \(importer.total) übertragen").font(.caption).foregroundStyle(.secondary)
-                    if importer.isVerifyingCompletedUpload {
+                    if presentation == .serverVerification {
                         Text("Übertragung abgeschlossen")
-                        Text("Datei wird in Nextcloud überprüft …")
-                            .font(.caption).foregroundStyle(.secondary)
-                        Text("Bei großen Videos kann dies etwas dauern.")
-                            .font(.caption).foregroundStyle(.secondary)
+                        Text("Datei wird in Nextcloud überprüft …").font(.caption).foregroundStyle(.secondary)
+                        Text("Bei großen Videos kann dies etwas dauern.").font(.caption).foregroundStyle(.secondary)
                     } else {
                         Text(importerStatusText).font(.caption).foregroundStyle(.secondary)
                     }
@@ -899,15 +932,23 @@ private struct InventoryReviewScreen: View {
                     #endif
                     if let failure = importer.failure { Text(failure).foregroundStyle(.red) }
                 }
-                Button {
-                    startImport()
-                } label: { Label(importer.isRunning ? "Import läuft…" : "Fotos & Alben übernehmen", systemImage: importer.isRunning ? "arrow.triangle.2.circlepath" : "icloud.and.arrow.up") }
-                    .disabled(selection.count == 0 || !connectionHasConfiguration || importer.isRunning)
+                if presentation == .albumSync || presentation == .completed {
+                    if importer.uploaded > 0 { Text("Übertragen: \(importer.uploaded)") }
+                    if importer.alreadyPresent > 0 { Text("Bereits vorhanden: \(importer.alreadyPresent)") }
+                }
+                if presentation == .idle || presentation == .stopped {
+                    Button { startImport() } label: {
+                        Label("Fotos & Alben übernehmen", systemImage: "icloud.and.arrow.up")
+                    }
+                    .disabled(selection.count == 0 || !connectionHasConfiguration)
+                }
                 if importer.phase != .idle && importer.phase != .finished && importer.phase != .failed && importer.phase != .cancelled {
                     Button("Import abbrechen") { importer.cancel() }
                 }
-                Text("Die Übertragung läuft im Vordergrund. Danach werden die betroffenen Alben abgeglichen.")
-                    .font(.footnote).foregroundStyle(.secondary)
+                if presentation == .idle || presentation == .transferring {
+                    Text("Die Übertragung läuft im Vordergrund. Danach werden die betroffenen Alben abgeglichen.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
             }
             #if DEBUG
             if IOSImportDiagnostics.enabled { Section {
@@ -924,6 +965,7 @@ private struct InventoryReviewScreen: View {
             #endif
         }
         .navigationTitle("Fotos & Videos übertragen")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Fertig") { dismiss() } } }
         .task { await loadInterruptedRun() }
         .onChange(of: scenePhase) { _, phase in

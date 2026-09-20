@@ -4,7 +4,18 @@ import XCTest
 import InventoryCore
 
 final class IOSCoreFlowTests: XCTestCase {
+    func testImportPresentationSeparatesTransferAlbumSyncAndCompletion() {
+        XCTAssertEqual(ImportPresentationPhase.resolve(phase: .idle, completed: 0, total: 3, isVerifyingCompletedUpload: false), .idle)
+        XCTAssertEqual(ImportPresentationPhase.resolve(phase: .uploading, completed: 1, total: 3, isVerifyingCompletedUpload: false), .transferring)
+        XCTAssertEqual(ImportPresentationPhase.resolve(phase: .completing, completed: 1, total: 3, isVerifyingCompletedUpload: true), .serverVerification)
+        XCTAssertEqual(ImportPresentationPhase.resolve(phase: .completing, completed: 3, total: 3, isVerifyingCompletedUpload: false), .albumSync)
+        XCTAssertEqual(ImportPresentationPhase.resolve(phase: .finished, completed: 3, total: 3, isVerifyingCompletedUpload: false), .completed)
+    }
 
+    func testImportPresentationDoesNotTreatFailureOrCancellationAsCompleted() {
+        XCTAssertEqual(ImportPresentationPhase.resolve(phase: .failed, completed: 3, total: 3, isVerifyingCompletedUpload: false), .stopped)
+        XCTAssertEqual(ImportPresentationPhase.resolve(phase: .cancelled, completed: 3, total: 3, isVerifyingCompletedUpload: false), .stopped)
+    }
 
     func testBackgroundTransferFileStorePublishesOnlyCompleteFile() async throws {
 #if targetEnvironment(simulator)
