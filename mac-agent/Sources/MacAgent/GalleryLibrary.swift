@@ -129,12 +129,21 @@ struct AssetIdentityDiagnostic: Sendable {
 }
 
 enum GalleryDebug {
-    private static let logger = DebugFileLogger(enabled: true)
+    private final class LoggerBox: @unchecked Sendable {
+        let lock = NSLock()
+        var logger: DebugFileLogger?
+    }
+
+    private static let loggerBox = LoggerBox()
+
     static func log(_ event: String, category: String? = nil) {
         let defaults = ConnectionPreferences.defaults()
         guard defaults.bool(forKey: UploadPreferences.debugModeKey) else { return }
         Task { @MainActor in DebugLogStore.shared.append(event, category: category) }
-        logger.log(event)
+        loggerBox.lock.lock()
+        if loggerBox.logger == nil { loggerBox.logger = DebugFileLogger(enabled: true) }
+        loggerBox.logger?.log(event)
+        loggerBox.lock.unlock()
     }
 }
 
