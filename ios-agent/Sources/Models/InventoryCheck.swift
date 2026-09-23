@@ -12,6 +12,9 @@ import Photos
 enum IOSImportDiagnostics {
     private static let processStart = ContinuousClock.now
     static let defaultsKey = "apc.debug.importDiagnostics"
+#if DEBUG
+    nonisolated(unsafe) static var testLogHandler: ((String) -> Void)?
+#endif
     static var enabled: Bool {
         #if DEBUG
         let defaults = UserDefaults.standard
@@ -26,7 +29,11 @@ enum IOSImportDiagnostics {
         let elapsed = processStart.duration(to: ContinuousClock.now)
         let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1_000_000_000_000_000_000
         let prefix = String(format: "APC IMPORT [Startup +%.3fs] ", seconds)
-        print(prefix + (message.hasPrefix("APC IMPORT ") ? String(message.dropFirst("APC IMPORT ".count)) : message))
+        let line = prefix + (message.hasPrefix("APC IMPORT ") ? String(message.dropFirst("APC IMPORT ".count)) : message)
+        print(line)
+        #if DEBUG
+        testLogHandler?(line)
+        #endif
         #endif
     }
     static func announceIfEnabled() {
@@ -456,6 +463,15 @@ final class ImportNetworkTransport: @unchecked Sendable, DAVTransport {
     }
 }
 
+enum IOSImportTransportFactory {
+    static func make(base: (any DAVTransport)? = nil, waitingHandler: (@Sendable (Bool) -> Void)? = nil) -> ImportNetworkTransport {
+        let baseTransport = base ?? NetworkTransport(allowsCellularAccess: true, waitsForConnectivity: true, responseDiagnostics: { response in
+            InventoryCheckClient.logInventoryResponse(response)
+        })
+        return ImportNetworkTransport(base: baseTransport, waitingHandler: waitingHandler)
+    }
+}
+
 struct BackgroundPUTTaskStateAggregation: Equatable, Sendable {
     private(set) var activePUTTasks = Set<String>()
     private(set) var waitingTasks = Set<String>()
@@ -769,15 +785,18 @@ enum ImportRecoveryCoordinator {
 }
 
 enum InventoryCheckClient {
-    static func check(connection: ConnectorConnection, source: PhotoSource, assets: [AssetInventory], transport: any DAVTransport = NetworkTransport()) async throws -> InventoryReply {
+    static func check(connection: ConnectorConnection, source: PhotoSource, assets: [AssetInventory], transport: (any DAVTransport)? = nil) async throws -> InventoryReply {
         guard !assets.isEmpty else { throw InventoryCheckError.invalidResponse }
         let json = try InventoryJSON.encode(assets, source: source)
         var request = connection.request(path: ["index.php", "apps", "apple_photos_connector", "api", "v1", "inventory"], method: "POST")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = Data(json.utf8)
         let phase = IOSImportDiagnostics.start("asset-inventory")
+        let requestTransport = transport ?? NetworkTransport(allowsCellularAccess: true, waitsForConnectivity: false, responseDiagnostics: { response in
+            Self.logInventoryResponse(response)
+        })
         let response: DAVResponse
-        do { response = try await transport.send(request, file: nil); IOSImportDiagnostics.finish("asset-inventory", started: phase, detail: "status=\(response.status)") }
+        do { response = try await requestTransport.send(request, file: nil); IOSImportDiagnostics.finish("asset-inventory", started: phase, detail: "status=\(response.status)") }
         catch let error {
             IOSImportDiagnostics.failure("asset-inventory", started: phase, error: error)
             if case let UploadError.http(status) = error {
@@ -788,14 +807,78 @@ enum InventoryCheckClient {
             }
             throw InventoryCheckError.network
         }
-        guard (200..<300).contains(response.status), let decoded = try? JSONDecoder().decode(InventoryReply.self, from: response.data),
-              decoded.assets.count == assets.count, decoded.summary.seen == assets.count,
-              decoded.summary.new == decoded.assets.filter({ $0.state == .new }).count,
-              decoded.summary.known == decoded.assets.filter({ $0.state == .known }).count,
-              decoded.summary.new + decoded.summary.known == decoded.summary.seen else {
+        Self.logInventoryResponse(response)
+        guard (200..<300).contains(response.status) else { throw InventoryCheckError.invalidResponse }
+        let decoded: InventoryReply
+        do {
+            decoded = try JSONDecoder().decode(InventoryReply.self, from: response.data)
+        } catch let error as DecodingError {
+            IOSImportDiagnostics.log(Self.decodingDiagnostic(error))
+            throw InventoryCheckError.invalidResponse
+        } catch {
+            IOSImportDiagnostics.log("Inventory decoding failed error=\(String(describing: type(of: error)))")
+            throw InventoryCheckError.invalidResponse
+        }
+        let responseNew = decoded.assets.filter { $0.state == .new }.count
+        let responseKnown = decoded.assets.filter { $0.state == .known }.count
+        IOSImportDiagnostics.log("Inventory response assets=\(decoded.assets.count) summary.seen=\(decoded.summary.seen) summary.new=\(decoded.summary.new) summary.known=\(decoded.summary.known) calculated.new=\(responseNew) calculated.known=\(responseKnown) requestAssets=\(assets.count)")
+        guard decoded.assets.count == assets.count else {
+            IOSImportDiagnostics.log("Inventory validation failed reason=asset-count request=\(assets.count) response=\(decoded.assets.count)")
+            throw InventoryCheckError.invalidResponse
+        }
+        guard decoded.summary.seen == assets.count else {
+            IOSImportDiagnostics.log("Inventory validation failed reason=summary-seen request=\(assets.count) summary.seen=\(decoded.summary.seen)")
+            throw InventoryCheckError.invalidResponse
+        }
+        guard decoded.summary.new == responseNew else {
+            IOSImportDiagnostics.log("Inventory validation failed reason=summary-new summary.new=\(decoded.summary.new) calculated.new=\(responseNew)")
+            throw InventoryCheckError.invalidResponse
+        }
+        guard decoded.summary.known == responseKnown else {
+            IOSImportDiagnostics.log("Inventory validation failed reason=summary-known summary.known=\(decoded.summary.known) calculated.known=\(responseKnown)")
+            throw InventoryCheckError.invalidResponse
+        }
+        guard decoded.summary.new + decoded.summary.known == decoded.summary.seen else {
+            IOSImportDiagnostics.log("Inventory validation failed reason=summary-total new=\(decoded.summary.new) known=\(decoded.summary.known) seen=\(decoded.summary.seen)")
             throw InventoryCheckError.invalidResponse
         }
         return decoded
+    }
+
+    static func logInventoryResponse(_ response: DAVResponse) {
+        let contentType = response.headers.first { $0.key.lowercased() == "content-type" }?.value ?? "<missing>"
+        IOSImportDiagnostics.log("Inventory HTTP \(response.status) Content-Type: \(contentType) Response bytes: \(response.data.count)")
+        if !(200..<300).contains(response.status) { logServerError(response.data, contentType: contentType) }
+    }
+
+    private static func logServerError(_ data: Data, contentType: String) {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            IOSImportDiagnostics.log("error body decoding failed Content-Type: \(contentType) Response bytes: \(data.count)")
+            return
+        }
+        if let error = object["error"] as? String { IOSImportDiagnostics.log("Server error: \(error)") }
+        else { IOSImportDiagnostics.log("error body decoding failed Content-Type: \(contentType) Response bytes: \(data.count)") }
+        if let runId = object["runId"] as? String { IOSImportDiagnostics.log("Inventory server runIdPrefix=\(runId.prefix(8))") }
+    }
+
+    private static func decodingDiagnostic(_ error: DecodingError) -> String {
+        switch error {
+        case .typeMismatch(_, let context): return "Inventory decoding failed typeMismatch codingPath=\(context.codingPath.map(\.stringValue).joined(separator: ".")) debugDescription=\(context.debugDescription)"
+        case .valueNotFound(_, let context): return "Inventory decoding failed valueNotFound codingPath=\(context.codingPath.map(\.stringValue).joined(separator: ".")) debugDescription=\(context.debugDescription)"
+        case .keyNotFound(let key, let context): return "Inventory decoding failed keyNotFound codingPath=\((context.codingPath + [key]).map(\.stringValue).joined(separator: ".")) debugDescription=\(context.debugDescription)"
+        case .dataCorrupted(let context): return "Inventory decoding failed dataCorrupted codingPath=\(context.codingPath.map(\.stringValue).joined(separator: ".")) debugDescription=\(context.debugDescription)"
+        @unknown default: return "Inventory decoding failed unknown"
+        }
+    }
+}
+
+enum IOSUploadPath {
+    static func folder(base: String, date: Date) -> (root: String, folder: String)? {
+        let root = IOSTargetDirectoryPreferences.normalize(base)
+        guard !root.isEmpty else { return nil }
+        let calendar = Calendar(identifier: .gregorian)
+        let folder = "\(root)/\(calendar.component(.year, from: date))/\(String(format: "%02d", calendar.component(.month, from: date)))"
+        return (root, folder)
     }
 }
 
@@ -977,21 +1060,21 @@ final class IOSForegroundImportCoordinator: ObservableObject {
         else if !result.isEmpty { IOSImportDiagnostics.log("run exposed as recoverable") }
     }
 
-    func start(selection: [GalleryAsset], library: PhotoLibraryModel, connection: ConnectorConnection, source: PhotoSource, transport: (any DAVTransport)? = nil, resumeRun: PersistedImportRun? = nil) {
+    func start(selection: [GalleryAsset], library: PhotoLibraryModel, connection: ConnectorConnection, source: PhotoSource, targetRoot: String, transport: (any DAVTransport)? = nil, resumeRun: PersistedImportRun? = nil) {
         IOSImportDiagnostics.announceIfEnabled()
         IOSImportDiagnostics.memory(phase: "import-start")
         // The gate applies the current import policy before each request. The
         // underlying session remains able to use cellular data so AUS → EIN
         // can release a waiting import without recreating its task/session.
-        let baseTransport = transport ?? NetworkTransport(allowsCellularAccess: true, waitsForConnectivity: true)
-        let importTransport = ImportNetworkTransport(base: baseTransport) { [weak self] waiting in
+        let importTransport = IOSImportTransportFactory.make(base: transport) { [weak self] waiting in
             Task { @MainActor in self?.isWaitingForWiFi = waiting && !IOSTransferNetworkPreferences.useCellularAccess() }
         }
         cancel(); if resumeRun != nil { IOSImportDiagnostics.memory(phase: "resume-after-old-task-cancel") }; isWaitingForWiFi = false; phase = .inventory; failure = nil; completed = resumeRun.map { Self.completedAssetCount(in: $0) } ?? 0; uploaded = 0; alreadyPresent = 0; reconciled = 0; transferProgress = IOSImportProgressAggregation(); pendingCompletion = []; transferSentBytes = 0; transferTotalBytes = 0; total = selection.count
+        let targetRootSnapshot = IOSTargetDirectoryPreferences.normalize(targetRoot)
         task = Task { [weak self] in
             guard let self else { return }
             do {
-                let uploader = WebDAVUploader(connection: connection, transport: importTransport, debug: { message in IOSImportDiagnostics.log(message) })
+                let folderCoordinator = WebDAVFolderCoordinator()
                 let inventoryPhase = IOSImportDiagnostics.start("asset-inventory-build")
                 let assets: [AssetInventory]
                 do { assets = try library.inventory(for: selection); IOSImportDiagnostics.finish("asset-inventory-build", started: inventoryPhase, detail: "assets=\(assets.count)") }
@@ -1028,7 +1111,7 @@ final class IOSForegroundImportCoordinator: ObservableObject {
                         serverAssetID: entry.upload?.assetId, uploadID: entry.upload?.uploadId)
                 }
                 self.setPhase(.uploading)
-                try await self.runAssetJobs(selection: selection, assets: assets, reply: reply, library: library, connection: connection, source: source, transport: importTransport, uploader: uploader, runID: runID, persistedAssets: persistedAssets)
+                try await self.runAssetJobs(selection: selection, assets: assets, reply: reply, library: library, connection: connection, source: source, targetRoot: targetRootSnapshot, transport: importTransport, folderCoordinator: folderCoordinator, runID: runID, persistedAssets: persistedAssets)
                 try await queueStore.markRun(runID: runID, state: .assetsComplete, albumSyncPending: true)
                 self.setPhase(.completing)
                 let albumBuild = IOSImportDiagnostics.start("album-inventory-build")
@@ -1044,7 +1127,7 @@ final class IOSForegroundImportCoordinator: ObservableObject {
         if resumeRun != nil { IOSImportDiagnostics.memory(phase: "resume-new-task-created") }
     }
 
-    private func runAssetJobs(selection: [GalleryAsset], assets: [AssetInventory], reply: InventoryReply, library: PhotoLibraryModel, connection: ConnectorConnection, source: PhotoSource, transport: any DAVTransport, uploader: WebDAVUploader, runID: UUID, persistedAssets: [PersistedImportAsset]) async throws {
+    private func runAssetJobs(selection: [GalleryAsset], assets: [AssetInventory], reply: InventoryReply, library: PhotoLibraryModel, connection: ConnectorConnection, source: PhotoSource, targetRoot: String, transport: any DAVTransport, folderCoordinator: WebDAVFolderCoordinator, runID: UUID, persistedAssets: [PersistedImportAsset]) async throws {
         let outcomes = try await IOSAssetJobScheduler.runCollectingFailures(count: selection.count, maxConcurrent: 2) { [weak self] index in
             guard let self else { throw CancellationError() }
         let selected = selection[index]
@@ -1054,7 +1137,7 @@ final class IOSForegroundImportCoordinator: ObservableObject {
         let started = ContinuousClock.now
             IOSImportDiagnostics.memory(phase: "asset-job-start", asset: persistedAssets[index].queueAssetID.uuidString, job: index + 1)
             do {
-                let outcome = try await self.runAssetJob(index: index, selected: selected, asset: asset, entry: entry, reply: reply, library: library, connection: connection, source: source, transport: transport, uploader: uploader, runID: runID, queueAsset: persistedAssets[index])
+                let outcome = try await self.runAssetJob(index: index, selected: selected, asset: asset, entry: entry, reply: reply, library: library, connection: connection, source: source, targetRoot: targetRoot, transport: transport, folderCoordinator: folderCoordinator, runID: runID, queueAsset: persistedAssets[index])
                 IOSImportDiagnostics.memory(phase: "asset-job-end", asset: persistedAssets[index].queueAssetID.uuidString, job: index + 1)
                 IOSImportDiagnostics.log("asset-job[\(index + 1)] OK elapsed=\(started.duration(to: .now))")
                 return (index, outcome)
@@ -1082,7 +1165,7 @@ final class IOSForegroundImportCoordinator: ObservableObject {
         }
     }
 
-    private func runAssetJob(index: Int, selected: GalleryAsset, asset: AssetInventory, entry: InventoryAssetReply, reply: InventoryReply, library: PhotoLibraryModel, connection: ConnectorConnection, source: PhotoSource, transport: any DAVTransport, uploader: WebDAVUploader, runID: UUID, queueAsset: PersistedImportAsset) async throws -> AssetJobOutcome {
+    private func runAssetJob(index: Int, selected: GalleryAsset, asset: AssetInventory, entry: InventoryAssetReply, reply: InventoryReply, library: PhotoLibraryModel, connection: ConnectorConnection, source: PhotoSource, targetRoot: String, transport: any DAVTransport, folderCoordinator: WebDAVFolderCoordinator, runID: UUID, queueAsset: PersistedImportAsset) async throws -> AssetJobOutcome {
         try Task.checkCancellation()
         guard reply.assets.indices.contains(index) else { throw InventoryCheckError.invalidResponse }
         if queueAsset.state == .completed { return .completed }
@@ -1114,17 +1197,17 @@ final class IOSForegroundImportCoordinator: ObservableObject {
             IOSImportDiagnostics.memory(phase: "sha256-end", asset: queueAssetID.uuidString, job: index + 1); IOSImportDiagnostics.finish("asset-job[\(index + 1)] sha256", started: hashPhase, detail: "bytes=\(identity.bytes)")
         }
         catch { IOSImportDiagnostics.failure("asset-job[\(index + 1)] sha256", started: hashPhase, error: error); throw error }
-        let calendar = Calendar(identifier: .gregorian)
         let date = selected.creationDate
-        let folder = "Photos/Apple Photos Connector/\(calendar.component(.year, from: date))/\(String(format: "%02d", calendar.component(.month, from: date)))"
+        guard let uploadPath = IOSUploadPath.folder(base: targetRoot, date: date) else { throw UploadError.invalidConfiguration }
+        let folder = uploadPath.folder
         let provider = IOSUploadTargets(connection: connection, transport: transport, source: source.sourceId.uuidString.lowercased(), runId: reply.runId, uploadId: ticket.uploadId, folder: folder)
         IOSImportDiagnostics.memory(phase: "prepare-start", asset: queueAssetID.uuidString, job: index + 1)
         let putPhase = IOSImportDiagnostics.start("asset-job[\(index + 1)] webdav-transfer")
         try await queueStore.markAsset(runID: runID, assetID: queueAssetID, state: .needsReconcile, lastConfirmedStep: "remote-state-unknown")
         let target: UploadTarget
         let backgroundTransport = IOSBackgroundDAVTransport(base: transport, background: backgroundTransfer, queueAssetID: queueAssetID, localRunID: runID)
-        let backgroundUploader = WebDAVUploader(connection: connection, transport: backgroundTransport, debug: { message in IOSImportDiagnostics.log(message) })
-        do { target = try await backgroundUploader.uploadWithTarget(file: exported.url, filename: exported.filename, assetId: ticket.assetId, captureDate: date, targets: provider, targetRoot: "Photos/Apple Photos Connector", progress: { [weak self] sent, total in
+        let backgroundUploader = WebDAVUploader(connection: connection, transport: backgroundTransport, debug: { message in IOSImportDiagnostics.log(message) }, folderCoordinator: folderCoordinator)
+        do { target = try await backgroundUploader.uploadWithTarget(file: exported.url, filename: exported.filename, assetId: ticket.assetId, captureDate: date, targets: provider, targetRoot: uploadPath.root, progress: { [weak self] sent, total in
             Task { @MainActor in self?.updateTransferProgress(job: index, sent: sent, total: total) }
         }, contentIdentityDiagnostics: { event in
             switch event {

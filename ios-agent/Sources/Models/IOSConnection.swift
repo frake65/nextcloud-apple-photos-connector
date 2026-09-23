@@ -9,6 +9,29 @@ struct IOSConnectionDetails: Codable, Equatable {
     var username: String
     var sourceId: UUID
     var userId: String?
+    var targetDirectory: String
+
+    init(server: String, username: String, sourceId: UUID, userId: String?, targetDirectory: String = IOSTargetDirectoryPreferences.defaultPath) {
+        self.server = server; self.username = username; self.sourceId = sourceId; self.userId = userId
+        self.targetDirectory = IOSTargetDirectoryPreferences.normalize(targetDirectory)
+    }
+
+    private enum CodingKeys: String, CodingKey { case server, username, sourceId, userId, targetDirectory }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(server: try container.decode(String.self, forKey: .server), username: try container.decode(String.self, forKey: .username), sourceId: try container.decode(UUID.self, forKey: .sourceId), userId: try container.decodeIfPresent(String.self, forKey: .userId), targetDirectory: try container.decodeIfPresent(String.self, forKey: .targetDirectory) ?? IOSTargetDirectoryPreferences.defaultPath)
+    }
+}
+
+enum IOSTargetDirectoryPreferences {
+    static let defaultPath = "Photos/Photos Connector"
+
+    static func normalize(_ value: String) -> String {
+        value.split(separator: "/").filter { $0 != "" && $0 != "." && $0 != ".." }.map(String.init).joined(separator: "/")
+    }
+
+    static func display(_ value: String) -> String { value.isEmpty ? "" : "/\(value)" }
 }
 
 enum IOSTransferNetworkPreferences {
@@ -91,11 +114,11 @@ final class IOSConnectionPreferences {
         return (details, password)
     }
 
-    func save(server: String, username: String, password: String, sourceId: UUID, userId: String? = nil) throws {
+    func save(server: String, username: String, password: String, sourceId: UUID, userId: String? = nil, targetDirectory: String = IOSTargetDirectoryPreferences.defaultPath) throws {
         let normalizedServer = server.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         _ = try ConnectorConnection(server: normalizedServer, user: username, password: password)
         try passwordStore.save(password, account: account(server: normalizedServer, username: username))
-        let details = IOSConnectionDetails(server: normalizedServer, username: username, sourceId: sourceId, userId: userId)
+        let details = IOSConnectionDetails(server: normalizedServer, username: username, sourceId: sourceId, userId: userId, targetDirectory: targetDirectory)
         defaults.set(try JSONEncoder().encode(details), forKey: key)
     }
 
@@ -143,6 +166,7 @@ final class IOSConnectionModel: ObservableObject {
     @Published var username: String
     @Published var password: String
     @Published var sourceId: String
+    @Published var targetDirectory: String
     @Published private(set) var userId: String?
     @Published var useCellularForTransfers: Bool
     @Published private(set) var loginFlowState: IOSLoginFlowState = .idle
@@ -160,6 +184,7 @@ final class IOSConnectionModel: ObservableObject {
         username = saved.details.username
         password = saved.password
         userId = saved.details.userId
+        targetDirectory = saved.details.targetDirectory
         sourceId = saved.details.sourceId.uuidString.lowercased()
         useCellularForTransfers = IOSTransferNetworkPreferences.useCellularAccess()
         state = server.isEmpty || username.isEmpty || password.isEmpty ? .notConfigured : .notTested
@@ -173,7 +198,7 @@ final class IOSConnectionModel: ObservableObject {
 
     func save() throws {
         guard let parsedSourceId else { throw UploadError.invalidConfiguration }
-        try preferences.save(server: server, username: username, password: password, sourceId: parsedSourceId, userId: nil)
+        try preferences.save(server: server, username: username, password: password, sourceId: parsedSourceId, userId: nil, targetDirectory: targetDirectory)
         userId = nil
         validatedConnection = nil
     }
@@ -205,7 +230,7 @@ final class IOSConnectionModel: ObservableObject {
         guard !server.isEmpty, !username.isEmpty, !password.isEmpty, let parsedSourceId else { state = .notConfigured; return }
         state = .checking
         do {
-            try preferences.save(server: server, username: username, password: password, sourceId: parsedSourceId, userId: nil)
+            try preferences.save(server: server, username: username, password: password, sourceId: parsedSourceId, userId: nil, targetDirectory: targetDirectory)
             let connection = try ConnectorConnection(server: server, user: username, password: password)
             let validation = await NextcloudConnectionClient(connection: connection).validate()
             state = IOSConnectionState(validation: validation.result)
@@ -231,7 +256,7 @@ final class IOSConnectionModel: ObservableObject {
                 let validation = await NextcloudConnectionClient(connection: connection).validate()
                 guard validation.result == .success else { throw LoginFlowError.http(validation.statusCode ?? 0) }
                 guard let sourceID = parsedSourceId else { throw UploadError.invalidConfiguration }
-                try preferences.save(server: credentials.server.absoluteString, username: credentials.loginName, password: credentials.appPassword, sourceId: sourceID, userId: userID)
+                try preferences.save(server: credentials.server.absoluteString, username: credentials.loginName, password: credentials.appPassword, sourceId: sourceID, userId: userID, targetDirectory: targetDirectory)
                 server = credentials.server.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
                 username = credentials.loginName
                 password = credentials.appPassword

@@ -370,6 +370,58 @@ final class IOSCoreFlowTests: XCTestCase {
         XCTAssertEqual(preferences.load().details.sourceId, source)
     }
 
+    @MainActor
+    func testTargetDirectoryUsesDefaultAndPreservesLegacyConnectionRecords() throws {
+        let suite = "apc-ios-target-default-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let keychain = TestPasswordStore()
+        let preferences = IOSConnectionPreferences(defaults: defaults, passwordStore: keychain)
+        XCTAssertEqual(preferences.load().details.targetDirectory, "Photos/Photos Connector")
+        let legacy = #"{"server":"https://cloud.example","username":"alice","sourceId":"550e8400-e29b-41d4-a716-446655440000","userId":null}"#.data(using: .utf8)!
+        defaults.set(legacy, forKey: "ios.connection.details.v1")
+        XCTAssertEqual(preferences.load().details.targetDirectory, "Photos/Photos Connector")
+    }
+
+    @MainActor
+    func testTargetDirectoryPersistsAndNormalizesLikeMacOS() throws {
+        XCTAssertEqual(IOSTargetDirectoryPreferences.normalize("/Photos/Test/"), "Photos/Test")
+        XCTAssertEqual(IOSTargetDirectoryPreferences.normalize("//Photos//Test//"), "Photos/Test")
+        XCTAssertEqual(IOSTargetDirectoryPreferences.display("Photos/Photos Connector"), "/Photos/Photos Connector")
+
+        let suite = "apc-ios-target-persistence-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = IOSConnectionPreferences(defaults: defaults, passwordStore: TestPasswordStore())
+        try preferences.save(server: "https://cloud.example", username: "alice", password: "app-password", sourceId: UUID(), targetDirectory: "//Photos//Test//")
+        XCTAssertEqual(preferences.load().details.targetDirectory, "Photos/Test")
+    }
+
+    func testUploadPathUsesOneConfiguredRootForPrepareAndWebDAV() throws {
+        let date = Date(timeIntervalSince1970: 1_758_124_800) // 2025-09-01 UTC; calendar components are deterministic enough for path shape.
+        let path = try XCTUnwrap(IOSUploadPath.folder(base: "/Photos/Photos Connector/", date: date))
+        XCTAssertEqual(path.root, "Photos/Photos Connector")
+        XCTAssertTrue(path.folder.hasPrefix(path.root + "/"))
+        XCTAssertTrue(path.folder.hasSuffix("/09"))
+    }
+
+    func testIOSImportSharesFolderCoordinatorForParallelAssets() async throws {
+        let coordinator = WebDAVFolderCoordinator()
+        let calls = TestFolderCallCounter()
+        async let first: Void = coordinator.ensure(path: "Photos/iPhone Test/2026/09") {
+            await calls.increment()
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        async let second: Void = coordinator.ensure(path: "Photos/iPhone Test/2026/09") {
+            await calls.increment()
+        }
+        _ = try await (first, second)
+        let callCount = await calls.value
+        let ensured = await coordinator.isEnsured(path: "Photos/iPhone Test/2026/09")
+        XCTAssertEqual(callCount, 1)
+        XCTAssertTrue(ensured)
+    }
+
     func testTransferCellularPreferenceDefaultsOffAndPersists() {
         let suite = "apc-ios-transfer-policy-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
@@ -500,6 +552,27 @@ final class IOSCoreFlowTests: XCTestCase {
         XCTAssertTrue(json.contains("icloud-asset"))
     }
 
+    func testIOSFilenamePolicyKeepsValidOriginalName() {
+        XCTAssertEqual(IOSFilenamePolicy.resolved(originalFilename: "IMG_1234.HEIC", localIdentifier: "local", mediaType: "image"), "IMG_1234.HEIC")
+    }
+
+    func testIOSFilenamePolicyFallsBackForEmptyOrUnavailableNames() {
+        XCTAssertEqual(IOSFilenamePolicy.resolved(originalFilename: "   ", localIdentifier: "A/B", mediaType: "image"), "asset-A_B.jpg")
+        XCTAssertEqual(IOSFilenamePolicy.resolved(originalFilename: nil, localIdentifier: "video-id", mediaType: "video"), "asset-video-id.mov")
+    }
+
+    func testIOSFilenamePolicyRejectsUnsafeOrOversizedNames() {
+        XCTAssertEqual(IOSFilenamePolicy.resolved(originalFilename: "folder/photo.jpg", localIdentifier: "local", mediaType: "image"), "asset-local.jpg")
+        XCTAssertEqual(IOSFilenamePolicy.resolved(originalFilename: String(repeating: "x", count: 4097), localIdentifier: "local", mediaType: "image"), "asset-local.jpg")
+    }
+
+    func testIOSFilenamePolicyKeepsInventoryAndExportFallbackConsistent() {
+        let filename = IOSFilenamePolicy.resolved(originalFilename: nil, localIdentifier: "video-id", mediaType: "video")
+        XCTAssertEqual(filename, "asset-video-id.mov")
+        XCTAssertFalse(filename.isEmpty)
+        XCTAssertFalse(filename.contains("/"))
+    }
+
     func testInventoryResponseMapsNewAndKnownEntries() throws {
         let data = Data(#"{"runId":"550e8400-e29b-41d4-a716-446655440000","summary":{"seen":2,"new":1,"known":1},"assets":[{"cloudIdentifier":"cloud-a","state":"known","upload":null},{"cloudIdentifier":"cloud-b","state":"new","upload":{"uploadId":"550e8400-e29b-41d4-a716-446655440001","assetId":"42"}}]}"#.utf8)
         let reply = try JSONDecoder().decode(InventoryReply.self, from: data)
@@ -582,6 +655,60 @@ final class IOSCoreFlowTests: XCTestCase {
         XCTAssertTrue(request.body.contains("icloud-asset"))
     }
 
+    func testInventoryDiagnosticsPreserveInvalidResponseBranches() async throws {
+        let source = PhotoSource(sourceId: UUID(), name: "Apple Photos")
+        let asset = AssetInventory(localIdentifier: "local", cloudIdentifier: "cloud", mediaType: "image", creationDate: nil, filename: "photo.jpg")
+        let runID = UUID().uuidString.lowercased()
+        let uploadID = UUID().uuidString.lowercased()
+        let valid = Data("{\"runId\":\"\(runID)\",\"summary\":{\"seen\":1,\"new\":1,\"known\":0},\"assets\":[{\"cloudIdentifier\":\"cloud\",\"state\":\"new\",\"upload\":{\"uploadId\":\"\(uploadID)\",\"assetId\":\"7\"}}]}".utf8)
+        let connection = try ConnectorConnection(server: "https://cloud.example", user: "alice", password: "app-password")
+        let cases: [(Int, Data)] = [
+            (400, Data(#"{"runId":"redacted","error":"validation_error"}"#.utf8)),
+            (409, Data(#"{"runId":"redacted","error":"Concurrent source registration; retry the inventory"}"#.utf8)),
+            (200, Data(#"{"runId":"broken"}"#.utf8)),
+            (200, Data("{\"runId\":\"\(runID)\",\"summary\":{\"seen\":2,\"new\":1,\"known\":0},\"assets\":[{\"cloudIdentifier\":\"cloud\",\"state\":\"new\",\"upload\":{\"uploadId\":\"\(uploadID)\",\"assetId\":\"7\"}}]}".utf8)),
+            (200, Data("{\"runId\":\"\(runID)\",\"summary\":{\"seen\":1,\"new\":0,\"known\":1},\"assets\":[{\"cloudIdentifier\":\"cloud\",\"state\":\"new\",\"upload\":{\"uploadId\":\"\(uploadID)\",\"assetId\":\"7\"}}]}".utf8)),
+            (200, valid)
+        ]
+        for (status, data) in cases {
+            do {
+                _ = try await InventoryCheckClient.check(connection: connection, source: source, assets: [asset], transport: StaticInventoryTransport(status: status, data: data))
+                if status != 200 || data != valid { XCTFail("Expected invalid inventory response for status \(status)") }
+            } catch let error as InventoryCheckError {
+                XCTAssertEqual(error.localizedDescription, InventoryCheckError.invalidResponse.localizedDescription)
+            }
+        }
+    }
+
+    func testInventoryHTTP400LogsServerErrorThroughProductionPath() async throws {
+        let key = IOSImportDiagnostics.defaultsKey
+        let previous = UserDefaults.standard.object(forKey: key)
+        UserDefaults.standard.set(true, forKey: key)
+        var lines: [String] = []
+        IOSImportDiagnostics.testLogHandler = { lines.append($0) }
+        defer {
+            IOSImportDiagnostics.testLogHandler = nil
+            if let previous { UserDefaults.standard.set(previous, forKey: key) }
+            else { UserDefaults.standard.removeObject(forKey: key) }
+        }
+
+        let connection = try ConnectorConnection(server: "https://example.test", user: "user", password: "password")
+        let source = PhotoSource(sourceId: UUID(), name: "Apple Photos")
+        let asset = AssetInventory(localIdentifier: "local", cloudIdentifier: "cloud", mediaType: "image", creationDate: nil, filename: "photo.jpg")
+        let body = Data(#"{"runId":"run-12345678","error":"TEST_ERROR"}"#.utf8)
+
+        do {
+            _ = try await InventoryCheckClient.check(connection: connection, source: source, assets: [asset], transport: StaticInventoryTransport(status: 400, data: body))
+            XCTFail("Expected HTTP 400 to fail")
+        } catch let error as InventoryCheckError {
+            XCTAssertEqual(error.localizedDescription, InventoryCheckError.invalidResponse.localizedDescription)
+        }
+
+        let output = lines.joined(separator: "\n")
+        XCTAssertTrue(output.contains("Inventory HTTP 400"), output)
+        XCTAssertTrue(output.contains("Server error: TEST_ERROR"), output)
+    }
+
     func testAlbumInventoryPreservesMembershipAndStableIdentities() throws {
         let source = PhotoSource(sourceId: UUID(), name: "Apple Photos")
         let cloud = AssetInventory(localIdentifier: "phone-local", cloudIdentifier: "shared-cloud", mediaType: "image", creationDate: nil, filename: "a.heic")
@@ -645,6 +772,11 @@ private actor CancellationProbe {
     func record() { count += 1 }
 }
 
+private actor TestFolderCallCounter {
+    private(set) var value = 0
+    func increment() { value += 1 }
+}
+
 private enum SchedulerTestError: Error { case failed }
 
 private final class TestPasswordStore: IOSPasswordStore, @unchecked Sendable {
@@ -667,6 +799,12 @@ private actor RecordingInventoryTransport: DAVTransport {
     }
 
     func requestSummary() -> (method: String, path: String, providedFile: Bool, body: String) { captured }
+}
+
+private struct StaticInventoryTransport: DAVTransport {
+    let status: Int
+    let data: Data
+    func send(_ request: URLRequest, file: URL?) async throws -> DAVResponse { DAVResponse(status: status, data: data, headers: ["Content-Type": "application/json"]) }
 }
 
 private actor RecordingAlbumTransport: DAVTransport {

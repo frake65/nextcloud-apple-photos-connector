@@ -55,12 +55,14 @@ public final class NetworkTransport: NSObject, DAVTransport, URLSessionTaskDeleg
     private let progressLock = NSLock()
     private var progressHandlers: [Int: @Sendable (Int64, Int64) -> Void] = [:]
     private var connectivityWaitingHandler: (@Sendable (Bool) -> Void)?
+    private let responseDiagnostics: (@Sendable (DAVResponse) -> Void)?
 
     public override convenience init() {
-        self.init(allowsCellularAccess: true, waitsForConnectivity: false)
+        self.init(allowsCellularAccess: true, waitsForConnectivity: false, responseDiagnostics: nil)
     }
 
-    public init(allowsCellularAccess: Bool, waitsForConnectivity: Bool) {
+    public init(allowsCellularAccess: Bool, waitsForConnectivity: Bool, responseDiagnostics: (@Sendable (DAVResponse) -> Void)? = nil) {
+        self.responseDiagnostics = responseDiagnostics
         let apiConfiguration = URLSessionConfiguration.ephemeral
         apiConfiguration.httpCookieStorage = nil
         apiConfiguration.timeoutIntervalForRequest = Self.timeout(for: .api).request
@@ -135,8 +137,12 @@ public final class NetworkTransport: NSObject, DAVTransport, URLSessionTaskDeleg
         // with 405. The caller explicitly treats that as successful/idempotent.
         // Preserve all other HTTP errors for normal error handling.
         let expectedExistingDirectory = request.httpMethod == "MKCOL" && response.statusCode == 405
-        guard response.statusCode < 400 || expectedExistingDirectory else { throw UploadError.http(response.statusCode) }
-        return DAVResponse(status: response.statusCode, data: result.0, headers: headers)
+        let davResponse = DAVResponse(status: response.statusCode, data: result.0, headers: headers)
+        if response.statusCode >= 400 && !expectedExistingDirectory {
+            responseDiagnostics?(davResponse)
+            throw UploadError.http(response.statusCode)
+        }
+        return davResponse
     }
 
     private func upload(session: URLSession, request: URLRequest, file: URL, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> (Data, URLResponse) {

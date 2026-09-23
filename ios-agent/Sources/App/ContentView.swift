@@ -1041,7 +1041,7 @@ private struct InventoryReviewScreen: View {
         guard let sourceID = connection.parsedSourceId else { error = InventoryCheckError.invalidSourceIdentifier.localizedDescription; return }
         guard let serverConnection = try? connection.makeConnection() else { error = InventoryCheckError.noServerConfiguration.localizedDescription; return }
         interruptedRun = nil
-        importer.start(selection: selection.assets, library: library, connection: serverConnection, source: PhotoSource(sourceId: sourceID, name: "Apple Photos"))
+            importer.start(selection: selection.assets, library: library, connection: serverConnection, source: PhotoSource(sourceId: sourceID, name: "Apple Photos"), targetRoot: connection.targetDirectory)
     }
 
     @MainActor
@@ -1065,7 +1065,7 @@ private struct InventoryReviewScreen: View {
         guard assets.count == run.assets.count else { return }
         interruptedRun = nil
         IOSImportDiagnostics.memory(phase: "resume-start")
-        importer.start(selection: assets, library: library, connection: serverConnection, source: PhotoSource(sourceId: sourceID, name: "Apple Photos"), resumeRun: run)
+            importer.start(selection: assets, library: library, connection: serverConnection, source: PhotoSource(sourceId: sourceID, name: "Apple Photos"), targetRoot: connection.targetDirectory, resumeRun: run)
     }
 
     private var connectionHasConfiguration: Bool { connection.parsedSourceId != nil }

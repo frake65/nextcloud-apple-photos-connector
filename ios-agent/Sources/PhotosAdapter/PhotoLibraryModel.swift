@@ -112,8 +112,10 @@ final class PhotoLibraryModel: ObservableObject {
             case .video: .video
             default: nil
             }
-            let filename = preferredType.flatMap { type in PHAssetResource.assetResources(for: asset).first { $0.type == type }?.originalFilename }
             let mediaType: String = asset.mediaType == .video ? "video" : "image"
+            let originalFilename = preferredType.flatMap { type in PHAssetResource.assetResources(for: asset).first { $0.type == type }?.originalFilename }
+            let filename = IOSFilenamePolicy.resolved(originalFilename: originalFilename, localIdentifier: localID, mediaType: mediaType)
+            if originalFilename?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false { IOSImportDiagnostics.log("inventory filename fallback asset=\(localID.prefix(8)) mediaType=\(mediaType)") }
             return PhotoKitInventoryMapper.make(localIdentifier: localID, cloudIdentifier: cloudIdentifier, mediaType: mediaType, creationDate: asset.creationDate, filename: filename)
         }
     }
@@ -181,7 +183,7 @@ final class PhotoLibraryModel: ObservableObject {
                     }
                 }
             } onCancel: { }
-            return ExportedOriginal(url: url, filename: resource.originalFilename, resourceType: type)
+            return ExportedOriginal(url: url, filename: IOSFilenamePolicy.resolved(originalFilename: resource.originalFilename, localIdentifier: galleryAsset.id, mediaType: type == .video ? "video" : "image"), resourceType: type)
         } catch {
             try? FileManager.default.removeItem(at: directory)
             throw error
@@ -324,5 +326,23 @@ private enum IOSCloudIdentifierCodec {
 enum PhotoKitInventoryMapper {
     static func make(localIdentifier: String, cloudIdentifier: String?, mediaType: String, creationDate: Date?, filename: String?) -> AssetInventory {
         AssetInventory(localIdentifier: localIdentifier, cloudIdentifier: cloudIdentifier, mediaType: mediaType, creationDate: creationDate, filename: filename)
+    }
+}
+
+enum IOSFilenamePolicy {
+    static func resolved(originalFilename: String?, localIdentifier: String, mediaType: String) -> String {
+        if let originalFilename {
+            let trimmed = originalFilename.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty, trimmed.utf8.count <= 4096, isSafe(trimmed) { return trimmed }
+        }
+        let safeID = localIdentifier.unicodeScalars.map { scalar -> Character in
+            if scalar.isASCII && (scalar.value == 45 || scalar.value == 95 || (48...57).contains(scalar.value) || (65...90).contains(scalar.value) || (97...122).contains(scalar.value)) { return Character(scalar) }
+            return "_"
+        }
+        return "asset-\(String(safeID).prefix(120)).\(mediaType == "video" ? "mov" : "jpg")"
+    }
+
+    private static func isSafe(_ value: String) -> Bool {
+        value != "." && value != ".." && !value.contains("/") && !value.contains("\\") && !value.unicodeScalars.contains { $0.value < 32 }
     }
 }

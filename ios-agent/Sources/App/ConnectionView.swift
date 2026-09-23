@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ConnectionView: View {
     @ObservedObject var model: IOSConnectionModel
-    private enum Field: Hashable { case server, username, password }
+    private enum Field: Hashable { case server, username, password, targetDirectory }
     @FocusState private var focusedField: Field?
     #if DEBUG
     @State private var diagnosticsEnabled = IOSImportDiagnostics.enabled
@@ -55,6 +55,13 @@ struct ConnectionView: View {
                 Text("Für Mac-Importe als „bereits in Nextcloud“ muss hier dieselbe Source-ID stehen wie auf dem Mac. Sie ist in der Datei source.json im Application-Support-Ordner von Apple Photos Connector gespeichert. Eine neue ID erzeugt einen getrennten Server-Namensraum. Für eine eigenständige Fotomediathek eine eigene ID verwenden.")
                     .font(.footnote).foregroundStyle(.secondary)
                 if model.parsedSourceId == nil { Text("Bitte eine gültige UUID eingeben.").font(.footnote).foregroundStyle(.red) }
+            }
+
+            Section("Upload-Ziel") {
+                TextField("Zielverzeichnis", text: $model.targetDirectory, prompt: Text("/Photos/Photos Connector"))
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .textContentType(.URL)
+                    .focused($focusedField, equals: .targetDirectory)
             }
 
             Section {
