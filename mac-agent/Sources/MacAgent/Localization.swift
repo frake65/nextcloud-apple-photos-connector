@@ -1,4 +1,5 @@
 import Foundation
+import MacAgentSupport
 
 enum L10n {
     static let languageKey = "ui.language"
@@ -50,13 +51,13 @@ enum L10n {
         "pauseDebug": ["de":"Pausieren", "en":"Pause", "fr":"Pause", "pt":"Pausar", "nl":"Pauzeren", "es":"Pausar"],
         "resumeDebug": ["de":"Fortsetzen", "en":"Resume", "fr":"Reprendre", "pt":"Retomar", "nl":"Hervatten", "es":"Reanudar"],
         "debugDisabled": ["de":"Debug-Modus ist deaktiviert.", "en":"Debug mode is disabled.", "fr":"Le mode débogage est désactivé.", "pt":"O modo de depuração está desativado.", "nl":"De debugmodus is uitgeschakeld.", "es":"El modo de depuración está desactivado."],
-        "title": ["de":"Nextcloud Apple Photos Connector", "en":"Nextcloud Apple Photos Connector", "nl":"Nextcloud Apple Photos Connector", "es":"Nextcloud Apple Photos Connector", "fr":"Nextcloud Apple Photos Connector", "pt":"Nextcloud Apple Photos Connector"],
+        "title": ["de":"Photos Connector", "en":"Photos Connector", "nl":"Photos Connector", "es":"Photos Connector", "fr":"Photos Connector", "pt":"Photos Connector"],
         "subtitle": ["de":"Überträgt deine Fotos, Videos und Alben aus Apple Fotos sicher in deine Nextcloud. Zusätzlich zu dieser App wird die zugehörige App auf dem Nextcloud-Server benötigt.", "en":"Safely transfers your photos, videos, and albums from Apple Photos to your Nextcloud. The corresponding app on the Nextcloud server is also required.", "nl":"Draagt je foto's, video's en albums veilig over van Apple Foto's naar je Nextcloud. De bijbehorende app op de Nextcloud-server is ook vereist.", "es":"Transfiere de forma segura tus fotos, vídeos y álbumes de Apple Fotos a tu Nextcloud. También se necesita la aplicación correspondiente en el servidor Nextcloud.", "fr":"Transfère en toute sécurité vos photos, vidéos et albums d’Apple Photos vers votre Nextcloud. L’application correspondante sur le serveur Nextcloud est également requise.", "pt":"Transfere com segurança as suas fotografias, vídeos e álbuns do Apple Photos para a sua Nextcloud. Também é necessária a aplicação correspondente no servidor Nextcloud."],
         "settings": ["de":"Einstellungen öffnen …", "en":"Open Settings …", "nl":"Instellingen openen …", "es":"Abrir ajustes …", "fr":"Ouvrir les réglages …", "pt":"Abrir definições …"],
         "importStatus": ["de":"Importstatus", "en":"Import status", "nl":"Importstatus", "es":"Estado de importación", "fr":"État de l’importation", "pt":"Estado da importação"],
         "requestPhotoAccess": ["de":"Zugriff auf Apple Photos anfordern", "en":"Request Apple Photos Access", "nl":"Toegang tot Apple Photos aanvragen", "es":"Solicitar acceso a Apple Photos", "fr":"Demander l’accès à Apple Photos", "pt":"Solicitar acesso ao Apple Photos"],
-        "upload": ["de":"Fotos & Alben übernehmen", "en":"Import Photos & Albums", "fr":"Importer photos et albums", "pt":"Importar fotos e álbuns", "nl":"Foto's en albums overnemen", "es":"Importar fotos y álbumes"],
-        "photos": ["de":"Fotos", "en":"Photos", "fr":"Photos", "pt":"Fotos", "nl":"Foto's", "es":"Fotos"],
+        "upload": ["de":"Fotos und Videos übernehmen", "en":"Import Photos and Videos", "fr":"Importer photos et vidéos", "pt":"Importar fotografias e vídeos", "nl":"Foto's en video's overnemen", "es":"Importar fotos y vídeos"],
+        "photos": ["de":"Fotos / Videos", "en":"Photos / Videos", "fr":"Photos / Vidéos", "pt":"Fotos / Vídeos", "nl":"Foto's / Video's", "es":"Fotos / Vídeos"],
         "albums": ["de":"Alben", "en":"Albums", "fr":"Albums", "pt":"Álbuns", "nl":"Albums", "es":"Álbumes"],
         "selectAll": ["de":"Alle auswählen", "en":"Select all", "fr":"Tout sélectionner", "pt":"Selecionar tudo", "nl":"Alles selecteren", "es":"Seleccionar todo"],
         "clearSelection": ["de":"Auswahl aufheben", "en":"Clear selection", "fr":"Effacer la sélection", "pt":"Limpar seleção", "nl":"Selectie wissen", "es":"Borrar selección"],
@@ -125,7 +126,7 @@ enum L10n {
         ,"requestPhotos": ["de":"Fotozugriff prüfen und Fotos einlesen …", "en":"Check photo access and load photos …", "fr":"Vérifier l’accès et charger les photos…", "pt":"Verificar acesso e carregar fotografias…", "nl":"Fototoegang controleren en foto's laden …", "es":"Comprobar acceso y cargar fotos …"]
         ,"uploadingOriginals": ["de":"Originale werden hochgeladen", "en":"Uploading originals", "fr":"Téléversement des originaux", "pt":"A carregar originais", "nl":"Originelen uploaden", "es":"Subiendo originales"]
         ,"view": ["de":"Ansicht", "en":"View", "fr":"Affichage", "pt":"Vista", "nl":"Weergave", "es":"Vista"]
-        ,"server": ["de":"Server", "en":"Server", "fr":"Serveur", "pt":"Servidor", "nl":"Server", "es":"Servidor"]
+        ,"server": ["de":"Server-URL", "en":"Server URL", "fr":"URL du serveur", "pt":"URL do servidor", "nl":"Server-URL", "es":"URL del servidor"]
         ,"username": ["de":"Benutzername", "en":"Username", "fr":"Nom d’utilisateur", "pt":"Nome de utilizador", "nl":"Gebruikersnaam", "es":"Nombre de usuario"]
         ,"password": ["de":"App-Passwort", "en":"App password", "fr":"Mot de passe d’application", "pt":"Palavra-passe da app", "nl":"App-wachtwoord", "es":"Contraseña de la app"]
         ,"import": ["de":"Importieren", "en":"Import", "fr":"Importer", "pt":"Importar", "nl":"Importeren", "es":"Importar"]
@@ -153,7 +154,7 @@ enum L10n {
         ,"notChecked": ["de":"Verbindung nicht geprüft", "en":"Connection not checked", "fr":"Connexion non vérifiée", "pt":"Ligação não verificada", "nl":"Verbinding niet gecontroleerd", "es":"Conexión no comprobada"]
         ,"connectionSuccess": ["de":"✓ Verbindung erfolgreich", "en":"✓ Connection successful", "fr":"✓ Connexion réussie", "pt":"✓ Ligação bem-sucedida", "nl":"✓ Verbinding geslaagd", "es":"✓ Conexión correcta"]
         ,"authError": ["de":"Benutzername oder Passwort sind nicht korrekt.", "en":"Username or password is incorrect.", "fr":"Nom d’utilisateur ou mot de passe incorrect.", "pt":"O nome de utilizador ou a palavra-passe está incorreto.", "nl":"Gebruikersnaam of wachtwoord is onjuist.", "es":"El nombre de usuario o la contraseña no son correctos."]
-        ,"appMissing": ["de":"Nextcloud APC ist auf diesem Nextcloud-Server nicht installiert oder nicht aktiviert.", "en":"Nextcloud APC is not installed or enabled on this Nextcloud server.", "fr":"Nextcloud APC n’est pas installé ou activé sur ce serveur.", "pt":"O Nextcloud APC não está instalado ou ativado neste servidor.", "nl":"Nextcloud APC is niet geïnstalleerd of geactiveerd op deze server.", "es":"Nextcloud APC no está instalado o activado en este servidor."]
+        ,"appMissing": ["de":"Photos Connector ist auf diesem Nextcloud-Server nicht installiert oder nicht aktiviert.", "en":"Photos Connector is not installed or enabled on this Nextcloud server.", "fr":"Photos Connector n’est pas installé ou activé sur ce serveur.", "pt":"O Photos Connector não está instalado ou ativado neste servidor.", "nl":"Photos Connector is niet geïnstalleerd of geactiveerd op deze server.", "es":"Photos Connector no está instalado o activado en este servidor."]
         ,"serverUnavailable": ["de":"Der Nextcloud-Server ist nicht erreichbar.", "en":"The Nextcloud server is unreachable.", "fr":"Le serveur Nextcloud est inaccessible.", "pt":"O servidor Nextcloud não está acessível.", "nl":"De Nextcloud-server is niet bereikbaar.", "es":"No se puede acceder al servidor Nextcloud."]
         ,"unexpectedResponse": ["de":"Unerwartete Serverantwort", "en":"Unexpected server response", "fr":"Réponse inattendue du serveur", "pt":"Resposta inesperada do servidor", "nl":"Onverwachte serverrespons", "es":"Respuesta inesperada del servidor"]
         ,"targetNotFound": ["de":"Zielverzeichnis nicht gefunden.", "en":"Target directory not found.", "fr":"Répertoire cible introuvable.", "pt":"Diretório de destino não encontrado.", "nl":"Doelmap niet gevonden.", "es":"No se encontró el directorio de destino."]
@@ -162,7 +163,7 @@ enum L10n {
         ,"folderCreateFailed": ["de":"Ordner konnte nicht angelegt werden.", "en":"Folder could not be created.", "fr":"Impossible de créer le dossier.", "pt":"Não foi possível criar a pasta.", "nl":"Map kon niet worden gemaakt.", "es":"No se pudo crear la carpeta."]
     ]
     static func currentLanguage(defaults: UserDefaults? = nil) -> String {
-        let defaults = defaults ?? (UserDefaults(suiteName: "de.applephotosconnector.macagent") ?? .standard)
+        let defaults = defaults ?? ConnectionPreferences.defaults()
         let stored = defaults.string(forKey: languageKey)
         let selected = supportedLanguages.contains(stored ?? "") ? stored! : "system"
         return selected == "system" ? (Locale.current.language.languageCode?.identifier ?? "en") : selected

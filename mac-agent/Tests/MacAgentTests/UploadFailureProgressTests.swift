@@ -9,7 +9,7 @@ actor MKCOLCounter {
 }
 
 final class UploadFailureProgressTests: XCTestCase {
-    enum Mode: Sendable { case success, put413, timeout, export, complete, known, inventory, prepare, folder, receipt }
+    enum Mode: Sendable { case success, put413, timeout, export, complete, known, mixed, inventory, prepare, folder, receipt }
     struct Exporter: PhotoOriginalExporting {
         let mode: Mode
         func export(localIdentifier: String) async throws -> PhotoOriginalExporter.Export {
@@ -33,8 +33,11 @@ final class UploadFailureProgressTests: XCTestCase {
             func json(_ value: Any) throws -> DAVResponse { DAVResponse(status: 200, data: try JSONSerialization.data(withJSONObject: value)) }
             if path.hasSuffix("/inventory") {
                 if mode == .inventory { throw URLError(.timedOut) }
-                return try json(["runId": "run", "assets": (0..<3).map { i -> [String: Any] in
-                    mode == .known ? ["state": "known"] : ["state": "new", "upload": ["uploadId": "u\(i)", "assetId": "\(i+1)"]]
+                let requestBody = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
+                let count = (requestBody["assets"] as? [[String: Any]])?.count ?? 3
+                let states = mode == .known ? Array(repeating: "known", count: count) : (mode == .mixed ? ["new", "known"] : Array(repeating: "new", count: count))
+                return try json(["runId": "run", "assets": states.enumerated().map { i, state -> [String: Any] in
+                    state == "known" ? ["state": "known"] : ["state": "new", "upload": ["uploadId": "u\(i)", "assetId": "\(i+1)"]]
                 }])
             }
             if request.httpMethod == "MKCOL" {
@@ -65,6 +68,12 @@ final class UploadFailureProgressTests: XCTestCase {
             }
             XCTFail("Unexpected request"); return DAVResponse(status: 500)
         }
+        func send(_ request: URLRequest, file: URL?, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> DAVResponse {
+            try await send(request, file: file)
+        }
+        func send(_ request: URLRequest, file: URL?, kind: DAVRequestKind, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> DAVResponse {
+            try await send(request, file: file)
+        }
     }
     final class Events: @unchecked Sendable {
         let lock = NSLock()
@@ -73,7 +82,7 @@ final class UploadFailureProgressTests: XCTestCase {
         func receive(_ value: UploadCoordinator.Progress) { lock.lock(); defer { lock.unlock() }; progress.append(value) }
         func success(_ value: String) { lock.lock(); defer { lock.unlock() }; uploaded.append(value) }
     }
-    private func run(_ mode: Mode) async throws -> (UploadCoordinator.RunSummary, Events) {
+    private func run(_ mode: Mode, count: Int = 3) async throws -> (UploadCoordinator.RunSummary, Events) {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: dir) }
         var receiptURL = dir.appendingPathComponent("receipts.json")
@@ -85,11 +94,11 @@ final class UploadFailureProgressTests: XCTestCase {
         }
         let coordinator = UploadCoordinator(exporter: Exporter(mode: mode), transport: Transport(mode), receiptURL: receiptURL)
         let events = Events()
-        let summary = try await coordinator.run(json: payload(), connection: connection(), targetRoot: "Root", progress: { events.receive($0) }, onUploaded: { events.success($0) })
+        let summary = try await coordinator.run(json: payload(count: count), connection: connection(), targetRoot: "Root", progress: { events.receive($0) }, onUploaded: { events.success($0) })
         return (summary, events)
     }
-    private func payload() throws -> String {
-        try InventoryJSON.encode((0..<3).map {
+    private func payload(count: Int = 3) throws -> String {
+        try InventoryJSON.encode((0..<count).map {
             AssetInventory(localIdentifier: "local\($0)", mediaType: "image", creationDate: Date(timeIntervalSince1970: 0), filename: "same.jpg")
         }, source: PhotoSource(sourceId: UUID(), name: "Test"))
     }
@@ -114,11 +123,45 @@ final class UploadFailureProgressTests: XCTestCase {
         XCTAssertEqual(final.items.filter { $0.status == .failed }.count, 1)
     }
     func testKnownAssetsNeedNoUploadAndCompleteSuccessfully() async throws {
-        let (summary, _) = try await run(.known)
+        let (summary, _) = try await run(.known, count: 2)
         XCTAssertEqual(summary.failed, 0)
         XCTAssertEqual(summary.uploadedImages, 0)
-        XCTAssertEqual(summary.alreadyInCloudImages, 3)
+        XCTAssertEqual(summary.alreadyInCloudImages, 2)
+        XCTAssertEqual(summary.finalProgress.completed, 0)
+        XCTAssertEqual(summary.finalProgress.total, 0)
+        XCTAssertEqual(summary.finalProgress.summaryText, "0 von 2 Medien übertragen. 2 davon waren bereits vor diesem Lauf in der Cloud. 0 fehlgeschlagen.")
+        XCTAssertEqual(summary.finalProgress.activityLabelKey, "noNewUploads")
         XCTAssertEqual(ImportRunState.finalState(uploadFailures: summary.failed, albumFailed: false), .completed)
+    }
+
+    func testProgressCountsOnlyAssetsThatNeedAnUpload() async throws {
+        let (newSummary, _) = try await run(.success, count: 2)
+        XCTAssertEqual(newSummary.finalProgress.completed, 2)
+        XCTAssertEqual(newSummary.finalProgress.total, 2)
+        XCTAssertEqual(newSummary.uploadedImages, 2)
+
+        let (knownSummary, _) = try await run(.known, count: 2)
+        XCTAssertEqual(knownSummary.finalProgress.completed, 0)
+        XCTAssertEqual(knownSummary.finalProgress.total, 0)
+        XCTAssertTrue(knownSummary.finalProgress.items.allSatisfy { $0.status == .alreadyInCloud })
+
+        let (mixedSummary, _) = try await run(.mixed, count: 2)
+        XCTAssertEqual(mixedSummary.finalProgress.completed, 1)
+        XCTAssertEqual(mixedSummary.finalProgress.total, 1)
+        XCTAssertEqual(mixedSummary.uploadedImages, 1)
+        XCTAssertEqual(mixedSummary.alreadyInCloudImages, 1)
+    }
+
+    func testSuccessfulUploadAndKnownOnlyRunsClearProgressAfterAlbumSync() async throws {
+        let (uploaded, _) = try await run(.success, count: 2)
+        XCTAssertTrue(ImportProgressLifecycle.shouldClearAfterImport(uploaded.finalProgress, albumSyncSucceeded: true))
+
+        let (known, _) = try await run(.known, count: 2)
+        XCTAssertTrue(ImportProgressLifecycle.shouldClearAfterImport(known.finalProgress, albumSyncSucceeded: true))
+        XCTAssertFalse(ImportProgressLifecycle.shouldClearAfterImport(known.finalProgress, albumSyncSucceeded: false))
+
+        let (failed, _) = try await run(.put413)
+        XCTAssertFalse(ImportProgressLifecycle.shouldClearAfterImport(failed.finalProgress, albumSyncSucceeded: true))
     }
     func testUnknownInventoryFailureDoesNotClaimFileTransferFailed() {
         let failure = UploadFailure.capture(UploadError.diagnostic("inventory unavailable"), stage: .inventory)

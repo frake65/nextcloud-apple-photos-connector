@@ -131,7 +131,7 @@ struct AssetIdentityDiagnostic: Sendable {
 enum GalleryDebug {
     private static let logger = DebugFileLogger(enabled: true)
     static func log(_ event: String, category: String? = nil) {
-        let defaults = UserDefaults(suiteName: ConnectionPreferences.preferencesSuite) ?? .standard
+        let defaults = ConnectionPreferences.defaults()
         guard defaults.bool(forKey: UploadPreferences.debugModeKey) else { return }
         Task { @MainActor in DebugLogStore.shared.append(event, category: category) }
         logger.log(event)
@@ -158,11 +158,13 @@ actor GalleryLibrary: GalleryLibraryProviding {
 
     func open() async throws -> Int {
         try await gate.checkpoint()
+        GalleryDiagnostics.log("scan-start")
+        GalleryDebug.log("gallery.open.begin")
         fetched = PHAsset.fetchAssets(with: options())
         albumCollections = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil)
         cache.removeAll()
         let count = fetched?.count ?? 0
-        GalleryDebug.log("gallery.fetch.count=\(count)")
+        GalleryDiagnostics.log("scan-complete", extra: "assets=\(count) albums=\(albumCollections?.count ?? 0)")
         return count
     }
 
@@ -282,6 +284,7 @@ actor GalleryLibrary: GalleryLibraryProviding {
                 batchValues[local] = value
             }
             GalleryDebug.log("gallery.identifier.batch.complete count=\(missing.count)")
+            GalleryDiagnostics.log("gallery-models", extra: "held=\(cache.count)")
         }
         return assets.map { asset in
             // Keep values needed by this batch even when the cache was trimmed.

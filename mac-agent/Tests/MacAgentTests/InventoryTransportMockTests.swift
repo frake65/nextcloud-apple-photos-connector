@@ -25,6 +25,12 @@ final class InventoryTransportMockTests: XCTestCase {
             if path.contains("/uploads/complete") { complete += 1; if mode == .completeError { return DAVResponse(status: 500) }; return DAVResponse(status: 200) }
             return DAVResponse(status: 201)
         }
+        func send(_ request: URLRequest, file: URL?, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> DAVResponse {
+            try await send(request, file: file)
+        }
+        func send(_ request: URLRequest, file: URL?, kind: DAVRequestKind, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> DAVResponse {
+            try await send(request, file: file)
+        }
         func counts() -> (Int,Int,Int,Int) { (inventory,prepare,put,complete) }
         func mTime() -> String? { putMTime }
     }
@@ -41,6 +47,22 @@ final class InventoryTransportMockTests: XCTestCase {
     private func inventoryJSON() throws -> String {
         let source = PhotoSource(sourceId: UUID(uuidString: "00000000-0000-4000-8000-000000000001")!, name: "Test")
         return try InventoryJSON.encode([AssetInventory(localIdentifier: "local", cloudIdentifier: "cloud", mediaType: "image", creationDate: Date(timeIntervalSince1970: 1_700_000_000), filename: "test.jpg")], source: source)
+    }
+    private func emptyInventoryJSON() throws -> String {
+        let source = PhotoSource(sourceId: UUID(), name: "Test")
+        return try InventoryJSON.encode([], source: source)
+    }
+    func testInventoryDeduplicatesStableCloudIdentityBeforeUpload() throws {
+        let source = PhotoSource(sourceId: UUID(), name: "Test")
+        let assets = [
+            AssetInventory(localIdentifier: "local-1", cloudIdentifier: "cloud-1", mediaType: "image", creationDate: nil, filename: "one.jpg"),
+            AssetInventory(localIdentifier: "local-2", cloudIdentifier: "cloud-1", mediaType: "image", creationDate: nil, filename: "duplicate.jpg"),
+            AssetInventory(localIdentifier: "local-3", cloudIdentifier: nil, mediaType: "video", creationDate: nil, filename: "three.mov")
+        ]
+        let result = try InventoryJSON.deduplicating(InventoryJSON.encode(assets, source: source))
+        XCTAssertEqual(result.summary.totalAssets, 2)
+        let decoded = try JSONDecoder().decode(ProbeDocument.self, from: Data(result.json.utf8))
+        XCTAssertEqual(decoded.assets.map(\.localIdentifier), ["local-1", "local-3"])
     }
     private func connection() throws -> ConnectorConnection { try ConnectorConnection(server: "https://example.invalid", user: "test", password: "x") }
 
@@ -68,10 +90,11 @@ final class InventoryTransportMockTests: XCTestCase {
         }
     }
 
-    func testH6dServerSeenZeroIsFailure() async throws {
+    func testEmptyInventoryIsAcceptedAsValidScanResult() async throws {
         let spy = CoordinatorSpy(.seenZero); let c = UploadCoordinator(exporter: FakeExporter(failing: false), transport: spy, receiptURL: receiptURL())
-        do { _ = try await c.run(json: inventoryJSON(), connection: try connection(), debug: nil); XCTFail("expected semantic failure") } catch { }
+        let summary = try await c.run(json: emptyInventoryJSON(), connection: try connection(), debug: nil)
         let x = await spy.counts(); XCTAssertEqual(x.0, 1); XCTAssertEqual(x.1, 0); XCTAssertEqual(x.2, 0); XCTAssertEqual(x.3, 0)
+        XCTAssertEqual(summary.finalProgress.total, 0)
     }
     func testH6eExporterFailureStopsDownstream() async throws {
         let spy = CoordinatorSpy(.new); let c = UploadCoordinator(exporter: FakeExporter(failing: true), transport: spy, receiptURL: receiptURL())

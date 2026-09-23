@@ -70,7 +70,11 @@ final class PhotoKitImageRequest: @unchecked Sendable {
 }
 
 actor PhotoKitGalleryThumbnails: GalleryThumbnailProviding {
-    private let manager = PHCachingImageManager()
+    // The loader owns the bounded cache below. PHCachingImageManager also
+    // retains framework-level cache state, and this gallery never calls
+    // stopCachingImages for every disappearing cell. Use the non-caching
+    // manager so PhotoKit cannot accumulate an unbounded second cache.
+    private let manager = PHImageManager.default()
     private let gate: SettingsWorkGate
     init(gate: SettingsWorkGate = .shared) { self.gate = gate }
 
@@ -113,6 +117,9 @@ final class GalleryThumbnailLoader {
     private var continuations: [UUID: CheckedContinuation<GalleryImage?, Error>] = [:]
     private let cache = NSCache<NSString, GalleryImage>()
     private var cacheGeneration = UUID()
+    private var startedRequests = 0
+    private var completedRequests = 0
+    private var cachedKeys: Set<String> = []
     var activeCount: Int { active.count }
     var queuedCount: Int { queue.count }
 
@@ -122,7 +129,10 @@ final class GalleryThumbnailLoader {
         cache.totalCostLimit = 16 * 1024 * 1024
     }
 
-    func clearCache() { cacheGeneration = UUID(); cache.removeAllObjects() }
+    func clearCache() {
+        cacheGeneration = UUID(); cache.removeAllObjects(); cachedKeys.removeAll()
+        GalleryDebug.log("gallery.thumbnail.cache.cleared generation=\(cacheGeneration.uuidString) stored=0")
+    }
 
     func image(local: String, targetSize: CGSize = CGSize(width: 98, height: 92), scale: CGFloat = 1) async throws -> GalleryImage? {
         try Task.checkCancellation()
@@ -153,19 +163,27 @@ final class GalleryThumbnailLoader {
             let job = queue.removeFirst()
             let generation = cacheGeneration
             continuations[job.id] = job.continuation
+            startedRequests += 1
+            GalleryDebug.log("gallery.thumbnail.start active=\(active.count) queued=\(queue.count) started=\(startedRequests)")
+            GalleryDiagnostics.log("thumbnail-start", extra: "active=\(active.count) queued=\(queue.count) started=\(startedRequests) cached=\(cachedKeys.count)")
             active[job.id] = Task {
                 do {
                     try await gate.checkpoint()
                     GalleryDebug.log("gallery.thumbnail.start active=\(active.count) targetPixels=\(Int(job.targetPixels.width))x\(Int(job.targetPixels.height))")
                     let value = try await provider.image(local: job.local, targetSize: job.targetPixels)
                     try Task.checkCancellation()
-                    if let value, generation == cacheGeneration { cache.setObject(value, forKey: job.cacheKey, cost: Int(job.targetPixels.width * job.targetPixels.height * 4)) }
+                    if let value, generation == cacheGeneration {
+                        cache.setObject(value, forKey: job.cacheKey, cost: Int(job.targetPixels.width * job.targetPixels.height * 4))
+                        cachedKeys.insert(job.cacheKey as String)
+                    }
                     continuations.removeValue(forKey: job.id)?.resume(returning: value)
                 } catch {
                     continuations.removeValue(forKey: job.id)?.resume(throwing: error)
                 }
                 active.removeValue(forKey: job.id)
-                GalleryDebug.log("gallery.thumbnail.complete active=\(active.count)")
+                completedRequests += 1
+                GalleryDebug.log("gallery.thumbnail.complete active=\(active.count) queued=\(queue.count) completed=\(completedRequests) stored=\(cachedKeys.count)")
+                GalleryDiagnostics.log("thumbnail-complete", extra: "active=\(active.count) queued=\(queue.count) completed=\(completedRequests) cached=\(cachedKeys.count)")
                 pump()
             }
         }

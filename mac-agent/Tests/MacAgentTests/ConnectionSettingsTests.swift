@@ -19,6 +19,37 @@ private final class RecordingDAVTransport: DAVTransport, @unchecked Sendable {
 }
 
 final class ConnectionSettingsTests: XCTestCase {
+    func testFreshSettingsUseSafeDefaultsWithoutWritingThem() {
+        let suite = "APC.FreshSettings." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { UserDefaults.standard.removeSuite(named: suite) }
+        XCTAssertFalse(defaults.bool(forKey: UploadPreferences.debugModeKey))
+        XCTAssertNil(defaults.object(forKey: UploadPreferences.debugModeKey))
+        XCTAssertEqual(TargetDirectoryPreferences(defaults: defaults).path, "Photos/Photos Connector")
+        XCTAssertNil(defaults.object(forKey: TargetDirectoryPreferences.key))
+    }
+
+    func testExistingDebugAndTargetValuesArePreserved() {
+        let suite = "APC.ExistingSettings." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { UserDefaults.standard.removeSuite(named: suite) }
+        defaults.set(true, forKey: UploadPreferences.debugModeKey)
+        defaults.set("Photos/Existing", forKey: TargetDirectoryPreferences.key)
+        XCTAssertTrue(defaults.bool(forKey: UploadPreferences.debugModeKey))
+        XCTAssertEqual(TargetDirectoryPreferences(defaults: defaults).path, "Photos/Existing")
+    }
+
+    func testTargetChangeIsVisibleToARefreshedMainWindowState() {
+        let defaults = UserDefaults(suiteName: "APC.TargetRefresh." + UUID().uuidString)!
+        var preferences = TargetDirectoryPreferences(defaults: defaults)
+        preferences.path = "Photos/Photos Connector"
+        XCTAssertEqual(TargetDirectoryPreferences(defaults: defaults).path, "Photos/Photos Connector")
+
+        preferences.path = "/Photos/Test"
+        XCTAssertEqual(TargetDirectoryPreferences(defaults: defaults).path, "Photos/Test")
+        XCTAssertEqual("/" + TargetDirectoryPreferences(defaults: defaults).path, "/Photos/Test")
+    }
+
     func testTargetDirectoryIsNormalizedAndRelative() {
         let defaults = UserDefaults(suiteName: "test-\(UUID().uuidString)")!
         var prefs = TargetDirectoryPreferences(defaults: defaults)

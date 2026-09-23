@@ -5,7 +5,7 @@ import MacAgentSupport
 import Darwin
 #endif
 
-let defaults = UserDefaults(suiteName: ConnectionPreferences.preferencesSuite) ?? .standard
+let defaults = ConnectionPreferences.defaults()
 let store = KeychainPasswordStore()
 
 func hiddenLine() -> String {

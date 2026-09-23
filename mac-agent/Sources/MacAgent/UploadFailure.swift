@@ -13,7 +13,11 @@ struct UploadFailure: Error, Sendable, Equatable {
         if let failure = error as? Self { return failure }
         let ns = error as NSError
         let status: Int?
-        if case let UploadError.http(code) = error { status = code } else { status = nil }
+        switch error {
+        case let UploadError.http(code): status = code
+        case let UploadError.server(info): status = info.status
+        default: status = nil
+        }
         let category: Category
         if let status {
             switch status {
@@ -89,6 +93,18 @@ struct UploadDisplayTransport: DAVTransport {
             }
             return response
         } catch is CancellationError { throw CancellationError() }
+        catch { throw UploadFailure.capture(error, stage: stage) }
+    }
+    func send(_ request: URLRequest, file: URL?, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> DAVResponse {
+        let stage: UploadFailure.Stage = request.httpMethod == "MKCOL" ? .folder : .put
+        do { return try await base.send(request, file: file, progress: progress) }
+        catch is CancellationError { throw CancellationError() }
+        catch { throw UploadFailure.capture(error, stage: stage) }
+    }
+    func send(_ request: URLRequest, file: URL?, kind: DAVRequestKind, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> DAVResponse {
+        let stage: UploadFailure.Stage = request.httpMethod == "MKCOL" ? .folder : .put
+        do { return try await base.send(request, file: file, kind: kind, progress: progress) }
+        catch is CancellationError { throw CancellationError() }
         catch { throw UploadFailure.capture(error, stage: stage) }
     }
 }

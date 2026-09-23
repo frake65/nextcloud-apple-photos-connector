@@ -44,6 +44,21 @@ public struct KeychainError: Error, Sendable { public let status: Int32; public 
 
 public struct ConnectionPreferences: Sendable {
     public static let preferencesSuite = "de.applephotosconnector.macagent"
+    private static let migratedKeys = [
+        "nextcloud.server", "nextcloud.user", "nextcloud.targetDirectory",
+        "nextcloud.targetValidated", "nextcloud.connectionValidated",
+        "nextcloud.debugMode", "photos.language"
+    ]
+    /// The bundle identifier is not an app-group suite. Use the standard
+    /// defaults domain and import values written by older builds once.
+    public static func defaults() -> UserDefaults {
+        let standard = UserDefaults.standard
+        let legacy = standard.persistentDomain(forName: preferencesSuite) ?? [:]
+        for key in migratedKeys where standard.object(forKey: key) == nil {
+            if let value = legacy[key] { standard.set(value, forKey: key) }
+        }
+        return standard
+    }
     public var server: String; public var user: String
     private let store: any PasswordStore
     public init(server: String = "", user: String = "", store: any PasswordStore = KeychainPasswordStore()) { self.server=server; self.user=user; self.store=store }

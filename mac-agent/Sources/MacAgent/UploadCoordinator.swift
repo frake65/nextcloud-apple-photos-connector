@@ -35,13 +35,18 @@ actor UploadCoordinator {
         let cancelled: Bool
         let items: [DisplayItem]
         var finished: Bool { completed >= total }
+        var activityLabelKey: String {
+            if total == 0 { return "noNewUploads" }
+            if !finished { return "preparingUploads" }
+            return failed ? "uploadFailureUnknown" : "uploadComplete"
+        }
         var summaryText: String {
             let uploaded = items.filter { $0.status == .uploaded }.count
             let known = items.filter { $0.status == .alreadyInCloud }.count
             let failed = items.filter { $0.status == .failed }.count
-            let summary = L10n.format("importRunSummary", uploaded, total, known, failed)
+            let summary = L10n.format("importRunSummary", uploaded, items.count, known, failed)
             guard cancelled else { return summary }
-            let notProcessed = max(0, total - uploaded - known - failed)
+            let notProcessed = max(0, items.count - uploaded - known - failed)
             return "\(summary) \(L10n.format("notProcessedCount", notProcessed))"
         }
         func markingCancelled() -> Progress {
@@ -131,10 +136,14 @@ actor UploadCoordinator {
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         debugLog("Request POST · endpoint=/\(endpoint) · payloadBytes=\(request.httpBody?.count ?? 0)")
         if endpoint == "inventory" { debugLog("inventory.request.sent") }
-        let response: DAVResponse
+        var response: DAVResponse
+        var attempt = 0
+        while true {
+        UploadDiagnostics.log("inventory.request.begin", count: (body["assets"] as? [[String: Any]])?.count)
         do {
-            debugLog("NETWORK_REQUEST_BEGIN kind=\(endpoint) url=/\(endpoint)")
+            debugLog("NETWORK_REQUEST_BEGIN kind=\(endpoint) url=/\(endpoint) attempt=\(attempt + 1)")
             response = try await transport.send(request, file: nil)
+            UploadDiagnostics.log("inventory.response.received", bytes: Int64(response.data.count), retry: attempt, status: response.status)
             debugLog("NETWORK_REQUEST_END kind=\(endpoint) status=\(response.status)")
         } catch let error as CancellationError {
             if endpoint == "inventory" { debugLog("inventory.request.cancelled") }
@@ -164,6 +173,14 @@ actor UploadCoordinator {
         if endpoint == "uploads/prepare" { debugLog("upload.prepare.status=\(response.status)") }
         if endpoint == "uploads/complete" { debugLog("upload.complete.status=\(response.status)") }
         if response.status != 200 {
+            let retryable = response.status == 503 || (response.status == 409 && endpoint == "inventory")
+            if retryable, attempt == 0,
+               (endpoint == "inventory" || endpoint == "uploads/prepare" || endpoint == "uploads/complete") {
+                attempt += 1
+                UploadDiagnostics.log("inventory.retry", retry: attempt, status: response.status)
+                try await Task.sleep(for: .milliseconds(150))
+                continue
+            }
             if endpoint == "inventory" { debugLog("inventory.request.error category=http") }
             if endpoint == "uploads/prepare", let object = try? JSONSerialization.jsonObject(with: response.data) as? [String: Any], let code = object["code"] as? String,
                ["invalid_folder", "content_changed", "invalid_ticket", "target_conflict", "invalid_request", "unknown"].contains(code) {
@@ -172,11 +189,15 @@ actor UploadCoordinator {
             let detail = String(data: response.data, encoding: .utf8) ?? "<non-UTF8 response>"
             debugLog("Response error · endpoint=/\(endpoint) · body=\(detail)")
             if endpoint == "uploads/complete" { debugLog("upload.complete.error category=http") }
-            throw UploadError.http(response.status)
+            let object = (try? JSONDecoder().decode(ServerErrorBody.self, from: response.data))
+            throw UploadError.server(ServerErrorInfo(status: response.status, message: object?.error, code: object?.code, runId: object?.runId))
         }
         if endpoint == "uploads/complete" { debugLog("upload.complete.http.success") }
         return response.data
+        }
     }
+
+    private struct ServerErrorBody: Decodable { let error: String?; let code: String?; let runId: String? }
     private func save(_ receipts: [Receipt]) throws {
         try FileManager.default.createDirectory(at: receiptURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try JSONEncoder().encode(receipts).write(to: receiptURL, options: .atomic)
@@ -202,8 +223,11 @@ actor UploadCoordinator {
             try await gate.checkpoint()
             try Task.checkCancellation()
             debug?("upload.export.start")
+            UploadDiagnostics.log("photo-export.begin")
             stage = .export
             let resource = try await exporter.export(localIdentifier: local)
+            let exportedBytes = (try? FileManager.default.attributesOfItem(atPath: resource.url.path)[.size] as? NSNumber)?.int64Value
+            UploadDiagnostics.log("photo-export.end", bytes: exportedBytes)
             try Task.checkCancellation()
             stage = .preparation
             debug?("upload.export.success")
@@ -220,8 +244,20 @@ actor UploadCoordinator {
                                   connection: connection, debug: debug)
             try await gate.checkpoint()
             try Task.checkCancellation()
-            let prepared = try await WebDAVUploader(connection: connection, transport: UploadDisplayTransport(base: transport), debug: debug)
-                .uploadWithTarget(file: resource.url, filename: filename, assetId: entry.upload!.assetId, captureDate: resolution.date, targets: targets, targetRoot: baseFolder, folderCoordinator: folderCoordinator)
+            let uploadDebug: (@Sendable (String) -> Void)? = { message in
+                debug?(message)
+                if message == "upload.put.start" { UploadDiagnostics.log("webdav-put.begin") }
+                if message.hasPrefix("upload.put.status=") { UploadDiagnostics.log("webdav-put.end") }
+            }
+            let prepared = try await WebDAVUploader(connection: connection, transport: UploadDisplayTransport(base: transport), debug: uploadDebug)
+                .uploadWithTarget(file: resource.url, filename: filename, assetId: entry.upload!.assetId, captureDate: resolution.date, targets: targets, targetRoot: baseFolder, folderCoordinator: folderCoordinator,
+                    contentIdentityDiagnostics: { event in
+                        switch event {
+                        case .begin: UploadDiagnostics.log("content-hash.begin")
+                        case .progress(let bytes): UploadDiagnostics.log("content-hash.progress", bytes: bytes)
+                        case .end: UploadDiagnostics.log("content-hash.end")
+                        }
+                    })
             debug?("upload.put.success")
             return .success(path: prepared.path, filename: filename, contentAlreadyPresent: prepared.state == "contentAlreadyPresent")
         } catch is CancellationError {
@@ -267,8 +303,12 @@ actor UploadCoordinator {
         guard !running else { throw RunError.alreadyRunning }
         running = true
         defer { running = false }
+        UploadDiagnostics.log("upload.enter")
         try await gate.checkpoint()
         let targetRoot = targetRoot ?? TargetDirectoryPreferences().path
+        UploadDiagnostics.log("inventory.encode.begin", bytes: Int64(json.utf8.count))
+        let canonicalJSON = try InventoryJSON.deduplicating(json).json
+        UploadDiagnostics.log("inventory.encode.end", bytes: Int64(canonicalJSON.utf8.count))
         debugSink = debug
         debug?("upload.coordinator.entered")
         var receipts = FileManager.default.fileExists(atPath: receiptURL.path)
@@ -279,22 +319,21 @@ actor UploadCoordinator {
             receipts.removeAll { $0.uploadId == receipt.uploadId }
             try save(receipts)
         }
-        guard let document = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any],
+        guard let document = try JSONSerialization.jsonObject(with: Data(canonicalJSON.utf8)) as? [String: Any],
               let source = document["source"] as? [String: Any], let sourceId = source["sourceId"] as? String,
               let assets = document["assets"] as? [[String: Any]] else { throw UploadError.invalidResponse }
         let inventoryDocument = document
         debug?("inventory.payload.assets=\(assets.count)")
-        guard !assets.isEmpty else {
-            debug?("upload.outcome=failed reason=empty-inventory")
-            throw UploadError.invalidResponse
-        }
+        if assets.isEmpty { debug?("upload.outcome=empty-inventory") }
         let requestData = try JSONSerialization.data(withJSONObject: inventoryDocument)
+        UploadDiagnostics.log("inventory.request.sent", bytes: Int64(requestData.count), count: assets.count)
         debug?("inventory.request.start")
         debug?("POST inventory · payloadBytes=\(requestData.count)")
         try await gate.checkpoint()
         let inventoryData = try await post(inventoryDocument, endpoint: "inventory", connection: connection)
         debug?("Response inventory · status=200 · responseBytes=\(inventoryData.count)")
         debug?("inventory.response.decode.start")
+        UploadDiagnostics.log("inventory.response.decode.begin", bytes: Int64(inventoryData.count))
         let reply: InventoryReply
         do {
             reply = try JSONDecoder().decode(InventoryReply.self, from: inventoryData)
@@ -303,6 +342,7 @@ actor UploadCoordinator {
             throw error
         }
         debug?("inventory.response.decode.success")
+        UploadDiagnostics.log("inventory.response.decode.end", count: reply.assets.count)
         guard reply.assets.count == assets.count else {
             debug?("inventory.response.validation.error reason=count")
             throw UploadError.invalidResponse
@@ -322,8 +362,8 @@ actor UploadCoordinator {
             debug?("upload.queue.added")
             return UploadJob(index: index, entry: entry)
         }
-        let totalUploads = assets.count
-        var completedUploads = reply.assets.filter { $0.state == "known" }.count
+        let totalUploads = jobs.count
+        var completedUploads = 0
         var uploaded = 0
         var uploadedImages = 0
         var uploadedVideos = 0
@@ -470,5 +510,11 @@ actor UploadCoordinator {
         debug?("upload.outcome=\(failed > 0 ? "failed" : (uploaded > 0 ? "success" : "nothingToDo"))")
         return RunSummary(uploadedImages: uploadedImages, uploadedVideos: uploadedVideos, uploadedOther: uploadedOther,
             alreadyInCloudImages: alreadyInCloudImages, alreadyInCloudVideos: alreadyInCloudVideos, alreadyInCloudOther: alreadyInCloudOther, failed: failed, finalProgress: await displayState.snapshot())
+    }
+}
+
+enum ImportProgressLifecycle {
+    static func shouldClearAfterImport(_ progress: UploadCoordinator.Progress, albumSyncSucceeded: Bool) -> Bool {
+        progress.finished && !progress.failed && albumSyncSucceeded
     }
 }

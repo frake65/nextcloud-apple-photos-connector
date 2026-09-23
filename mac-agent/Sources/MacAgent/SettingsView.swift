@@ -4,7 +4,7 @@ import AppKit
 import MacAgentSupport
 
 struct ConnectorSettingsView: View {
-    @AppStorage(L10n.languageKey, store: UserDefaults(suiteName: ConnectionPreferences.preferencesSuite)) private var language = "system"
+    @AppStorage(L10n.languageKey, store: ConnectionPreferences.defaults()) private var language = "system"
     private var server: String {
         get { session.server }
         nonmutating set { session.server = newValue }
@@ -13,8 +13,8 @@ struct ConnectorSettingsView: View {
         get { session.user }
         nonmutating set { session.user = newValue }
     }
-    @AppStorage(ImportGuard.validatedKey, store: UserDefaults(suiteName: ConnectionPreferences.preferencesSuite)) private var connectionValidated = false
-    @AppStorage(TargetDirectoryPreferences.confirmedKey, store: UserDefaults(suiteName: ConnectionPreferences.preferencesSuite)) private var targetValidated = false
+    @AppStorage(ImportGuard.validatedKey, store: ConnectionPreferences.defaults()) private var connectionValidated = false
+    @AppStorage(TargetDirectoryPreferences.confirmedKey, store: ConnectionPreferences.defaults()) private var targetValidated = false
     private var password: String {
         get { session.password }
         nonmutating set { session.password = newValue }
@@ -34,7 +34,7 @@ struct ConnectorSettingsView: View {
         get { session.loginFlowTask }
         nonmutating set { session.loginFlowTask = newValue }
     }
-    private var connectionDefaults: UserDefaults { UserDefaults(suiteName: ConnectionPreferences.preferencesSuite) ?? .standard }
+    private var connectionDefaults: UserDefaults { ConnectionPreferences.defaults() }
     private var loginFlowRunning: Bool {
         get { session.loginFlowRunning }
         nonmutating set { session.loginFlowRunning = newValue }
@@ -44,7 +44,7 @@ struct ConnectorSettingsView: View {
     }
     @State private var showingResetConfirmation = false
     @State private var persistentDebugLogger: DebugFileLogger?
-    @AppStorage(UploadPreferences.debugModeKey, store: UserDefaults(suiteName: ConnectionPreferences.preferencesSuite)) private var debugMode = false
+    @AppStorage(UploadPreferences.debugModeKey, store: ConnectionPreferences.defaults()) private var debugMode = false
 
     var body: some View {
         Form {
@@ -59,7 +59,7 @@ struct ConnectorSettingsView: View {
                 }
             }
             Section(L10n.text("connection")) {
-                TextField(L10n.text("server"), text: draftBinding($session.server, clearPassword: true)).accessibilityIdentifier("settings-server-field")
+                TextField(L10n.text("server"), text: draftBinding($session.server, clearPassword: true), prompt: Text("https://xyz.abc.de")).accessibilityIdentifier("settings-server-field")
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 12) {
                         loginButton
@@ -100,7 +100,7 @@ struct ConnectorSettingsView: View {
         .onExitCommand { NSApp.keyWindow?.close() }
         .task {
             persistentDebugLogger = DebugFileLogger(enabled: debugMode)
-            let defaults = UserDefaults(suiteName: ConnectionPreferences.preferencesSuite) ?? .standard
+            let defaults = ConnectionPreferences.defaults()
             try? ConnectionPreferences.migrateLegacyPassword(defaults: defaults)
             server = defaults.string(forKey: "nextcloud.server") ?? ""
             user = defaults.string(forKey: "nextcloud.user") ?? ""
@@ -159,8 +159,13 @@ struct ConnectorSettingsView: View {
     private func logDebug(_ event: String) { DebugLogStore.shared.append(event); persistentDebugLogger?.log(event) }
     private func applyTargetPath(_ path: String) {
         targetPath = path
+        // Persist before notifying the already-open main window. SwiftUI's
+        // onChange callback runs after this method returns, so notifying here
+        // first would make the main window refresh the previous path.
+        var preferences = TargetDirectoryPreferences()
+        preferences.path = path
         targetValidated = connectionValidated && !path.isEmpty
-        TargetDirectoryPreferences().markConfirmed(targetValidated)
+        preferences.markConfirmed(targetValidated)
         NotificationCenter.default.post(name: .targetDirectoryChanged, object: nil)
     }
     private func cancelAttempt() {

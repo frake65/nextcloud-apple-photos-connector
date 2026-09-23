@@ -6,7 +6,7 @@ import InventoryCore
 public enum ValidatedConnectionPersistence {
     @MainActor
     public static func commit(_ credentials: LoginFlowCredentials,
-                              defaults: UserDefaults = UserDefaults(suiteName: ConnectionPreferences.preferencesSuite) ?? .standard,
+                              defaults: UserDefaults = ConnectionPreferences.defaults(),
                               store: any PasswordStore = KeychainPasswordStore()) throws {
         _ = try ConnectorConnection(server: credentials.server.absoluteString, user: credentials.loginName, password: credentials.appPassword)
         try ConnectionPreferences(server: credentials.server.absoluteString, user: credentials.loginName, store: store).savePassword(credentials.appPassword)
@@ -18,7 +18,7 @@ public enum ValidatedConnectionPersistence {
     }
     /// Local-only: no transport is accepted or constructed by this operation.
     @MainActor
-    public static func resetConnection(defaults: UserDefaults = UserDefaults(suiteName: ConnectionPreferences.preferencesSuite) ?? .standard,
+    public static func resetConnection(defaults: UserDefaults = ConnectionPreferences.defaults(),
                                        store: any PasswordStore = KeychainPasswordStore()) throws {
         let server = defaults.string(forKey: "nextcloud.server") ?? ""
         let user = defaults.string(forKey: "nextcloud.user") ?? ""

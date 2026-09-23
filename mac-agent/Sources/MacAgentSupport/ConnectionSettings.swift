@@ -2,10 +2,12 @@ import Foundation
 
 public struct TargetDirectoryPreferences: @unchecked Sendable {
     public static let key = "nextcloud.targetDirectory"
-    public static let defaultPath = "Photos/Apple Photos Connector"
+    // WebDAV paths are stored and sent as relative components. The leading
+    // slash is presentation-only and must not become part of the DAV path.
+    public static let defaultPath = "Photos/Photos Connector"
     public static let confirmedKey = "nextcloud.targetValidated"
     let defaults: UserDefaults
-    public init(defaults: UserDefaults = UserDefaults(suiteName: ConnectionPreferences.preferencesSuite) ?? .standard) { self.defaults = defaults }
+    public init(defaults: UserDefaults = ConnectionPreferences.defaults()) { self.defaults = defaults }
     public var path: String { get { defaults.string(forKey: Self.key) ?? Self.defaultPath } set { defaults.set(Self.normalize(newValue), forKey: Self.key) } }
     public func markConfirmed(_ confirmed: Bool) { defaults.set(confirmed, forKey: Self.confirmedKey) }
     public static func normalize(_ value: String) -> String { value.split(separator: "/").filter { $0 != "" && $0 != "." && $0 != ".." }.map(String.init).joined(separator: "/") }

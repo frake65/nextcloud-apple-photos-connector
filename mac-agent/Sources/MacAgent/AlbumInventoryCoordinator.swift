@@ -35,15 +35,12 @@ actor AlbumInventoryCoordinator {
         do {
             data = try encoder.encode(document)
             _ = try JSONDecoder().decode(AlbumInventoryDocument.self, from: data)
-            try data.write(to: FileManager.default.temporaryDirectory.appendingPathComponent("apple-photos-album-inventory.json"), options: .atomic)
         } catch { throw UploadError.invalidResponse }
         var request = connection.request(path: ["index.php","apps","apple_photos_connector","api","v1","albums","inventory"], method: "POST")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type"); request.httpBody = data
         let response = try await transport.send(request, file: nil)
         GalleryDebug.log("album.inventory.response source=\(document.source.sourceId.uuidString.lowercased()) status=\(response.status) albums=\(document.albums.count)")
         try Task.checkCancellation()
-        print("Album response HTTP \(response.status), headers=\(response.headers), bytes=\(response.data.count)")
-        if let body = String(data: response.data, encoding: .utf8) { print("Album response body UTF-8: \(body)") } else { print("Album response body hex: \(response.data.prefix(128).map { String(format: "%02x", $0) }.joined())") }
         guard response.status == 200 else {
             let body = String(data: response.data, encoding: .utf8) ?? response.data.prefix(128).map { String(format: "%02x", $0) }.joined()
             throw UploadError.diagnostic("Album-POST HTTP \(response.status), Content-Type: \(response.headers.first { $0.key.lowercased() == "content-type" }?.value ?? "unbekannt"), Body: \(body)")
