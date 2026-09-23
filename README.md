@@ -1,8 +1,8 @@
-# Nextcloud Apple Photos Connector
+# Photos Connector
 
 English | [Deutsch](README.de.md)
 
-The current server app patch is 0.8.6; the separate **Nextcloud APC** macOS
+The current server app patch is 0.8.6; the separate **Photos Connector** macOS
 agent is at 0.8.3. App Store submission is being prepared; the signing
 certificate is pending. The macOS app is required
 and will not be distributed through the Nextcloud App Store. Server metadata
@@ -11,11 +11,11 @@ against Nextcloud 35 and Photos 8.0.0.
 
 ## What is it?
 
-Apple Photos Connector (APC) consists of two components, and both are
+Photos Connector (APC) consists of two components, and both are
 required:
 
 - the Nextcloud server app `apple_photos_connector`
-- the macOS app `Nextcloud APC`
+- the macOS app `Photos Connector`
 
 The server app maintains import status, upload targets and album information.
 The macOS agent uses Apple's PhotoKit to read Apple Photos and transfer the
@@ -57,7 +57,7 @@ Release 0.8.2 contains the current stable connector architecture. The GitHub
 release provides both required components:
 
 - `apple_photos_connector-0.8.2.tar.gz` — Nextcloud server app
-- `Nextcloud-APC-0.8.2.zip` — universal macOS agent for Apple Silicon and Intel
+- `Photos-Connector-0.8.2.zip` — universal macOS agent for Apple Silicon and Intel
 
 ## Albums
 
@@ -132,8 +132,8 @@ persist custom apps.
 
 ### macOS agent
 
-1. Download `Nextcloud-APC-0.8.2.zip` from the GitHub release.
-2. Extract the ZIP and move `Nextcloud APC.app` to `/Applications` (Programme).
+1. Download `Photos-Connector-0.8.2.zip` from the GitHub release.
+2. Extract the ZIP and move `Photos Connector.app` to `/Applications` (Programme).
 3. Start the app.
 4. Allow access to Apple Photos when macOS asks for permission.
 5. Configure the Nextcloud connection in the app's settings.

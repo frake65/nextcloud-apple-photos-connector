@@ -8,7 +8,7 @@ Im Verzeichnis `mac-agent/`:
 
 ```sh
 bash build-app.sh
-open ".build/Nextcloud APC.app"
+open ".build/Photos Connector.app"
 ```
 
 Das Skript baut standardmäßig einen Universal-Release für arm64 und x86_64 und signiert das lokale Bundle ad-hoc, ohne Notarisierung. `CONFIGURATION=debug bash build-app.sh` erstellt einen Debug-Build. Achtung: Im Release-Zweig kann das Skript nach einem fehlgeschlagenen Build auf vorhandene ausführbare Dateien zurückfallen; für einen frischen Build deshalb auch die Build-Ausgabe prüfen. Bitte das App-Bundle starten, nicht `swift run`: Es enthält die für den Fotozugriff erforderliche `NSPhotoLibraryUsageDescription`.
@@ -17,8 +17,8 @@ Für einen Developer-ID-Release muss das finale Bundle-Signieren ebenfalls über
 
 ```sh
 APC_SIGNING_IDENTITY="Developer ID Application: Example Name (TEAMID)" bash build-app.sh
-codesign --verify --deep --strict ".build/Nextcloud APC.app"
-codesign -d --entitlements :- ".build/Nextcloud APC.app"
+codesign --verify --deep --strict ".build/Photos Connector.app"
+codesign -d --entitlements :- ".build/Photos Connector.app"
 ```
 
 `APC_SIGNING_IDENTITY` ist durch den tatsächlich installierten Developer-ID-Identitätsnamen zu ersetzen. Ohne diese Variable bleibt das lokale Ad-hoc-Signieren der Standard. Ein nachfolgendes `codesign --force` ohne `--entitlements Resources/MacAgent.entitlements` ersetzt die Codesignatur und kann das Photos-Entitlement entfernen; daher muss die Entitlement-Datei beim letzten Signierschritt angegeben werden. Der Agent verwendet im Quellcode keine AppleScript- oder expliziten Apple-Events-APIs; `com.apple.security.automation.apple-events` wird deshalb nicht angefordert.
@@ -44,7 +44,7 @@ APC_NOTARY_PROFILE="APC-Notary" \
   ./scripts/release-macos.sh 0.8.3
 ```
 
-Vom Repository-Root aus lautet der Script-Pfad `./mac-agent/scripts/release-macos.sh`. Das Script prüft macOS und benötigte Werkzeuge, Signing Identity, unveränderte getrackte Agent-Dateien, Bundle-ID und Version, arm64+x86_64, signierte Photos-Entitlements, codesign, Accepted-Notarisierung, Stapling, Gatekeeper sowie erneut dieselben Merkmale an der aus dem finalen ZIP entpackten App. Es entfernt vor dem Build nur alte App-/Release-Binär-Ausgaben, damit kein alter Binary-Fallback als aktueller Build durchgeht. Das Ergebnis ist `.build/Nextcloud-APC-<version>-macos-universal.zip`; SHA-256 und Dateigröße werden ausgegeben. Temporäre Notarisierungsdateien werden entfernt. Ein vorhandenes gleichnamiges finales ZIP wird erst nach allen Prüfungen ersetzt. Das Script erstellt keine Commits oder Tags und veröffentlicht nichts auf GitHub.
+Vom Repository-Root aus lautet der Script-Pfad `./mac-agent/scripts/release-macos.sh`. Das Script prüft macOS und benötigte Werkzeuge, Signing Identity, unveränderte getrackte Agent-Dateien, Bundle-ID und Version, arm64+x86_64, signierte Photos-Entitlements, codesign, Accepted-Notarisierung, Stapling, Gatekeeper sowie erneut dieselben Merkmale an der aus dem finalen ZIP entpackten App. Es entfernt vor dem Build nur alte App-/Release-Binär-Ausgaben, damit kein alter Binary-Fallback als aktueller Build durchgeht. Das Ergebnis ist `.build/Photos-Connector-<version>-macos-universal.zip`; SHA-256 und Dateigröße werden ausgegeben. Temporäre Notarisierungsdateien werden entfernt. Ein vorhandenes gleichnamiges finales ZIP wird erst nach allen Prüfungen ersetzt. Das Script erstellt keine Commits oder Tags und veröffentlicht nichts auf GitHub.
 
 In der App **Zugriff anfordern & inventarisieren** wählen und den macOS-Fotodialog bestätigen. Bei verweigertem Zugriff die Freigabe unter **Systemeinstellungen → Datenschutz & Sicherheit → Fotos** ändern und erneut scannen. PhotoKit verwendet hierfür die Zugriffsstufe `readWrite`; der Prototyp führt ausschließlich Leseoperationen aus.
 
@@ -54,7 +54,7 @@ Die Oberfläche zeigt zusätzlich die Anzahl aller Assets, mit und ohne Cloud-Id
 
 ## Lokale Source
 
-Beim ersten Scan wird `~/Library/Application Support/Apple Photos Connector/source.json` angelegt. Sie enthält `sourceId` (zufällige `UUID()`), `name` (anfangs `Apple Photos`) und `createdAt` (ISO-8601 in UTC). Die UUID ist eine logische Connector-Identität und wird aus keinerlei Mediathek-, Asset-, Datei- oder Hardwaremerkmalen abgeleitet.
+Beim ersten Scan wird `~/Library/Application Support/Apple Photos Connector/source.json` angelegt. Dieser Verzeichnisname ist ein bestehender Persistenzpfad und bleibt aus Kompatibilitätsgründen unverändert. Sie enthält `sourceId` (zufällige `UUID()`), `name` (anfangs `Apple Photos`) und `createdAt` (ISO-8601 in UTC). Die UUID ist eine logische Connector-Identität und wird aus keinerlei Mediathek-, Asset-, Datei- oder Hardwaremerkmalen abgeleitet.
 
 Weitere Scans und Programmstarts laden diese Konfiguration unverändert. Gleichzeitige Zugriffe werden über eine lokale Lock-Datei koordiniert, Schreibvorgänge erfolgen atomar. Beschädigte oder unlesbare Konfigurationen führen zum Scanfehler, nicht zur stillen Vergabe einer neuen UUID. Die Konfiguration ist dauerhaft aufzubewahren: Wird sie entfernt, erzeugt der nächste Scan eine neue logische Source.
 
@@ -90,7 +90,7 @@ Der aktuelle Server-Quellstand deklariert Version 0.8.6; der separate macOS-Agen
 
 Nur serverseitig als `new` angeforderte Assets werden exportiert. `new` bleibt bis zur bestätigten Dateizuordnung bestehen, sodass fehlgeschlagene Uploads erneut angefordert werden. PhotoKit exportiert die primäre Originalressource in ein temporäres Verzeichnis und darf dafür iCloud-Daten herunterladen. Nach dem Versuch werden ausschließlich diese lokalen temporären Exportdaten entfernt.
 
-Ziel ist `Photos/Apple Photos Connector/YYYY/MM/` im Nextcloud-Konto. Der Basisordner ist in `UploadConfiguration.json` unter `~/Library/Application Support/Apple Photos Connector/` dauerhaft konfigurierbar und verwendet standardmäßig `Photos/Apple Photos Connector`. Originalnamen bleiben bei freiem Ziel erhalten. Bedingte WebDAV-PUTs und deterministische Suffixe schützen vorhandene Dateien vor Überschreiben. Erfolgreiche Uploads werden beim Connector bestätigt; offene Bestätigungen liegen ohne Passwort im lokalen `upload-receipts.json` neben `source.json` und werden vor dem nächsten Inventar wiederholt. Vollständiger Ablauf, JSON und Fehlergrenzen: [Upload-Protokoll](../protocol/uploads.md).
+Ziel ist weiterhin `Photos/Apple Photos Connector/YYYY/MM/` im Nextcloud-Konto. Dieser bestehende Zielordner wird nicht automatisch umbenannt, damit vorhandene Installationen keinen zweiten Datenbestand erzeugen. Der Basisordner ist in `UploadConfiguration.json` unter `~/Library/Application Support/Apple Photos Connector/` dauerhaft konfigurierbar und verwendet aus demselben Kompatibilitätsgrund standardmäßig `Photos/Apple Photos Connector`. Originalnamen bleiben bei freiem Ziel erhalten. Bedingte WebDAV-PUTs und deterministische Suffixe schützen vorhandene Dateien vor Überschreiben. Erfolgreiche Uploads werden beim Connector bestätigt; offene Bestätigungen liegen ohne Passwort im lokalen `upload-receipts.json` neben `source.json` und werden vor dem nächsten Inventar wiederholt. Vollständiger Ablauf, JSON und Fehlergrenzen: [Upload-Protokoll](../protocol/uploads.md).
 
 Vor jedem PUT reserviert bzw. prüft der Connector-Server einen dauerhaft dem Asset zugeordneten Pfad. Bereits vorhandene erwartete Inhalte werden über Größe und SHA-256 verifiziert und ohne weiteren Upload bestätigt. Die Reservierung überlebt neue Inventarläufe und Client-Neustarts, auch ohne lokales Erfolgsjournal. Unklare PUT-/Prüfantworten führen niemals eigenständig zum nächsten Dateinamen. Der Prototyp verarbeitet höchstens 10.000 Assets pro Inventar und verarbeitet bis zu drei Upload-Aufträge parallel, ohne Chunking. Live-Photo-Begleitvideos und zusätzliche Originalvarianten werden nicht exportiert.
 
@@ -110,7 +110,7 @@ Reproduzierbarer JSON-Smoke-Test ohne XCTest:
 
 ```sh
 bash smoke-test.sh
-codesign --verify --deep --strict ".build/Nextcloud APC.app"
+codesign --verify --deep --strict ".build/Photos Connector.app"
 ```
 
 Der Smoke-Test prüft den Source-Block und die fünf Asset-JSON-Felder inklusive archiviertem Cloud-Identifier, `null` bei fehlenden Werten, Sonderzeichen, Datum und leere Inventare sowie die Zusammenfassung bei gemischten Medientypen. Zusätzlich prüft er den Codec mit fehlenden und leeren Eingaben. Beide Versionszweige werden für Deployment Target 14.0 kompiliert; ein Lauf auf einem einzelnen Betriebssystem deckt nur dessen API-Zweig ab. Seine synthetischen Cloud-Strings testen die verlustfreie Ausgabe, nicht die PhotoKit-Auflösung.

@@ -98,7 +98,7 @@ früheren Sandbox-bedingten Cache-/Receipt-Fehler traten nicht auf. Testpfade un
 Receipt-Ablage wurden nicht geändert.
 
 Mit `CONFIGURATION=debug bash build-app.sh` in `mac-agent` bauen. Das Skript
-signiert `.build/Nextcloud APC.app` ad hoc und startet die App nicht. Galerie-
+signiert .build/Photos Connector.app ad hoc und startet die App nicht. Galerie-
 Ereignisse werden nur bei aktiviertem Debug nach
 `~/Library/Logs/Apple Photos Connector/debug.log` geschrieben:
 `gallery.fetch.count`, `gallery.initial.ready`, Identifier-Blockgrößen und

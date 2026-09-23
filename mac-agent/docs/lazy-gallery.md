@@ -90,7 +90,7 @@ compiler caches and Application Support paths; the earlier sandbox-only cache
 and receipt failures did not occur. No test paths or receipt storage were changed.
 
 Build with `CONFIGURATION=debug bash build-app.sh` from `mac-agent`. The script
-ad-hoc signs `.build/Nextcloud APC.app` and does not launch it. Gallery events are
+ad-hoc signs .build/Photos Connector.app and does not launch it. Gallery events are
 written only when Debug is enabled, to
 `~/Library/Logs/Apple Photos Connector/debug.log`: `gallery.fetch.count`,
 `gallery.initial.ready`, identifier batch sizes, and thumbnail active/cancel

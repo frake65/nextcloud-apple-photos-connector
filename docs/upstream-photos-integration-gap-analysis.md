@@ -1,4 +1,4 @@
-# Apple Photos Connector: Upstream-Gap-Analyse
+# Photos Connector: Upstream-Gap-Analyse
 
 Stand der Analyse: 10. September 2026. Untersucht wurden der lokale APC-0.8-Serverstand, die öffentlich dokumentierten Nextcloud-Schnittstellen und der aktuelle Nextcloud-Photos-Code für die geplante 35/8-Linie. Dieses Dokument ist eine Architekturprüfung. Es ändert weder das APC-Design noch das Nextcloud-/Photos-Repository.
 

@@ -60,7 +60,7 @@ Bei Dateien ohne eingebettetes EXIF-Aufnahmedatum hatte Nextcloud Photos den Upl
 3. Datei-mtime
 4. Uploadzeit
 
-Der Apple Photos Connector kennt das tatsächliche Aufnahmedatum bereits über `CaptureDateResolver`, gegebenenfalls als Fallback aus `PHAsset.creationDate`. Beim tatsächlichen WebDAV-PUT wird deshalb gesetzt:
+Photos Connector kennt das tatsächliche Aufnahmedatum bereits über `CaptureDateResolver`, gegebenenfalls als Fallback aus `PHAsset.creationDate`. Beim tatsächlichen WebDAV-PUT wird deshalb gesetzt:
 
 ```yaml
 X-OC-MTime: <Unix-Timestamp des aufgelösten Aufnahmedatums>

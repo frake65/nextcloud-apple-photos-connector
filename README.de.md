@@ -1,8 +1,8 @@
-# Nextcloud Apple Photos Connector
+# Photos Connector
 
 [English](README.md) | Deutsch
 
-Der aktuelle Server-App-Patch ist 0.8.6; der separate macOS-Agent **Nextcloud APC**
+Der aktuelle Server-App-Patch ist 0.8.6; der separate macOS-Agent **Photos Connector**
 ist bei 0.8.3. Die App-Store-Einreichung wird vorbereitet; das
 Signierungszertifikat steht noch aus. Die macOS-App
 bleibt erforderlich und wird nicht über den Nextcloud App Store verteilt.
