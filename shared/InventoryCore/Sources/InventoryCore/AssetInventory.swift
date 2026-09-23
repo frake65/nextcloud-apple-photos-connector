@@ -72,6 +72,17 @@ public enum InventoryJSON {
         let assets = document.assets.filter { allowed.contains($0.stableIdentity) && seen.insert($0.stableIdentity).inserted }
         return (try encode(assets, source: PhotoSource(sourceId: document.source.sourceId, name: document.source.name)), ScanSummary(assets: assets))
     }
+
+    /// Removes duplicate stable identities while preserving the first PhotoKit
+    /// record and the original order. Album membership is sent separately and
+    /// is therefore not affected by inventory deduplication.
+    public static func deduplicating(_ json: String) throws -> (json: String, summary: ScanSummary) {
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        let document = try decoder.decode(ScanDocument.self, from: Data(json.utf8))
+        var seen = Set<String>()
+        let assets = document.assets.filter { seen.insert($0.stableIdentity).inserted }
+        return (try encode(assets, source: PhotoSource(sourceId: document.source.sourceId, name: document.source.name)), ScanSummary(assets: assets))
+    }
 }
 
 public struct ScanSummary: Sendable {

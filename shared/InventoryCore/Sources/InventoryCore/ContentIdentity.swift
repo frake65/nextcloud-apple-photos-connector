@@ -2,6 +2,12 @@ import Foundation
 import CryptoKit
 
 public struct ContentIdentity: Codable, Sendable, Equatable {
+    public enum ReadDiagnosticEvent: Sendable {
+        case begin
+        case progress(bytes: Int64)
+        case end
+    }
+
     public let bytes: Int64
     public let sha256: String
 
@@ -11,13 +17,39 @@ public struct ContentIdentity: Codable, Sendable, Equatable {
         defer { try? handle.close() }
         var hash = SHA256()
         var bytes: Int64 = 0
-        while let chunk = try handle.read(upToCount: 1_048_576), !chunk.isEmpty {
+        while try autoreleasepool(invoking: { () throws -> Bool in
+            guard let chunk = try handle.read(upToCount: 1_048_576), !chunk.isEmpty else { return false }
             try Task.checkCancellation()
             hash.update(data: chunk)
             bytes += Int64(chunk.count)
-        }
+            return true
+        }) {}
         return Self(bytes: bytes, sha256: hash.finalize().map { String(format: "%02x", $0) }.joined())
     }
+
+    #if DEBUG
+    public static func read(_ url: URL, diagnostics: (@Sendable (ReadDiagnosticEvent) -> Void)?) throws -> Self {
+        diagnostics?(.begin)
+        defer { diagnostics?(.end) }
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var hash = SHA256()
+        var bytes: Int64 = 0
+        var nextProgress = Int64(64 * 1024 * 1024)
+        while try autoreleasepool(invoking: { () throws -> Bool in
+            guard let chunk = try handle.read(upToCount: 1_048_576), !chunk.isEmpty else { return false }
+            try Task.checkCancellation()
+            hash.update(data: chunk)
+            bytes += Int64(chunk.count)
+            if bytes >= nextProgress {
+                diagnostics?(.progress(bytes: bytes))
+                repeat { nextProgress += Int64(64 * 1024 * 1024) } while nextProgress <= bytes
+            }
+            return true
+        }) {}
+        return Self(bytes: bytes, sha256: hash.finalize().map { String(format: "%02x", $0) }.joined())
+    }
+    #endif
 }
 
 public struct UploadTarget: Decodable, Sendable {

@@ -1,4 +1,16 @@
 import Foundation
+import Darwin
+
+private enum DAVDiagnostics {
+    static let enabled = ProcessInfo.processInfo.environment["APC_UPLOAD_DIAGNOSTICS"] == "1"
+    static func log(_ phase: String, bytes: Int64? = nil) {
+        guard enabled else { return }
+        var info = mach_task_basic_info(); var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
+        let result = withUnsafeMutablePointer(to: &info) { $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count) } }
+        let rss = result == KERN_SUCCESS ? UInt64(info.resident_size) : 0
+        print("APC_UPLOAD_DIAGNOSTIC phase=\(phase) rssBytes=\(rss)\(bytes.map { " bytes=\($0)" } ?? "")")
+    }
+}
 
 public struct DAVResponse: Sendable {
     public let status: Int
@@ -42,20 +54,31 @@ public final class NetworkTransport: NSObject, DAVTransport, URLSessionTaskDeleg
     private var transferSession: URLSession!
     private let progressLock = NSLock()
     private var progressHandlers: [Int: @Sendable (Int64, Int64) -> Void] = [:]
+    private var connectivityWaitingHandler: (@Sendable (Bool) -> Void)?
 
-    public override init() {
+    public override convenience init() {
+        self.init(allowsCellularAccess: true, waitsForConnectivity: false)
+    }
+
+    public init(allowsCellularAccess: Bool, waitsForConnectivity: Bool) {
         let apiConfiguration = URLSessionConfiguration.ephemeral
         apiConfiguration.httpCookieStorage = nil
         apiConfiguration.timeoutIntervalForRequest = Self.timeout(for: .api).request
         apiConfiguration.timeoutIntervalForResource = Self.timeout(for: .api).resource
+        apiConfiguration.allowsCellularAccess = allowsCellularAccess
+        apiConfiguration.waitsForConnectivity = waitsForConnectivity
         let transferConfiguration = URLSessionConfiguration.ephemeral
         transferConfiguration.httpCookieStorage = nil
         transferConfiguration.timeoutIntervalForRequest = Self.timeout(for: .fileTransfer).request
         transferConfiguration.timeoutIntervalForResource = Self.timeout(for: .fileTransfer).resource
+        transferConfiguration.allowsCellularAccess = allowsCellularAccess
+        transferConfiguration.waitsForConnectivity = waitsForConnectivity
         let verificationConfiguration = URLSessionConfiguration.ephemeral
         verificationConfiguration.httpCookieStorage = nil
         verificationConfiguration.timeoutIntervalForRequest = Self.timeout(for: .longRunningVerification).request
         verificationConfiguration.timeoutIntervalForResource = Self.timeout(for: .longRunningVerification).resource
+        verificationConfiguration.allowsCellularAccess = allowsCellularAccess
+        verificationConfiguration.waitsForConnectivity = waitsForConnectivity
         super.init()
         apiSession = URLSession(configuration: apiConfiguration, delegate: self, delegateQueue: nil)
         verificationSession = URLSession(configuration: verificationConfiguration, delegate: self, delegateQueue: nil)
@@ -74,10 +97,20 @@ public final class NetworkTransport: NSObject, DAVTransport, URLSessionTaskDeleg
     }
     public func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
         progressLock.lock(); let handler = progressHandlers[task.taskIdentifier]; progressLock.unlock()
+        progressLock.lock(); let waitingHandler = connectivityWaitingHandler; progressLock.unlock()
+        waitingHandler?(false)
         handler?(totalBytesSent, totalBytesExpectedToSend)
     }
+    public func urlSession(_ session: URLSession, taskIsWaitingForConnectivity task: URLSessionTask) {
+        progressLock.lock(); let waitingHandler = connectivityWaitingHandler; progressLock.unlock()
+        waitingHandler?(true)
+    }
     public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        progressLock.lock(); progressHandlers.removeValue(forKey: task.taskIdentifier); progressLock.unlock()
+        progressLock.lock(); progressHandlers.removeValue(forKey: task.taskIdentifier); let waitingHandler = connectivityWaitingHandler; progressLock.unlock()
+        waitingHandler?(false)
+    }
+    public func setConnectivityWaitingHandler(_ handler: (@Sendable (Bool) -> Void)?) {
+        progressLock.lock(); connectivityWaitingHandler = handler; progressLock.unlock()
     }
     public func send(_ request: URLRequest, file: URL?) async throws -> DAVResponse {
         try await send(request, file: file, kind: file == nil ? .api : .fileTransfer, progress: nil)
@@ -107,28 +140,50 @@ public final class NetworkTransport: NSObject, DAVTransport, URLSessionTaskDeleg
     }
 
     private func upload(session: URLSession, request: URLRequest, file: URL, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> (Data, URLResponse) {
-        try await withCheckedThrowingContinuation { continuation in
+        DAVDiagnostics.log("webdav.put.request-created")
+        let fileBytes = (try? FileManager.default.attributesOfItem(atPath: file.path)[.size] as? NSNumber)?.int64Value
+        DAVDiagnostics.log("webdav.put.file-open", bytes: fileBytes)
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<(Data, URLResponse), any Error>) in
             let task = session.uploadTask(with: request, fromFile: file) { data, response, error in
-                if let error { continuation.resume(throwing: error) }
-                else if let response { continuation.resume(returning: (data ?? Data(), response)) }
-                else { continuation.resume(throwing: UploadError.invalidResponse) }
+                if let error { DAVDiagnostics.log("webdav.put.complete"); continuation.resume(throwing: error) }
+                else if let response {
+                    DAVDiagnostics.log("webdav.put.response-received")
+                    let responseData = data ?? Data()
+                    DAVDiagnostics.log("webdav.put.response-body-read", bytes: Int64(responseData.count))
+                    DAVDiagnostics.log("webdav.put.complete")
+                    continuation.resume(returning: (responseData, response))
+                } else { DAVDiagnostics.log("webdav.put.complete"); continuation.resume(throwing: UploadError.invalidResponse) }
             }
+            DAVDiagnostics.log("webdav.put.uploadtask-created")
             if let progress {
                 progressLock.lock(); progressHandlers[task.taskIdentifier] = progress; progressLock.unlock()
             }
             task.resume()
+            DAVDiagnostics.log("webdav.put.uploadtask-resumed")
         }
     }
 }
 
+public struct ServerErrorInfo: Codable, Sendable, Equatable {
+    public let status: Int
+    public let message: String?
+    public let code: String?
+    public let runId: String?
+    public init(status: Int, message: String? = nil, code: String? = nil, runId: String? = nil) {
+        self.status = status; self.message = message; self.code = code; self.runId = runId
+    }
+    public var isRetryable: Bool { status == 409 || status == 503 }
+}
+
 public enum UploadError: LocalizedError {
-    case invalidConfiguration, invalidFilename, invalidResponse, http(Int), diagnostic(String), collisions
+    case invalidConfiguration, invalidFilename, invalidResponse, http(Int), server(ServerErrorInfo), diagnostic(String), collisions
     public var errorDescription: String? {
         switch self {
         case .invalidConfiguration: "Gültige HTTPS-Serveradresse und Zugangsdaten erforderlich."
         case .invalidFilename: "Originaldateiname fehlt oder ist für den Upload nicht zulässig."
         case .invalidResponse: "Unerwartete Serverantwort."
         case .http(let code): "Serveranfrage fehlgeschlagen (HTTP \(code))."
+        case .server(let error): error.message ?? "Serveranfrage fehlgeschlagen (HTTP \(error.status))."
         case .diagnostic(let detail): detail
         case .collisions: "Kein freier Dateiname gefunden."
         }
@@ -216,9 +271,18 @@ public struct WebDAVUploader: Sendable {
         try await uploadWithTarget(file: file, filename: filename, assetId: assetId, captureDate: captureDate, targets: targets, targetRoot: targetRoot, folderCoordinator: folderCoordinator).path
     }
 
-    public func uploadWithTarget(file: URL, filename: String, assetId: String, captureDate: Date, targets: any UploadTargetProvider, targetRoot: String = "Photos/Apple Photos Connector", folderCoordinator: WebDAVFolderCoordinator? = nil, progress: (@Sendable (Int64, Int64) -> Void)? = nil) async throws -> UploadTarget {
+    public func uploadWithTarget(file: URL, filename: String, assetId: String, captureDate: Date, targets: any UploadTargetProvider, targetRoot: String = "Photos/Apple Photos Connector", folderCoordinator: WebDAVFolderCoordinator? = nil, progress: (@Sendable (Int64, Int64) -> Void)? = nil, contentIdentityDiagnostics: (@Sendable (ContentIdentity.ReadDiagnosticEvent) -> Void)? = nil, contentIdentity: ContentIdentity? = nil) async throws -> UploadTarget {
         let folderCoordinator = folderCoordinator ?? runFolderCoordinator
-        let identity = try ContentIdentity.read(file)
+        let identity: ContentIdentity
+        if let contentIdentity {
+            identity = contentIdentity
+        } else {
+            #if DEBUG
+            identity = try ContentIdentity.read(file, diagnostics: contentIdentityDiagnostics)
+            #else
+            identity = try ContentIdentity.read(file)
+            #endif
+        }
         let root = ["remote.php", "dav", "files", connection.user]
         let rootComponents = try Self.safeComponents(targetRoot)
         for count in 1...rootComponents.count {

@@ -20,6 +20,21 @@ final class WebDAVTargetRootTests: XCTestCase {
         XCTAssertFalse(WebDAVUploader.isValidTargetPath("/Root/2026/09/a.jpg", under: "Root"))
     }
 
+    func testUploadWithTargetUsesProvidedIdentityForPrepare() async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data("file contents".utf8).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        let supplied = ContentIdentity(bytes: 987, sha256: String(repeating: "a", count: 64))
+        let targets = CapturingUploadTargets(identity: supplied)
+        let uploader = WebDAVUploader(connection: try ConnectorConnection(server: "https://example.com", user: "user", password: "password"), transport: SuccessfulDAVTransport())
+
+        _ = try await uploader.uploadWithTarget(file: file, filename: "video.mov", assetId: "7", captureDate: Date(timeIntervalSince1970: 1), targets: targets, contentIdentity: supplied)
+
+        let received = await targets.received
+        XCTAssertEqual(received, supplied)
+    }
+
     func testRunLocalFolderCoordinatorEnsuresSuccessfulPathsOnceAndRetriesFailures() async throws {
         let coordinator = WebDAVFolderCoordinator()
         let counter = TestCallCounter()
@@ -60,6 +75,28 @@ final class WebDAVTargetRootTests: XCTestCase {
         try await coordinator.ensure(path: "Photos/Apple Photos Connector/2027", operation: { await counter.increment() })
         let calls = await counter.value
         XCTAssertEqual(calls, 4)
+    }
+}
+
+private actor CapturingUploadTargets: UploadTargetProvider {
+    let identity: ContentIdentity
+    private(set) var received: ContentIdentity?
+
+    init(identity: ContentIdentity) { self.identity = identity }
+
+    func prepare(identity: ContentIdentity) async throws -> UploadTarget {
+        received = identity
+        return UploadTarget(assetId: "7", path: "Photos/Apple Photos Connector/2026/09/video.mov", identity: self.identity, state: "missing")
+    }
+}
+
+private struct SuccessfulDAVTransport: DAVTransport {
+    func send(_ request: URLRequest, file: URL?) async throws -> DAVResponse {
+        DAVResponse(status: request.httpMethod == "PUT" ? 201 : 405)
+    }
+
+    func send(_ request: URLRequest, file: URL?, kind: DAVRequestKind, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> DAVResponse {
+        DAVResponse(status: request.httpMethod == "PUT" ? 201 : 405)
     }
 }
 
