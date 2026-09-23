@@ -46,7 +46,9 @@ final class AlbumSyncOrchestrator {
                 continue;
             }
             $explicitlySelected = $selectedAlbumKeys !== null && self::selectedAlbumMatches($album, $selectedAlbumKeys);
-            $assetRelated = $selectedAssetIdentities !== null && $this->hasRelevantImportedMembership((int)$album['id'], $userId, $selectedAssetIdentities);
+            $assetRelated = ($selectedAlbumKeys === null || $selectedAlbumKeys === [])
+                && $selectedAssetIdentities !== null
+                && $this->hasRelevantImportedMembership((int)$album['id'], $userId, $selectedAssetIdentities);
             $unfiltered = $selectedAlbumKeys === null && $selectedAssetIdentities === null;
             if ($explicitlySelected || $assetRelated || $unfiltered) $selectedAlbums[] = $album;
         }

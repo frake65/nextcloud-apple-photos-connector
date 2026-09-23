@@ -77,6 +77,8 @@ final class NextcloudAlbumAdapter {
         if ($existing) return false;
         $this->debug('album.sync.membership.create.enter photos_album_id='.$albumId.' file_id='.$fileId);
         $this->stage('album.sync.membership.create', $context, fn () => $this->albumMapper->addFile($albumId, $fileId, $owner));
+        $verified = $this->stage('album.sync.membership.verify', $context, fn () => $this->albumMapper->getForAlbumIdAndFileId($albumId, $fileId)) !== null;
+        if (!$verified) throw new \RuntimeException('Photos AlbumMapper::addFile returned without a verifiable album-file membership');
         $this->debug('album.sync.membership.create.result photos_album_id='.$albumId.' file_id='.$fileId.' created=yes');
         return true;
     }

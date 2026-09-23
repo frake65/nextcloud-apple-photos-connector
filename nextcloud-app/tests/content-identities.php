@@ -26,6 +26,30 @@ function contentIdentityScenarios(): void {
         && $legacyContents->find('legacy', hash('sha256', 'pending-bytes'), 13) === null,
         'CI0: additive upgrade backfills existing uploaded targets and excludes pending reservations');
 
+    // A failure after the content identity insert must roll back the whole backfill.
+    $rollbackPdo = new PDO('sqlite::memory:');
+    $rollbackPdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $rollbackBaseSchema = new TestHarness\Schema();
+    (new OCA\ApplePhotosConnector\Migration\Version008000Date20260910000000())->changeSchema(
+        new class implements OCP\Migration\IOutput {}, fn () => $rollbackBaseSchema, []);
+    $rollbackBaseSchema->apply($rollbackPdo);
+    $rollbackPdo->exec("INSERT INTO apc_assets (user_id,source_id,local_identifier,media_type,first_seen_at,last_seen_at,current_upload_target_id,nextcloud_file_id,nextcloud_path,uploaded_at) VALUES ('rollback','rollback-source','rollback-asset','image','now','now',1,701,'rollback.heic','2026-09-01T00:00:00Z')");
+    $rollbackPdo->exec("INSERT INTO apc_upload_targets (id,user_id,source_id,asset_id,filename,path,path_key,bytes,sha256,attempt) VALUES (1,'rollback','rollback-source',1,'rollback.heic','rollback.heic','rollback-key',12,'" . hash('sha256', 'rollback-bytes') . "',0)");
+    $rollbackPdo->exec("INSERT INTO apc_uploads (user_id,source_id,upload_id,run_id,asset_id,status,created_at,target_id) VALUES ('rollback','rollback-source','rollback-upload','rollback-run',1,'uploaded','2026-09-01T00:00:00Z',1)");
+    $rollbackSchema = new TestHarness\Schema();
+    $rollbackMigration = new OCA\ApplePhotosConnector\Migration\Version008600Date20260918000000(new TestHarness\Connection($rollbackPdo));
+    $rollbackMigration->changeSchema(new class implements OCP\Migration\IOutput {}, fn () => $rollbackSchema, []);
+    $rollbackSchema->apply($rollbackPdo);
+    $rollbackPdo->exec("CREATE TRIGGER fail_content_target BEFORE INSERT ON apc_content_targets BEGIN SELECT RAISE(ABORT, 'test backfill failure'); END");
+    try {
+        $rollbackMigration->postSchemaChange(new class implements OCP\Migration\IOutput {}, fn () => $rollbackSchema, []);
+        throw new LogicException('Expected backfill failure');
+    } catch (Throwable $error) {
+        check((int)$rollbackPdo->query('SELECT COUNT(*) FROM apc_content_identities')->fetchColumn() === 0
+            && (int)$rollbackPdo->query('SELECT COUNT(*) FROM apc_content_targets')->fetchColumn() === 0,
+            'CI12: failed backfill rolls back content identity and target rows');
+    }
+
     $pdo = freshDatabase();
     $db = new TestHarness\Connection($pdo);
     $repo = new InventoryRepository($db);

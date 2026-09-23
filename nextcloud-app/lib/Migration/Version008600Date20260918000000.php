@@ -44,6 +44,13 @@ final class Version008600Date20260918000000 extends SimpleMigrationStep {
     }
 
     public function postSchemaChange(IOutput $output, Closure $schemaClosure, array $options): void {
-        (new ContentIdentityRepository($this->db))->backfillConfirmedTargets();
+        $this->db->beginTransaction();
+        try {
+            (new ContentIdentityRepository($this->db))->backfillConfirmedTargets();
+            $this->db->commit();
+        } catch (\Throwable $error) {
+            $this->db->rollBack();
+            throw $error;
+        }
     }
 }

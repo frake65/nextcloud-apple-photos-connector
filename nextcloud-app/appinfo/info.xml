@@ -1,9 +1,9 @@
 <?xml version="1.0"?>
 <info xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://apps.nextcloud.com/schema/apps/info.xsd">
     <id>apple_photos_connector</id>
-    <name>Apple Photos Connector</name>
-    <summary>Import originals and albums from Apple Photos with the Nextcloud APC macOS app</summary>
-    <description>Connect Apple Photos to Nextcloud using the separate Nextcloud APC macOS app, which is required and is not included in this server app.
+    <name>Photos Connector</name>
+    <summary>Transfer photos and albums from Apple Photos to Nextcloud</summary>
+    <description>Photos Connector receives photos and albums from Apple Photos in Nextcloud. The separate macOS companion app is required and is not included in this server app.
 
 The macOS app reads your selected photos and videos from Apple Photos and imports their original files into Nextcloud. Repeated imports transfer new or missing files; files already present and confirmed by the connector are not uploaded again. Albums can be imported into Nextcloud Photos.
 

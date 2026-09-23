@@ -113,3 +113,48 @@ function albumRecoveryOrchestratorScenario(\OCP\IDBConnection $db, PDO $pdo): vo
     $pdo->exec("INSERT INTO apc_sources(user_id,source_id,name,created_at,last_seen_at) VALUES ('$user','$emptySource','Empty','now','now')");
     check($sync->sync($emptySource,$user,[],['cloud:x'])['albums_seen']===0,'no-album inventory makes album sync a no-op');
 }
+
+function explicitAlbumSelectionOrchestratorScenario(\OCP\IDBConnection $db, PDO $pdo): void {
+    $user='explicit-selection-user'; $source='550e8400-e29b-41d4-a716-'.bin2hex(random_bytes(6));
+    $pdo->exec("INSERT INTO apc_sources(user_id,source_id,name,created_at,last_seen_at) VALUES ('$user','$source','Explicit selection','now','now')");
+    $pdo->exec("INSERT INTO apc_assets(user_id,source_id,local_identifier,cloud_identifier,filename,media_type,creation_date,first_seen_at,last_seen_at,nextcloud_file_id,nextcloud_path,uploaded_at) VALUES ('$user','$source','asset-x','asset-cloud-x','x.jpg','image',NULL,'now','now',77,'Photos/x.jpg','now')");
+    $assetId=(int)$pdo->query("SELECT id FROM apc_assets WHERE user_id='$user' AND source_id='$source' AND local_identifier='asset-x'")->fetchColumn();
+    $albumIds=[];
+    foreach ([['Album A','album-a'],['Album B','album-b']] as [$name,$local]) {
+        $pdo->exec("INSERT INTO apc_source_albums(user_id,source_id,name,created_at,last_seen_at,local_identifier,cloud_identifier,parent_local_identifier,kind) VALUES ('$user','$source','$name','now','now','$local',NULL,NULL,'album')");
+        $albumIds[$local]=(int)$pdo->lastInsertId();
+        $pdo->exec("INSERT INTO apc_album_memberships(user_id,source_id,album_id,asset_id,first_seen_at,last_seen_at) VALUES ('$user','$source',{$albumIds[$local]},$assetId,'now','now')");
+    }
+
+    $maps=new \OCA\ApplePhotosConnector\Db\AlbumMapRepository($db);
+    $mapper=new FakeAlbumMapper(); $mapper->albums[177]=new FakeAlbumInfo(177,$user); $mapper->albums[178]=new FakeAlbumInfo(178,$user); $mapper->next=179;
+    foreach ([['album-a',177],['album-b',178]] as [$key,$photoId]) $maps->insert(['user_id'=>$user,'source_id'=>$source,'source_album_id'=>$albumIds[$key],'source_album_key'=>'local:'.$key,'nextcloud_album_id'=>$photoId,'display_name'=>$key,'created_at'=>'now','updated_at'=>'now']);
+    $resolver=new \OCA\ApplePhotosConnector\Service\AlbumResolutionService($db,$maps,$mapper,new FakePhotosVersion());
+    $memberships=new \OCA\ApplePhotosConnector\Service\AlbumMembershipService($db,$maps,$mapper,new FakePhotosVersion(),new FakeAlbumRoot(77));
+    $sync=new \OCA\ApplePhotosConnector\Service\AlbumSyncOrchestrator($db,$maps,$resolver,$memberships);
+
+    $explicit=$sync->sync($source,$user,['local:album-a'],['cloud:asset-cloud-x']);
+    check($explicit['albums_seen']===1 && $explicit['memberships_seen']===1,'explicit album selection does not expand to another album containing a selected asset');
+
+    $assetsOnlySource='550e8400-e29b-41d4-a716-'.bin2hex(random_bytes(6));
+    $pdo->exec("INSERT INTO apc_sources(user_id,source_id,name,created_at,last_seen_at) VALUES ('$user','$assetsOnlySource','Asset-only selection','now','now')");
+    $pdo->exec("INSERT INTO apc_assets(user_id,source_id,local_identifier,cloud_identifier,filename,media_type,creation_date,first_seen_at,last_seen_at,nextcloud_file_id,nextcloud_path,uploaded_at) VALUES ('$user','$assetsOnlySource','asset-x','asset-cloud-x','x.jpg','image',NULL,'now','now',77,'Photos/x.jpg','now')");
+    $assetOnlyId=(int)$pdo->query("SELECT id FROM apc_assets WHERE user_id='$user' AND source_id='$assetsOnlySource' AND local_identifier='asset-x'")->fetchColumn();
+    $assetOnlyAlbums=[];
+    foreach ([['Album A','album-a'],['Album B','album-b']] as [$name,$local]) {
+        $pdo->exec("INSERT INTO apc_source_albums(user_id,source_id,name,created_at,last_seen_at,local_identifier,cloud_identifier,parent_local_identifier,kind) VALUES ('$user','$assetsOnlySource','$name','now','now','$local',NULL,NULL,'album')");
+        $assetOnlyAlbums[$local]=(int)$pdo->lastInsertId();
+        $pdo->exec("INSERT INTO apc_album_memberships(user_id,source_id,album_id,asset_id,first_seen_at,last_seen_at) VALUES ('$user','$assetsOnlySource',{$assetOnlyAlbums[$local]},$assetOnlyId,'now','now')");
+    }
+    $assetOnlyMaps=new \OCA\ApplePhotosConnector\Db\AlbumMapRepository($db);
+    $assetOnlyMapper=new FakeAlbumMapper(); $assetOnlyMapper->albums[187]=new FakeAlbumInfo(187,$user); $assetOnlyMapper->albums[188]=new FakeAlbumInfo(188,$user); $assetOnlyMapper->next=189;
+    foreach ([['album-a',187],['album-b',188]] as [$key,$photoId]) $assetOnlyMaps->insert(['user_id'=>$user,'source_id'=>$assetsOnlySource,'source_album_id'=>$assetOnlyAlbums[$key],'source_album_key'=>'local:'.$key,'nextcloud_album_id'=>$photoId,'display_name'=>$key,'created_at'=>'now','updated_at'=>'now']);
+    $assetOnlyResolver=new \OCA\ApplePhotosConnector\Service\AlbumResolutionService($db,$assetOnlyMaps,$assetOnlyMapper,new FakePhotosVersion());
+    $assetOnlyMemberships=new \OCA\ApplePhotosConnector\Service\AlbumMembershipService($db,$assetOnlyMaps,$assetOnlyMapper,new FakePhotosVersion(),new FakeAlbumRoot(77));
+    $assetOnlySync=new \OCA\ApplePhotosConnector\Service\AlbumSyncOrchestrator($db,$assetOnlyMaps,$assetOnlyResolver,$assetOnlyMemberships);
+    $assetOnly=$assetOnlySync->sync($assetsOnlySource,$user,[],['cloud:asset-cloud-x']);
+    check($assetOnly['albums_seen']===2 && $assetOnly['memberships_seen']===2,'asset-only selection continues to include every album containing the selected imported asset');
+
+    $unfiltered=$assetOnlySync->sync($assetsOnlySource,$user,null,null);
+    check($unfiltered['albums_seen']===2 && $unfiltered['memberships_seen']===2,'omitted selection filters retain the existing unfiltered album-sync behavior');
+}

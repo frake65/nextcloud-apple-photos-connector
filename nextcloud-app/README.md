@@ -1,6 +1,6 @@
-# Apple Photos Connector — Nextcloud Server App
+# Photos Connector — Nextcloud Server App
 
-App-ID: `apple_photos_connector`, Version 0.8.6 laut `appinfo/info.xml`. PHP ab 8.2; App-Metadaten deklarieren Nextcloud 34–35. Die separate macOS-App **Nextcloud APC** ist erforderlich und wird nicht über den Nextcloud App Store verteilt. Die App-Store-Einreichung wird vorbereitet; das Zertifikat steht noch aus. Original-Uploads und additive Album-Synchronisation sind implementiert. Album-Recovery und idempotente Wiederholung wurden manuell mit Nextcloud 35 und Photos 8.0.0 geprüft.
+App-ID: `apple_photos_connector`, Version 0.8.6 laut `appinfo/info.xml`. PHP ab 8.2; App-Metadaten deklarieren Nextcloud 34–35. Die separate macOS-App **Photos Connector** ist erforderlich und wird nicht über den Nextcloud App Store verteilt. Die App-Store-Einreichung wird vorbereitet; das Zertifikat steht noch aus. Original-Uploads und additive Album-Synchronisation sind implementiert. Album-Recovery und idempotente Wiederholung wurden manuell mit Nextcloud 35 und Photos 8.0.0 geprüft.
 
 ## Frische Serverinstallation
 

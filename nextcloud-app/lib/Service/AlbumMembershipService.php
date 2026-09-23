@@ -34,7 +34,6 @@ class AlbumMembershipService {
             return $q->executeQuery()->fetch() ?: null;
         });
         if (!$asset || (string)$asset['source_id'] !== $sourceId || $asset['nextcloud_file_id'] === null || !$asset['nextcloud_path']) throw new \InvalidArgumentException('Asset is not imported for this source/user');
-
         $adapter = new NextcloudAlbumAdapter($this->maps, $this->albumMapper, $this->appManager->getAppVersion('photos'));
         $resolved = $adapter->resolveOrCreateAlbum($userId, $sourceId, (int)$album['id'], [
             'localIdentifier' => $album['local_identifier'], 'cloudIdentifier' => $album['cloud_identifier'] ?? null,
