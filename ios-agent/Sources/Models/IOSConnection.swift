@@ -11,6 +11,19 @@ struct IOSConnectionDetails: Codable, Equatable {
     var userId: String?
 }
 
+enum IOSTransferNetworkPreferences {
+    static let useCellularKey = "ios.transfers.useCellular"
+    static let didChangeNotification = Notification.Name("apc.transferNetworkPreferenceDidChange")
+
+    static func useCellularAccess(defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: useCellularKey) as? Bool ?? false
+    }
+
+    static func setUseCellularAccess(_ value: Bool, defaults: UserDefaults = .standard) {
+        defaults.set(value, forKey: useCellularKey)
+        NotificationCenter.default.post(name: didChangeNotification, object: nil)
+    }
+}
 
 protocol IOSPasswordStore: Sendable {
     func save(_ password: String, account: String) throws
@@ -131,6 +144,7 @@ final class IOSConnectionModel: ObservableObject {
     @Published var password: String
     @Published var sourceId: String
     @Published private(set) var userId: String?
+    @Published var useCellularForTransfers: Bool
     @Published private(set) var loginFlowState: IOSLoginFlowState = .idle
     @Published private(set) var state: IOSConnectionState = .notConfigured
     @Published var isShowingSaveError = false
@@ -139,6 +153,7 @@ final class IOSConnectionModel: ObservableObject {
     private var validatedConnection: (server: String, username: String, password: String)?
 
     init(preferences: IOSConnectionPreferences = IOSConnectionPreferences()) {
+        IOSImportDiagnostics.log("[Startup] IOSConnectionModel init begin")
         self.preferences = preferences
         let saved = preferences.load()
         server = saved.details.server
@@ -146,7 +161,9 @@ final class IOSConnectionModel: ObservableObject {
         password = saved.password
         userId = saved.details.userId
         sourceId = saved.details.sourceId.uuidString.lowercased()
+        useCellularForTransfers = IOSTransferNetworkPreferences.useCellularAccess()
         state = server.isEmpty || username.isEmpty || password.isEmpty ? .notConfigured : .notTested
+        IOSImportDiagnostics.log("[Startup] IOSConnectionModel init end")
     }
 
     deinit { loginTask?.cancel() }
@@ -177,6 +194,10 @@ final class IOSConnectionModel: ObservableObject {
         validatedConnection = (server, username, password)
         self.userId = userID
         state = .connected
+    }
+    func setUseCellularForTransfers(_ value: Bool) {
+        useCellularForTransfers = value
+        IOSTransferNetworkPreferences.setUseCellularAccess(value)
     }
     func showSaveError() { isShowingSaveError = true }
 

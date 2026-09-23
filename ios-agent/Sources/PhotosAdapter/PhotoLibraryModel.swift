@@ -17,14 +17,17 @@ final class PhotoLibraryModel: ObservableObject {
     private var refreshTask: Task<Void, Never>?
 
     init() {
+        IOSImportDiagnostics.log("[Startup] PhotoKit model init")
         authorization = PhotoAuthorizationState(status: PHPhotoLibrary.authorizationStatus(for: .readWrite))
         hasLoadedInitialState = authorization != .notDetermined && !authorization.canRead
     }
 
     func requestAccess() {
         guard authorization == .notDetermined else { refreshAuthorizationAndLoad(); return }
+        IOSImportDiagnostics.log("[Startup] PhotoKit authorization request begin")
         PHPhotoLibrary.requestAuthorization(for: .readWrite) { [weak self] status in
             Task { @MainActor in
+                IOSImportDiagnostics.log("[Startup] PhotoKit authorization callback")
                 guard let self else { return }
                 self.authorization = PhotoAuthorizationState(status: status)
                 if self.authorization.canRead { self.loadLibrary() }
@@ -44,6 +47,7 @@ final class PhotoLibraryModel: ObservableObject {
 
     func loadLibrary() {
         guard authorization.canRead else { return }
+        IOSImportDiagnostics.log("[Startup] PhotoKit load begin")
         refreshTask?.cancel()
         refreshTask = Task { [weak self] in
             guard let self else { return }
@@ -73,6 +77,7 @@ final class PhotoLibraryModel: ObservableObject {
             guard !Task.isCancelled else { return }
             self.assets = fetched.0.map(GalleryAsset.init).sorted { $0.creationDate > $1.creationDate }
             self.albums = fetched.1
+            IOSImportDiagnostics.log("[Startup] PhotoKit load end")
         }
     }
 
@@ -155,7 +160,7 @@ final class PhotoLibraryModel: ObservableObject {
     /// Exports the same deterministic .photo/.video resource rule used by
     /// the macOS PhotoOriginalExporter. The caller owns the temporary file
     /// and must remove its containing directory when finished.
-    func exportOriginal(for galleryAsset: GalleryAsset, progress: (@Sendable (Double) -> Void)? = nil) async throws -> ExportedOriginal {
+    func exportOriginal(for galleryAsset: GalleryAsset, progress: (@Sendable (Double) -> Void)? = nil, diagnosticAssetID: String? = nil, diagnosticJob: Int? = nil) async throws -> ExportedOriginal {
         let fetched = PHAsset.fetchAssets(withLocalIdentifiers: [galleryAsset.id], options: nil)
         guard let asset = fetched.firstObject else { throw InventoryCheckError.unavailableAsset }
         let type: PHAssetResourceType = asset.mediaType == .video ? .video : .photo
@@ -167,9 +172,11 @@ final class PhotoLibraryModel: ObservableObject {
         options.isNetworkAccessAllowed = true
         options.progressHandler = { value in progress?(value) }
         do {
+            IOSImportDiagnostics.memory(phase: "photokit-writeData-start", asset: diagnosticAssetID, job: diagnosticJob)
             try await withTaskCancellationHandler {
                 try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
                     PHAssetResourceManager.default().writeData(for: resource, toFile: url, options: options) { error in
+                        IOSImportDiagnostics.memory(phase: "photokit-writeData-completion", asset: diagnosticAssetID, job: diagnosticJob)
                         if let error { continuation.resume(throwing: error) } else { continuation.resume() }
                     }
                 }

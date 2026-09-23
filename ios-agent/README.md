@@ -1,4 +1,4 @@
-# Nextcloud APC for iOS
+# Photos Connector for iOS
 
 This Xcode project configures an APC connection, selects accessible PhotoKit
 assets, and posts their metadata to the existing APC `/inventory` endpoint. It

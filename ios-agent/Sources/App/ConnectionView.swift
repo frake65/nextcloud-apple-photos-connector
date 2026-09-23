@@ -79,7 +79,7 @@ struct ConnectionView: View {
             }
             #endif
         }
-        .navigationTitle("Verbindung")
+        .navigationTitle("Einstellungen")
         .onChange(of: model.state) { _, state in
             if state == .connected { focusedField = nil }
         }

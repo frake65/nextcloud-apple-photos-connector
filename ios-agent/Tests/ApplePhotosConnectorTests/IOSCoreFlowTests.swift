@@ -17,6 +17,12 @@ final class IOSCoreFlowTests: XCTestCase {
         XCTAssertEqual(ImportPresentationPhase.resolve(phase: .cancelled, completed: 3, total: 3, isVerifyingCompletedUpload: false), .stopped)
     }
 
+    func testUploadAreaAllowsNavigationWithoutSelectionButNotNewImport() {
+        XCTAssertTrue(ImportPresentationPhase.allowsNewImport(selectionCount: 1, canImport: true))
+        XCTAssertFalse(ImportPresentationPhase.allowsNewImport(selectionCount: 0, canImport: true))
+        XCTAssertFalse(ImportPresentationPhase.allowsNewImport(selectionCount: 1, canImport: false))
+    }
+
     func testBackgroundTransferFileStorePublishesOnlyCompleteFile() async throws {
 #if targetEnvironment(simulator)
         throw XCTSkip("iOS Simulator does not expose NSFileProtection attributes; verify on a real device")
@@ -247,6 +253,91 @@ final class IOSCoreFlowTests: XCTestCase {
         }
     }
 
+    func testAssetJobSchedulerCollectsFailureWithoutCancellingSibling() async throws {
+        let siblingFinished = expectation(description: "sibling finished")
+        let results = try await IOSAssetJobScheduler.runCollectingFailures(count: 2, maxConcurrent: 2) { index in
+            if index == 0 { throw SchedulerTestError.failed }
+            try await Task.sleep(for: .milliseconds(20))
+            siblingFinished.fulfill()
+            return index
+        }
+        await fulfillment(of: [siblingFinished], timeout: 1)
+        XCTAssertEqual(results.compactMap(\.result), [1])
+        XCTAssertEqual(results.compactMap(\.errorDescription).count, 1)
+    }
+
+    func testAssetJobSchedulerFailureDoesNotInvokeSiblingCancellationHandler() async throws {
+        let cancellations = CancellationProbe()
+        let results = try await IOSAssetJobScheduler.runCollectingFailures(count: 2, maxConcurrent: 2) { index in
+            if index == 0 { throw SchedulerTestError.failed }
+            return try await withTaskCancellationHandler(operation: {
+                try await Task.sleep(for: .milliseconds(30))
+                return index
+            }, onCancel: {
+                Task { await cancellations.record() }
+            })
+        }
+        XCTAssertEqual(results.compactMap(\.result), [1])
+        let cancellationCount = await cancellations.count
+        XCTAssertEqual(cancellationCount, 0)
+    }
+
+    func testBackgroundPUTWaitingAggregationIsTaskScopedAndSessionScoped() {
+        var state = BackgroundPUTTaskStateAggregation()
+        let wifiTask = "wifi.v1:7"
+        let cellularTask = "cellular.v1:7"
+
+        state.started(wifiTask)
+        state.started(cellularTask)
+        state.sending(cellularTask)
+        state.waiting(wifiTask)
+        XCTAssertFalse(state.waitingForConnectivity)
+
+        XCTAssertTrue(state.waitingTasks.contains(wifiTask))
+
+        state.waiting(cellularTask)
+        XCTAssertTrue(state.waitingForConnectivity)
+        XCTAssertTrue(state.activeSendingTasks.isEmpty)
+
+        state.sending(wifiTask)
+        XCTAssertFalse(state.waitingForConnectivity)
+        XCTAssertFalse(state.waitingTasks.contains(wifiTask))
+        XCTAssertTrue(state.activeSendingTasks.contains(wifiTask))
+
+        state.completed(wifiTask)
+        state.completed(cellularTask)
+        XCTAssertFalse(state.waitingForConnectivity)
+        XCTAssertTrue(state.activePUTTasks.isEmpty)
+        XCTAssertTrue(state.waitingTasks.isEmpty)
+        XCTAssertTrue(state.activeSendingTasks.isEmpty)
+    }
+
+    func testAssetJobSchedulerCollectsIndependentFailures() async throws {
+        let results = try await IOSAssetJobScheduler.runCollectingFailures(count: 2, maxConcurrent: 2) { _ in
+            throw SchedulerTestError.failed
+        }
+        XCTAssertEqual(results.count, 2)
+        XCTAssertTrue(results.allSatisfy { $0.result == nil && $0.errorDescription != nil })
+    }
+
+    func testAssetJobSchedulerCollectionStillPropagatesUserCancellation() async {
+        let task = Task {
+            try await IOSAssetJobScheduler.runCollectingFailures(count: 2, maxConcurrent: 2) { _ in
+                try await Task.sleep(for: .seconds(1))
+                return 1
+            }
+        }
+        task.cancel()
+        do {
+            _ = try await task.value
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {
+            // User cancellation still cancels the group and its children.
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
     func testAssetJobSchedulerDoesNotStartJobsAfterCancellation() async {
         let probe = SchedulerProbe()
         let task = Task {
@@ -279,7 +370,75 @@ final class IOSCoreFlowTests: XCTestCase {
         XCTAssertEqual(preferences.load().details.sourceId, source)
     }
 
+    func testTransferCellularPreferenceDefaultsOffAndPersists() {
+        let suite = "apc-ios-transfer-policy-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertFalse(IOSTransferNetworkPreferences.useCellularAccess(defaults: defaults))
+        IOSTransferNetworkPreferences.setUseCellularAccess(true, defaults: defaults)
+        XCTAssertTrue(IOSTransferNetworkPreferences.useCellularAccess(defaults: defaults))
+    }
 
+    func testBackgroundTransferNetworkPolicySeparatesCellularAndConnectivityWaiting() {
+        let wifiOnly = BackgroundTransferNetworkPolicy(allowsCellularAccess: false)
+        XCTAssertFalse(wifiOnly.allowsCellularAccess)
+        XCTAssertTrue(wifiOnly.waitsForConnectivity)
+
+        let cellularAllowed = BackgroundTransferNetworkPolicy(allowsCellularAccess: true)
+        XCTAssertTrue(cellularAllowed.allowsCellularAccess)
+        XCTAssertTrue(cellularAllowed.waitsForConnectivity)
+    }
+
+    func testImportConnectivityPolicyWaitsOnlyForMissingRequiredPath() {
+        XCTAssertTrue(ImportConnectivityPolicy.shouldWait(allowsCellular: false, networkSatisfied: false, wifiAvailable: false))
+        XCTAssertTrue(ImportConnectivityPolicy.shouldWait(allowsCellular: false, networkSatisfied: true, wifiAvailable: false))
+        XCTAssertFalse(ImportConnectivityPolicy.shouldWait(allowsCellular: false, networkSatisfied: true, wifiAvailable: true))
+        XCTAssertFalse(ImportConnectivityPolicy.shouldWait(allowsCellular: true, networkSatisfied: true, wifiAvailable: false))
+        XCTAssertFalse(ImportConnectivityPolicy.shouldWait(allowsCellular: true, networkSatisfied: true, wifiAvailable: true))
+        XCTAssertTrue(ImportConnectivityPolicy.shouldWait(allowsCellular: true, networkSatisfied: false, wifiAvailable: false))
+    }
+
+    func testActiveConnectivityWaitDoesNotAllowSecondImportOrIdleHelp() {
+        XCTAssertFalse(ImportPresentationPhase.allowsStart(phase: .transferring, isRunning: true, hasActiveBackgroundTransfer: false, waitingForWiFi: true))
+        XCTAssertFalse(ImportPresentationPhase.allowsStart(phase: .idle, isRunning: false, hasActiveBackgroundTransfer: true, waitingForWiFi: false))
+        XCTAssertFalse(ImportPresentationPhase.allowsStart(phase: .stopped, isRunning: false, hasActiveBackgroundTransfer: false, waitingForWiFi: true))
+        XCTAssertFalse(ImportPresentationPhase.allowsStart(phase: .idle, isRunning: false, hasActiveBackgroundTransfer: false, waitingForWiFi: false, hasRecoverableRun: true))
+        XCTAssertFalse(ImportPresentationPhase.showsIdleHelp(phase: .idle, isRunning: false, hasActiveBackgroundTransfer: true, waitingForWiFi: false))
+        XCTAssertFalse(ImportPresentationPhase.showsIdleHelp(phase: .idle, isRunning: false, hasActiveBackgroundTransfer: false, waitingForWiFi: false, hasRecoverableRun: true))
+        XCTAssertFalse(ImportPresentationPhase.showsIdleHelp(phase: .transferring, isRunning: true, hasActiveBackgroundTransfer: false, waitingForWiFi: true))
+        XCTAssertTrue(ImportPresentationPhase.allowsStart(phase: .stopped, isRunning: false, hasActiveBackgroundTransfer: false, waitingForWiFi: false))
+    }
+
+    func testResumeUsesCompletedQueueAssetsAndKeepsThemMonotonic() {
+        let completed = PersistedImportAsset(queueAssetID: UUID(), stableIdentity: "completed", localIdentifier: "1", cloudIdentifier: nil, mediaType: "image", filenameHint: nil, captureDate: nil, state: .completed, serverAssetID: nil, uploadID: nil, targetPath: nil, expectedBytes: nil, expectedSHA256: nil, lastConfirmedStep: "complete-confirmed", retryCount: 0, lastErrorCode: nil)
+        let open = PersistedImportAsset(queueAssetID: UUID(), stableIdentity: "open", localIdentifier: "2", cloudIdentifier: nil, mediaType: "image", filenameHint: nil, captureDate: nil, state: .needsPrepare, serverAssetID: nil, uploadID: nil, targetPath: nil, expectedBytes: nil, expectedSHA256: nil, lastConfirmedStep: "inventory-ticket", retryCount: 0, lastErrorCode: nil)
+        let assets = [completed, completed, open, open, open, open]
+        let run = PersistedImportRun(schemaVersion: PersistedImportRun.currentSchemaVersion, localRunID: UUID(), account: ImportAccountReference(serverBaseURL: "https://example.test", username: "user"), sourceID: UUID(), createdAt: Date(), updatedAt: Date(), state: .assetProcessing, serverRunID: nil, assetOrder: assets.map(\.queueAssetID), albumSyncPending: false, assets: assets)
+
+        XCTAssertEqual(IOSForegroundImportCoordinator.completedAssetCount(in: run), 2)
+        XCTAssertNil(IOSForegroundImportCoordinator.resumeInventoryState(localState: .completed, serverState: .new))
+        XCTAssertEqual(IOSForegroundImportCoordinator.resumeInventoryState(localState: .needsPrepare, serverState: .new), .needsPrepare)
+        XCTAssertEqual(IOSForegroundImportCoordinator.resumeInventoryState(localState: .needsPrepare, serverState: .known), .completed)
+    }
+
+    func testActiveImportRemainsCancellableWhileBlockingStart() {
+        XCTAssertTrue(ImportPresentationPhase.allowsStart(phase: .idle, isRunning: true, hasActiveBackgroundTransfer: false, waitingForWiFi: true) == false)
+        XCTAssertTrue(ImportPresentationPhase.showsCancel(isRunning: true, waitingForWiFi: true))
+        XCTAssertTrue(ImportPresentationPhase.showsCancel(isRunning: false, waitingForWiFi: true))
+        XCTAssertFalse(ImportPresentationPhase.showsCancel(isRunning: false, waitingForWiFi: false))
+        XCTAssertTrue(ImportRunState.assetProcessing.hasOpenImport)
+        XCTAssertTrue(ImportRunState.assetsComplete.hasOpenImport)
+        XCTAssertTrue(ImportRunState.albumSyncPending.hasOpenImport)
+    }
+
+    func testOnlyOpenImportRunsCanBlockForBackgroundActivity() {
+        XCTAssertTrue(ImportRunState.assetProcessing.hasOpenImport)
+        XCTAssertTrue(ImportRunState.assetsComplete.hasOpenImport)
+        XCTAssertTrue(ImportRunState.albumSyncPending.hasOpenImport)
+        XCTAssertFalse(ImportRunState.completed.hasOpenImport)
+        XCTAssertFalse(ImportRunState.failed.hasOpenImport)
+        XCTAssertFalse(ImportRunState.cancelled.hasOpenImport)
+    }
 
     func testAssetInventoryUsesCloudIdentityAndLocalFallback() {
         let macObservation = AssetInventory(localIdentifier: "mac-local", cloudIdentifier: "shared-cloud-id", mediaType: "image", creationDate: nil, filename: "image.jpg")
@@ -479,6 +638,11 @@ private actor SchedulerProbe {
     private(set) var maximum = 0
     func enter() { active += 1; started += 1; maximum = max(maximum, active) }
     func leave() { active -= 1 }
+}
+
+private actor CancellationProbe {
+    private(set) var count = 0
+    func record() { count += 1 }
 }
 
 private enum SchedulerTestError: Error { case failed }

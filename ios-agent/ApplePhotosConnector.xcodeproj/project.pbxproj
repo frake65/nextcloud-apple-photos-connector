@@ -19,6 +19,8 @@
 		A10000000000000000000042 /* InventoryCore in Frameworks */ = {isa = PBXBuildFile; productRef = A1000000000000000000004F /* InventoryCore */; };
 		A10000000000000000000050 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000051 /* Assets.xcassets */; };
 		A10000000000000000000052 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000053 /* LaunchScreen.storyboard */; };
+		A10000000000000000000054 /* de.lproj in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000055 /* de.lproj */; };
+		A10000000000000000000056 /* en.lproj in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000057 /* en.lproj */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -36,6 +38,8 @@
 		A10000000000000000000023 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A10000000000000000000051 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A10000000000000000000053 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
+		A10000000000000000000055 /* de.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = de.lproj; sourceTree = "<group>"; };
+		A10000000000000000000057 /* en.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = en.lproj; sourceTree = "<group>"; };
 		A10000000000000000000029 /* ApplePhotosConnectorApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplePhotosConnectorApp.swift; sourceTree = "<group>"; };
 		A1000000000000000000002A /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A1000000000000000000002B /* GalleryModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryModels.swift; sourceTree = "<group>"; };
@@ -110,6 +114,8 @@
 				A10000000000000000000023 /* Info.plist */,
 				A10000000000000000000051 /* Assets.xcassets */,
 				A10000000000000000000053 /* LaunchScreen.storyboard */,
+				A10000000000000000000055 /* de.lproj */,
+				A10000000000000000000057 /* en.lproj */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -169,7 +175,7 @@
 			packageProductDependencies = (
 				A10000000000000000000016 /* InventoryCore */,
 			);
-			productName = "Nextcloud APC";
+			productName = "Photos Connector";
 			productReference = A10000000000000000000008 /* ApplePhotosConnector.app */;
 			productType = "com.apple.product-type.application";
 		};
@@ -238,6 +244,8 @@
 			files = (
 				A10000000000000000000050 /* Assets.xcassets in Resources */,
 				A10000000000000000000052 /* LaunchScreen.storyboard in Resources */,
+				A10000000000000000000054 /* de.lproj in Resources */,
+				A10000000000000000000056 /* en.lproj in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -306,9 +314,9 @@
 				ENABLE_TESTABILITY = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Resources/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "Nextcloud APC";
+				INFOPLIST_KEY_CFBundleDisplayName = "Photos Connector";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
-				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Nextcloud APC benötigt Zugriff auf deine Fotomediathek, damit du Fotos, Videos und Alben für die Übernahme nach Nextcloud auswählen kannst.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Photos Connector benötigt Zugriff auf deine Fotomediathek, damit du Fotos, Videos und Alben aus Apple Fotos in Nextcloud übernehmen kannst.";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				PRODUCT_BUNDLE_IDENTIFIER = de.applephotosconnector.iosagent;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -327,9 +335,9 @@
 				DEVELOPMENT_TEAM = Q3PGXQ5B45;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Resources/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "Nextcloud APC";
+				INFOPLIST_KEY_CFBundleDisplayName = "Photos Connector";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
-				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Nextcloud APC benötigt Zugriff auf deine Fotomediathek, damit du Fotos, Videos und Alben für die Übernahme nach Nextcloud auswählen kannst.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Photos Connector benötigt Zugriff auf deine Fotomediathek, damit du Fotos, Videos und Alben aus Apple Fotos in Nextcloud übernehmen kannst.";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				PRODUCT_BUNDLE_IDENTIFIER = de.applephotosconnector.iosagent;
 				PRODUCT_NAME = "$(TARGET_NAME)";

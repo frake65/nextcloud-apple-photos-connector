@@ -13,6 +13,9 @@ struct ContentView: View {
     @State private var showingStartup = true
     @State private var selectedTab: AppTab = .photos
 
+    init() {
+        IOSImportDiagnostics.log("[Startup] ContentView init")
+    }
 
     var body: some View {
         Group {
@@ -29,7 +32,7 @@ struct ContentView: View {
                     NavigationStack { AlbumsScreen(library: library, selection: selection, canImport: connection.parsedSourceId != nil, onCheck: { showingInventoryReview = true }) }
                         .tabItem { Label("Alben", systemImage: "rectangle.stack") }.tag(AppTab.albums)
                     NavigationStack { ConnectionView(model: connection) }
-                        .tabItem { Label("Verbindung", systemImage: "server.rack") }.tag(AppTab.connection)
+                        .tabItem { Label("Einstellungen", systemImage: "server.rack") }.tag(AppTab.connection)
                 }
             } else {
                 permissionView
@@ -48,6 +51,7 @@ struct ContentView: View {
             }
         }
         .onAppear {
+            IOSImportDiagnostics.log("[Startup] ContentView appeared")
             library.refreshAuthorizationAndLoad()
             Task { await presentRecoveryIfNeeded() }
             routeToInitialConnectionIfNeeded()
@@ -69,7 +73,7 @@ struct ContentView: View {
         VStack(spacing: 20) {
             Image(systemName: "photo.stack").font(.system(size: 48)).foregroundStyle(.tint)
             Text("Zugriff auf deine Fotos").font(.title2.bold())
-            Text("Nextcloud APC benötigt Zugriff auf deine Fotomediathek, damit du Fotos, Videos und Alben für die Übernahme nach Nextcloud ansehen kannst.")
+            Text("Photos Connector benötigt Zugriff auf deine Fotomediathek, damit du Fotos, Videos und Alben aus Apple Fotos in Nextcloud ansehen kannst.")
                 .multilineTextAlignment(.center).foregroundStyle(.secondary)
             switch library.authorization {
             case .notDetermined:
@@ -81,7 +85,7 @@ struct ContentView: View {
                 Text("Der Zugriff auf Fotos ist für dieses Gerät oder Konto eingeschränkt.").multilineTextAlignment(.center)
             case .authorized, .limited: EmptyView()
             }
-        }.padding(28).navigationTitle("Nextcloud APC")
+        }.padding(28).navigationTitle("Photos Connector")
     }
 
     @MainActor
@@ -132,7 +136,10 @@ private struct StartupView: View {
             }
         }
         .preferredColorScheme(.light)
-        .task { onVisible() }
+        .task {
+            IOSImportDiagnostics.log("[Startup] StartupView appeared")
+            onVisible()
+        }
     }
 }
 
@@ -156,6 +163,7 @@ private struct AlbumsScreen: View {
         }
         .overlay { if library.isLoading && library.albums.isEmpty { ProgressView("Alben werden geladen…") } else if library.albums.isEmpty { ContentUnavailableView("Keine Alben", systemImage: "rectangle.stack", description: Text(library.authorization == .limited ? "Bei eingeschränktem Zugriff sind möglicherweise nicht alle Alben sichtbar." : "In der Mediathek wurden keine Benutzeralben gefunden.")) } }
         .navigationTitle("Alben")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if library.authorization == .limited { ToolbarItem(placement: .topBarLeading) { Label("Eingeschränkter Zugriff", systemImage: "person.crop.circle.badge.checkmark").labelStyle(.iconOnly) } }
             ToolbarItem(placement: .topBarTrailing) { selectionButton }
@@ -164,7 +172,7 @@ private struct AlbumsScreen: View {
 
     private var selectionButton: some View {
         Button(action: onCheck) { Label("Fotos & Alben übernehmen", systemImage: "icloud.and.arrow.up") }
-            .disabled(selection.count == 0 || !canImport)
+            .disabled(!canImport)
     }
 }
 
@@ -248,7 +256,7 @@ private struct GalleryScreen: View {
             ToolbarItem(placement: .principal) {
                 VStack(spacing: 0) {
                     Text(title).font(.headline)
-                    Text("Apple Photos Connector").font(.caption2).foregroundStyle(.secondary)
+                    Text("Photos Connector").font(.caption2).foregroundStyle(.secondary)
                 }
                 .accessibilityElement(children: .combine)
             }
@@ -294,7 +302,7 @@ private struct GalleryScreen: View {
                     .font(.subheadline.weight(.semibold))
             }
             .buttonStyle(.borderedProminent)
-            .disabled(selection.count == 0 || !canImport)
+            .disabled(!canImport)
         }
         .padding(.horizontal)
         .padding(.vertical, 10)
@@ -787,6 +795,22 @@ enum ImportPresentationPhase: Equatable {
         default: return .transferring
         }
     }
+
+    static func allowsStart(phase: Self, isRunning: Bool, hasActiveBackgroundTransfer: Bool, waitingForWiFi: Bool, hasRecoverableRun: Bool = false) -> Bool {
+        !hasRecoverableRun && !isRunning && !hasActiveBackgroundTransfer && !waitingForWiFi && (phase == .idle || phase == .stopped)
+    }
+
+    static func allowsNewImport(selectionCount: Int, canImport: Bool) -> Bool {
+        selectionCount > 0 && canImport
+    }
+
+    static func showsIdleHelp(phase: Self, isRunning: Bool, hasActiveBackgroundTransfer: Bool, waitingForWiFi: Bool, hasRecoverableRun: Bool = false) -> Bool {
+        !hasRecoverableRun && !isRunning && !hasActiveBackgroundTransfer && !waitingForWiFi && (phase == .idle || phase == .transferring)
+    }
+
+    static func showsCancel(isRunning: Bool, waitingForWiFi: Bool) -> Bool {
+        isRunning || waitingForWiFi
+    }
 }
 
 private struct InventoryReviewScreen: View {
@@ -817,6 +841,14 @@ private struct InventoryReviewScreen: View {
                     LabeledContent("Bereits in Nextcloud", value: "\(result.known)")
                     LabeledContent("Neu", value: "\(result.new)")
                 }
+            }
+            Section("Übertragungen") {
+                Toggle("Mobile Daten für Übertragungen verwenden", isOn: Binding(
+                    get: { connection.useCellularForTransfers },
+                    set: { connection.setUseCellularForTransfers($0) }
+                ))
+                Text("Wenn deaktiviert, werden Fotos und Videos nur über WLAN übertragen.")
+                    .font(.footnote).foregroundStyle(.secondary)
             }
             #if DEBUG
             if IOSImportDiagnostics.enabled, let result {
@@ -897,7 +929,10 @@ private struct InventoryReviewScreen: View {
                     }
                 }
                 let presentation = ImportPresentationPhase.resolve(phase: importer.phase, completed: importer.completed, total: importer.total, isVerifyingCompletedUpload: importer.isVerifyingCompletedUpload)
-                if importer.hasActiveBackgroundTransfer {
+                if importer.isWaitingForWiFi {
+                    Text("Warten auf WLAN …").font(.caption).foregroundStyle(.secondary)
+                    Text("Die Übertragung wird fortgesetzt, sobald WLAN bereitsteht.").font(.caption).foregroundStyle(.secondary)
+                } else if importer.hasActiveBackgroundTransfer {
                     Text("Übertragung läuft …").font(.caption).foregroundStyle(.secondary)
                     Text("Die Übertragung läuft weiter.").font(.caption).foregroundStyle(.secondary)
                 } else if presentation == .albumSync {
@@ -936,16 +971,16 @@ private struct InventoryReviewScreen: View {
                     if importer.uploaded > 0 { Text("Übertragen: \(importer.uploaded)") }
                     if importer.alreadyPresent > 0 { Text("Bereits vorhanden: \(importer.alreadyPresent)") }
                 }
-                if presentation == .idle || presentation == .stopped {
+                if ImportPresentationPhase.allowsStart(phase: presentation, isRunning: importer.isRunning, hasActiveBackgroundTransfer: importer.hasActiveBackgroundTransfer, waitingForWiFi: importer.isWaitingForWiFi, hasRecoverableRun: interruptedRun != nil) {
                     Button { startImport() } label: {
                         Label("Fotos & Alben übernehmen", systemImage: "icloud.and.arrow.up")
                     }
-                    .disabled(selection.count == 0 || !connectionHasConfiguration)
+                    .disabled(!ImportPresentationPhase.allowsNewImport(selectionCount: selection.count, canImport: connectionHasConfiguration))
                 }
-                if importer.phase != .idle && importer.phase != .finished && importer.phase != .failed && importer.phase != .cancelled {
+                if ImportPresentationPhase.showsCancel(isRunning: importer.isRunning, waitingForWiFi: importer.isWaitingForWiFi) {
                     Button("Import abbrechen") { importer.cancel() }
                 }
-                if presentation == .idle || presentation == .transferring {
+                if ImportPresentationPhase.showsIdleHelp(phase: presentation, isRunning: importer.isRunning, hasActiveBackgroundTransfer: importer.hasActiveBackgroundTransfer, waitingForWiFi: importer.isWaitingForWiFi, hasRecoverableRun: interruptedRun != nil) {
                     Text("Die Übertragung läuft im Vordergrund. Danach werden die betroffenen Alben abgeglichen.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
@@ -1029,6 +1064,7 @@ private struct InventoryReviewScreen: View {
         let assets = run.assets.compactMap { byID[$0.localIdentifier] }
         guard assets.count == run.assets.count else { return }
         interruptedRun = nil
+        IOSImportDiagnostics.memory(phase: "resume-start")
         importer.start(selection: assets, library: library, connection: serverConnection, source: PhotoSource(sourceId: sourceID, name: "Apple Photos"), resumeRun: run)
     }
 

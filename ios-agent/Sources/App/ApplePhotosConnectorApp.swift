@@ -8,11 +8,15 @@ struct ApplePhotosConnectorApp: App {
             ContentView()
         }
     }
+
+    init() { IOSImportDiagnostics.log("[Startup] process/app init") }
 }
 
 final class ApplePhotosConnectorAppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
-        Task {
+        IOSImportDiagnostics.log("[Startup] AppDelegate didFinishLaunching begin")
+        Task.detached(priority: .utility) {
+            IOSImportDiagnostics.log("[Startup] background reconciliation begin")
             let store = ImportQueueStore()
             let coordinator = BackgroundTransferCoordinator.shared
             let result = await coordinator.reconcileTasks(queueStore: store)
@@ -28,7 +32,9 @@ final class ApplePhotosConnectorAppDelegate: NSObject, UIApplicationDelegate {
             let activeRunIDs = Set(bindings.map(\.localRunID))
             let recoverableRunIDs = await store.recoverableRuns().filter { !activeRunIDs.contains($0.localRunID) }.map { String($0.localRunID.uuidString.prefix(8)) }
             IOSImportDiagnostics.log("RECOVERY activeRunIDs=\(activeRunIDs.map { String($0.uuidString.prefix(8)) }.sorted()) recoverableRunIDs=\(recoverableRunIDs)")
+            IOSImportDiagnostics.log("[Startup] background reconciliation end")
         }
+        IOSImportDiagnostics.log("[Startup] AppDelegate didFinishLaunching end")
         return true
     }
 
