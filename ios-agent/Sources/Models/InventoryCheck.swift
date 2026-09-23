@@ -18,7 +18,7 @@ enum IOSImportDiagnostics {
     static var enabled: Bool {
         #if DEBUG
         let defaults = UserDefaults.standard
-        return defaults.object(forKey: defaultsKey) == nil || defaults.bool(forKey: defaultsKey)
+        return defaults.bool(forKey: defaultsKey)
         #else
         return false
         #endif

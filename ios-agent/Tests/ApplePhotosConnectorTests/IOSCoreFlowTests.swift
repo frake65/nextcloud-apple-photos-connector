@@ -218,6 +218,8 @@ final class IOSCoreFlowTests: XCTestCase {
         let key = IOSImportDiagnostics.defaultsKey
         let old = defaults.object(forKey: key)
         defer { if let old { defaults.set(old, forKey: key) } else { defaults.removeObject(forKey: key) } }
+        defaults.removeObject(forKey: key)
+        XCTAssertFalse(IOSImportDiagnostics.enabled)
         defaults.set(false, forKey: key)
         XCTAssertFalse(IOSImportDiagnostics.enabled)
         defaults.set(true, forKey: key)
