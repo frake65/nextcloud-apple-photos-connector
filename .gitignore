@@ -7,5 +7,16 @@ DerivedData/
 .swiftpm/
 xcuserdata/
 *.xcuserstate
+*.app
+*.pkg
+*.dSYM
+*.provisionprofile
+*.mobileprovision
+*.p12
+*.pfx
+*.pem
+*.cer
+*.crt
+*.key
 mac-agent/dist/
 mac-agent/.build/
