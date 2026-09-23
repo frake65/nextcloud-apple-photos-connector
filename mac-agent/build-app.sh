@@ -16,7 +16,7 @@ else
   arm_bin="$(swift build --configuration debug --show-bin-path --disable-sandbox)/MacAgent"
   x86_bin=""
 fi
-app="$PWD/.build/Nextcloud APC.app"
+app="$PWD/.build/${APC_APP_NAME:-Photos Connector.app}"
 mkdir -p "$app/Contents/MacOS"
 mkdir -p "$app/Contents/Resources"
 if [[ -n "$x86_bin" ]]; then
@@ -31,11 +31,12 @@ for localization in en de fr pt nl es; do
   cp "Resources/${localization}.lproj/Localizable.strings" "$app/Contents/Resources/${localization}.lproj/Localizable.strings"
 done
 signing_identity="${APC_SIGNING_IDENTITY:--}"
+entitlements_file="${APC_ENTITLEMENTS_FILE:-Resources/MacAgent.entitlements}"
 if [[ "$signing_identity" == "-" ]]; then
-  codesign --force --sign - --entitlements Resources/MacAgent.entitlements "$app"
+  codesign --force --sign - --entitlements "$entitlements_file" "$app"
 else
   codesign --force --options runtime --timestamp \
-    --entitlements Resources/MacAgent.entitlements \
+    --entitlements "$entitlements_file" \
     --sign "$signing_identity" "$app"
 fi
 codesign --verify --deep --strict "$app"

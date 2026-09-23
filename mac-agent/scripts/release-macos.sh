@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 AGENT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$AGENT_DIR/.." && pwd)"
-APP="$AGENT_DIR/.build/Nextcloud APC.app"
+APP="$AGENT_DIR/.build/Photos Connector.app"
 APP_EXECUTABLE="$APP/Contents/MacOS/MacAgent"
 ENTITLEMENT_KEY="com.apple.security.personal-information.photos-library"
 
@@ -46,7 +46,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-OUTPUT_ZIP="$AGENT_DIR/.build/Nextcloud-APC-${EXPECTED_VERSION}-macos-universal.zip"
+OUTPUT_ZIP="$AGENT_DIR/.build/Photos-Connector-${EXPECTED_VERSION}-macos-universal.zip"
 mkdir -p "$AGENT_DIR/.build"
 
 printf '\n==> Baue und signiere Agent %s\n' "$EXPECTED_VERSION"
@@ -95,7 +95,7 @@ verify_app() {
     fail "CFBundleVersion fehlt: $app_path"
   bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app_path/Contents/Info.plist")" || \
     fail "CFBundleIdentifier fehlt: $app_path"
-  [[ "$bundle_id" == "de.applephotosconnector.macagent" ]] || \
+  [[ "$bundle_id" == "de.kettenbeil.photosconnector" ]] || \
     fail "Unerwartete Bundle-ID: $bundle_id"
   printf 'Verifiziert: version=%s build=%s bundle=%s archs=%s %s=true\n' \
     "$version" "$build_version" \
@@ -105,7 +105,7 @@ verify_app() {
 verify_app "$APP" "$EXPECTED_VERSION"
 
 printf '\n==> Erzeuge frisches Notarisierungs-ZIP\n'
-NOTARY_ZIP="$TEMP_ROOT/Nextcloud-APC-${EXPECTED_VERSION}-notary.zip"
+NOTARY_ZIP="$TEMP_ROOT/Photos-Connector-${EXPECTED_VERSION}-notary.zip"
 ditto -c -k --keepParent "$APP" "$NOTARY_ZIP"
 [[ -s "$NOTARY_ZIP" ]] || fail "Notarisierungs-ZIP wurde nicht erzeugt."
 
@@ -130,14 +130,14 @@ verify_app "$APP" "$EXPECTED_VERSION"
 xcrun stapler validate "$APP" || fail "Stapler-Validierung nach dem Stapling fehlgeschlagen."
 
 printf '\n==> Erzeuge finales Release-ZIP\n'
-FINAL_CANDIDATE="$TEMP_ROOT/Nextcloud-APC-${EXPECTED_VERSION}-macos-universal.zip"
+FINAL_CANDIDATE="$TEMP_ROOT/Photos-Connector-${EXPECTED_VERSION}-macos-universal.zip"
 ditto -c -k --keepParent "$APP" "$FINAL_CANDIDATE"
 [[ -s "$FINAL_CANDIDATE" ]] || fail "Finales ZIP wurde nicht erzeugt."
 
 EXTRACT_ROOT="$TEMP_ROOT/extracted-final-zip"
 mkdir -p "$EXTRACT_ROOT"
 ditto -x -k "$FINAL_CANDIDATE" "$EXTRACT_ROOT"
-EXTRACTED_APP="$EXTRACT_ROOT/Nextcloud APC.app"
+EXTRACTED_APP="$EXTRACT_ROOT/Photos Connector.app"
 [[ -d "$EXTRACTED_APP" ]] || fail "Das finale ZIP enthält nicht das erwartete App-Bundle."
 verify_app "$EXTRACTED_APP" "$EXPECTED_VERSION"
 xcrun stapler validate "$EXTRACTED_APP" || fail "Stapler-Validierung der entpackten ZIP-App fehlgeschlagen."
@@ -151,7 +151,7 @@ mv -f "$FINAL_CANDIDATE" "$OUTPUT_ZIP" || fail "Finales ZIP konnte nicht install
 printf '\nRelease erfolgreich\n'
 printf 'Agent-Version:       %s\n' "$EXPECTED_VERSION"
 printf 'Build-Version:       %s\n' "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")"
-printf 'Bundle-ID:           de.applephotosconnector.macagent\n'
+printf 'Bundle-ID:           de.kettenbeil.photosconnector\n'
 printf 'Architekturen:       arm64 x86_64\n'
 printf 'Signing Identity:    %s\n' "$APC_SIGNING_IDENTITY"
 printf 'Photos Entitlement:  OK (true)\n'

@@ -2,32 +2,18 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CFBundleExecutable</key>
-	<string>MacAgent</string>
-	<key>CFBundleIdentifier</key>
-	<string>de.applephotosconnector.macagent</string>
-	<key>CFBundleName</key>
-	<string>Nextcloud APC</string>
-	<key>CFBundleGetInfoString</key>
-	<string>Nextcloud APC — Autor: Frank Kettenbeil</string>
-	<key>NSHumanReadableCopyright</key>
-	<string>© 2026 Frank Kettenbeil</string>
-	<key>CFBundlePackageType</key>
-	<string>APPL</string>
-	<key>CFBundleIconFile</key>
-	<string>AppIcon</string>
-	<key>CFBundleShortVersionString</key>
-	<string>0.8.3</string>
-	<key>CFBundleVersion</key>
-	<string>5</string>
-	<key>LSMinimumSystemVersion</key>
-	<string>14.0</string>
-	<key>NSHighResolutionCapable</key>
-	<true/>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Der Connector inventarisiert Fotos und Videos und exportiert auf deinen Upload-Befehl Originalressourcen nach Nextcloud. Die Mediathek wird nicht verändert.</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Photos Connector</string>
+	<key>CFBundleExecutable</key>
+	<string>MacAgent</string>
+	<key>CFBundleGetInfoString</key>
+	<string>Photos Connector — Autor: Frank Kettenbeil</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>de.kettenbeil.photosconnector</string>
 	<key>CFBundleLocalizations</key>
 	<array>
 		<string>en</string>
@@ -37,5 +23,23 @@
 		<string>nl</string>
 		<string>es</string>
 	</array>
+	<key>CFBundleName</key>
+	<string>Photos Connector</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>8</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.photography</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>© 2026 Frank Kettenbeil</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Der Connector inventarisiert Fotos und Videos und exportiert auf deinen Upload-Befehl Originalressourcen nach Nextcloud. Die Mediathek wird nicht verändert.</string>
 </dict>
 </plist>
