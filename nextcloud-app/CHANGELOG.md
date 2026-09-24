@@ -3,6 +3,12 @@
 Changes follow the Keep a Changelog categories. This package contains the server
 app; companion macOS changes below are provided for context.
 
+## [0.8.7] - Unreleased
+
+### Changed
+- Refresh the app metadata and store description for the Photos Connector product name.
+- Clarify incremental, non-destructive photo, video and album import behavior and supported versions.
+
 ## [0.8.6] - 2026-09-18
 
 ### Fixed

@@ -1,6 +1,6 @@
-# Photos Connector — Nextcloud Server App
+# Photos Connector — Server App
 
-App-ID: `apple_photos_connector`, Version 0.8.6 laut `appinfo/info.xml`. PHP ab 8.2; App-Metadaten deklarieren Nextcloud 34–35. Die separate macOS-App **Photos Connector** ist erforderlich und wird nicht über den Nextcloud App Store verteilt. Die App-Store-Einreichung wird vorbereitet; das Zertifikat steht noch aus. Original-Uploads und additive Album-Synchronisation sind implementiert. Album-Recovery und idempotente Wiederholung wurden manuell mit Nextcloud 35 und Photos 8.0.0 geprüft.
+App-ID: `apple_photos_connector`, Version 0.8.7 laut `appinfo/info.xml`. PHP ab 8.2; die App-Metadaten deklarieren Nextcloud 34–35. Die separate macOS-App **Photos Connector** ist erforderlich und wird nicht über den Nextcloud App Store verteilt. Original-Uploads und additive Album-Synchronisation sind implementiert. Album-Recovery und idempotente Wiederholung wurden manuell mit Nextcloud 35 und Photos 8.0.0 geprüft.
 
 ## Frische Serverinstallation
 
@@ -77,7 +77,7 @@ Dieser Lauf verwendet Nextclouds echten QueryBuilder und dieselben Inventarszena
 ## Paketierung / Packaging
 
 Run `sh nextcloud-app/build-package.sh` from the repository root. The default
-output is `.build/server/apple_photos_connector-0.8.6.tar.gz`, containing exactly
+output is `.build/server/apple_photos_connector-0.8.7.tar.gz`, containing exactly
 one `apple_photos_connector/` directory. The script stages only runtime folders,
 README, composer metadata, LICENSE and CHANGELOG; tests and tooling are excluded.
 It strips macOS archive metadata. No signing or upload occurs.
@@ -130,7 +130,7 @@ The additive migration is `Version008600Date20260918000000.php`; there is no
 `Version008700` migration in this release. It creates `apc_content_identities`
 and `apc_content_targets`. The content index is unique by
 `user_id + sha256 + byte_size` and remains separate from `new`/`known` asset
-matching. The server app version is 0.8.6.
+matching. The server app version is 0.8.7.
 
 `uploads/prepare` may return `contentAlreadyPresent` for a confirmed target.
 The client then performs no PUT and no Complete, but can still run album sync.

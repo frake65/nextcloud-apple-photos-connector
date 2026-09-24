@@ -15,7 +15,7 @@ rm "$app/lib/Command/AlbumTestResolveCommand.php" "$app/lib/Command/AlbumTestAdd
 cp "$source_dir/LICENSE" "$source_dir/CHANGELOG.md" "$source_dir/README.md" "$source_dir/composer.json" "$app/"
 find "$app" -type f \( -name '.DS_Store' -o -name '._*' \) -delete
 sh "$source_dir/check-package.sh" "$stage" "${INFO_XSD:-}"
-archive="$output_dir/apple_photos_connector-0.8.6.tar.gz"
+archive="$output_dir/apple_photos_connector-0.8.7.tar.gz"
 if tar --version | grep -q bsdtar; then
     COPYFILE_DISABLE=1 tar --no-xattrs --no-acls --no-fflags -czf "$archive" -C "$stage" apple_photos_connector
 else

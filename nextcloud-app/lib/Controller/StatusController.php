@@ -18,6 +18,6 @@ final class StatusController extends Controller {
         if (!$user || !str_starts_with(strtolower($this->request->getHeader('Authorization')), 'basic ')) {
             return new JSONResponse(['error' => 'Authentication required'], 401);
         }
-        return new JSONResponse(['status' => 'ok', 'app' => Application::APP_ID, 'version' => '0.8.6']);
+        return new JSONResponse(['status' => 'ok', 'app' => Application::APP_ID, 'version' => '0.8.7']);
     }
 }

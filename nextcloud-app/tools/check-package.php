@@ -13,7 +13,7 @@ libxml_use_internal_errors(true);
 $xml = new DOMDocument();
 if (!$xml->load($root . '/appinfo/info.xml', LIBXML_NONET) || $xml->doctype !== null) fail('invalid XML or forbidden DOCTYPE');
 $xpath = new DOMXPath($xml);
-foreach (['id' => 'apple_photos_connector', 'version' => '0.8.6', 'licence' => 'AGPL-3.0-or-later'] as $key => $value) {
+foreach (['id' => 'apple_photos_connector', 'version' => '0.8.7', 'licence' => 'AGPL-3.0-or-later'] as $key => $value) {
     if ($xpath->evaluate("string(/info/$key)") !== $value) fail("unexpected $key");
 }
 if (($argv[2] ?? '') !== '' && !$xml->schemaValidate($argv[2])) fail('info.xml does not validate against supplied XSD');
