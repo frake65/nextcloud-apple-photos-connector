@@ -38,7 +38,9 @@ final class PhotoLibraryModel: ObservableObject {
 
     func refreshAuthorizationAndLoad() {
         authorization = PhotoAuthorizationState(status: PHPhotoLibrary.authorizationStatus(for: .readWrite))
-        if authorization.canRead { loadLibrary() }
+        if authorization.canRead {
+            if !isLoading { loadLibrary() }
+        }
         else {
             assets = []; albums = []
             if authorization != .notDetermined { hasLoadedInitialState = true }
