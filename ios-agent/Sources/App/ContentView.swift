@@ -20,7 +20,7 @@ struct ContentView: View {
     var body: some View {
         Group {
             if showingStartup && !library.hasLoadedInitialState {
-                StartupView(isLoadingLibrary: library.isLoading) {
+                StartupView(isLoadingLibrary: library.authorization.canRead || library.isLoading) {
                     if library.authorization == .notDetermined { library.requestAccess() }
                 }
             } else {
@@ -133,6 +133,7 @@ private struct StartupView: View {
                 if isLoadingLibrary {
                     ProgressView()
                         .tint(.white)
+                        .onAppear { IOSImportDiagnostics.log("[Startup] loading indicator appeared") }
                     Text("Mediathek wird geladen …")
                         .font(.subheadline)
                         .foregroundStyle(.white.opacity(0.9))
