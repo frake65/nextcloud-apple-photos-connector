@@ -62,6 +62,9 @@ struct ContentView: View {
                 routeToInitialConnectionIfNeeded()
             }
         }
+        .onChange(of: library.isLoading) { _, loading in
+            if !loading { Task { await presentRecoveryIfNeeded() } }
+        }
     }
 
     private func routeToInitialConnectionIfNeeded() {
@@ -92,6 +95,7 @@ struct ContentView: View {
     private func presentRecoveryIfNeeded() async {
         guard !showingInventoryReview,
               connection.parsedSourceId != nil,
+              !library.isLoading,
               !library.assets.isEmpty else { return }
         let store = ImportQueueStore()
         let coordinator = BackgroundTransferCoordinator.shared
