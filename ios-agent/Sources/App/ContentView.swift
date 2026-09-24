@@ -211,21 +211,18 @@ private struct GalleryScreen: View {
                 LazyVGrid(columns: columns, spacing: 2) {
                     ForEach(assets) { item in
                         Button { selection.toggle(item) } label: {
-                            GeometryReader { proxy in
-                                let side = proxy.size.width
-                                ZStack(alignment: .bottomTrailing) {
-                                    ThumbnailView(asset: item.asset, library: library, dimension: 160)
-                                        .frame(width: side, height: side)
-                                        .clipped()
-                                        .overlay(alignment: .topTrailing) { selectionIndicator(for: item) }
-                                    if item.isVideo { Label(item.durationLabel, systemImage: "play.fill").font(.caption2.bold()).padding(5).background(.black.opacity(0.65), in: Capsule()).foregroundStyle(.white).padding(6).frame(maxWidth: .infinity, alignment: .leading) }
-                                }
-                                .frame(width: side, height: side)
-                                .clipped()
+                            ZStack(alignment: .bottomTrailing) {
+                                ThumbnailView(asset: item.asset, library: library, dimension: 160)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                    .clipped()
+                                    .overlay(alignment: .topTrailing) { selectionIndicator(for: item) }
+                                if item.isVideo { Label(item.durationLabel, systemImage: "play.fill").font(.caption2.bold()).padding(5).background(.black.opacity(0.65), in: Capsule()).foregroundStyle(.white).padding(6).frame(maxWidth: .infinity, alignment: .leading) }
                             }
+                            .frame(maxWidth: .infinity)
                             .aspectRatio(1, contentMode: .fit)
                         }
                         .buttonStyle(.plain)
+                        .contentShape(Rectangle())
                         .background(GeometryReader { proxy in
                             Color.clear.preference(key: CellFramesKey.self, value: [item.id: proxy.frame(in: .global)])
                         })
