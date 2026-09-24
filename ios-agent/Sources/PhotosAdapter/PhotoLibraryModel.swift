@@ -63,11 +63,14 @@ final class PhotoLibraryModel: ObservableObject {
             let initial = await Task.detached(priority: .userInitiated) { () -> [PHAsset] in
                 let options = PHFetchOptions()
                 options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+                options.predicate = NSPredicate(format: "mediaType == %d OR mediaType == %d", PHAssetMediaType.image.rawValue, PHAssetMediaType.video.rawValue)
+                options.fetchLimit = 120
+                let fetchStart = IOSImportDiagnostics.start("first-grid-fetch")
                 let result = PHAsset.fetchAssets(with: options)
+                IOSImportDiagnostics.finish("first-grid-fetch", started: fetchStart, detail: "count=\(result.count)")
                 var first: [PHAsset] = []
-                result.enumerateObjects { asset, _, stop in
-                    if asset.mediaType == .image || asset.mediaType == .video { first.append(asset) }
-                    if first.count == 120 { stop.pointee = true }
+                result.enumerateObjects { asset, _, _ in
+                    first.append(asset)
                 }
                 return first
             }.value
@@ -76,7 +79,8 @@ final class PhotoLibraryModel: ObservableObject {
             self.hasLoadedInitialState = true
             IOSImportDiagnostics.log("[Startup] PhotoKit first grid ready (\(initial.count) assets)")
 
-            let fetched = await Task.detached(priority: .userInitiated) { () -> ([PHAsset], [GalleryAlbum]) in
+            await Task.yield()
+            let fetched = await Task.detached(priority: .utility) { () -> ([PHAsset], [GalleryAlbum]) in
                 let options = PHFetchOptions()
                 options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
                 let result = PHAsset.fetchAssets(with: options)
