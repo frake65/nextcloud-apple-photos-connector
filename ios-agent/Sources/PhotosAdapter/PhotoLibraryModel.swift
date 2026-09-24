@@ -53,7 +53,29 @@ final class PhotoLibraryModel: ObservableObject {
             guard let self else { return }
             self.isLoading = true
             self.errorMessage = nil
-            defer { self.isLoading = false; self.hasLoadedInitialState = true }
+            defer {
+                if !Task.isCancelled {
+                    self.isLoading = false
+                    self.hasLoadedInitialState = true
+                }
+            }
+            // Publish the first screen before enumerating the whole library and its albums.
+            let initial = await Task.detached(priority: .userInitiated) { () -> [PHAsset] in
+                let options = PHFetchOptions()
+                options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+                let result = PHAsset.fetchAssets(with: options)
+                var first: [PHAsset] = []
+                result.enumerateObjects { asset, _, stop in
+                    if asset.mediaType == .image || asset.mediaType == .video { first.append(asset) }
+                    if first.count == 120 { stop.pointee = true }
+                }
+                return first
+            }.value
+            guard !Task.isCancelled else { return }
+            self.assets = initial.map(GalleryAsset.init)
+            self.hasLoadedInitialState = true
+            IOSImportDiagnostics.log("[Startup] PhotoKit first grid ready (\(initial.count) assets)")
+
             let fetched = await Task.detached(priority: .userInitiated) { () -> ([PHAsset], [GalleryAlbum]) in
                 let options = PHFetchOptions()
                 options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
@@ -75,7 +97,7 @@ final class PhotoLibraryModel: ObservableObject {
                 return (all, albums.sorted { ($0.collection.localizedTitle ?? "") < ($1.collection.localizedTitle ?? "") })
             }.value
             guard !Task.isCancelled else { return }
-            self.assets = fetched.0.map(GalleryAsset.init).sorted { $0.creationDate > $1.creationDate }
+            self.assets = fetched.0.map(GalleryAsset.init)
             self.albums = fetched.1
             IOSImportDiagnostics.log("[Startup] PhotoKit load end")
         }
