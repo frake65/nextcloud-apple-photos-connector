@@ -3,11 +3,12 @@
 Changes follow the Keep a Changelog categories. This package contains the server
 app; companion macOS changes below are provided for context.
 
-## [0.8.7] - Unreleased
+## [0.8.7] - 2026-09-24
 
 ### Changed
-- Refresh the app metadata and store description for the Photos Connector product name.
-- Clarify incremental, non-destructive photo, video and album import behavior and supported versions.
+- Publish the Photos Connector product metadata in English and German.
+- Document photo and video import, album transfer, additive delta imports and non-destructive overwrite protection.
+- Publish the signed `apple_photos_connector-0.8.7-signed.tar.gz` release archive.
 
 ## [0.8.6] - 2026-09-18
 
