@@ -2,9 +2,9 @@
 
 [English](README.md) | Deutsch
 
-Der aktuelle Server-App-Patch ist 0.8.6; der separate macOS-Agent **Photos Connector**
-ist bei 0.8.3. Die App-Store-Einreichung wird vorbereitet; das
-Signierungszertifikat steht noch aus. Die macOS-App
+Der aktuelle Server-App-Release ist [0.8.7](https://github.com/frake65/nextcloud-apple-photos-connector/releases/tag/v0.8.7); der separate macOS-Agent **Photos Connector**
+ist bei 0.8.3. Das signierte Server-Archiv ist als
+[apple_photos_connector-0.8.7-signed.tar.gz](https://github.com/frake65/nextcloud-apple-photos-connector/releases/download/v0.8.7/apple_photos_connector-0.8.7-signed.tar.gz) verfügbar. Die macOS-App
 bleibt erforderlich und wird nicht über den Nextcloud App Store verteilt.
 Die Server-Metadaten unterstützen NC34–35. Idempotenz und Album-Recovery wurden
 manuell mit Nextcloud 35 und Photos 8.0.0 verifiziert.
@@ -36,7 +36,7 @@ Album Membership und Dateiübertragung sind getrennte Vorgänge. Albumnamen sind
 
 ## Aktueller Stand
 
-Der letzte gemeinsame Release ist APC 0.8.2; die Server-App liegt inzwischen als Patch 0.8.6 vor, während der Agent bei 0.8.3 steht. Die manuellen Idempotenz- und Album-Recovery-Tests waren erfolgreich:
+Der aktuelle Server-App-Release ist 0.8.7; der Agent steht bei 0.8.3. Der Release unterstützt Foto- und Videoimport aus Apple Fotos, Albumübernahme, additive Delta-Importe sowie nicht-destruktiven Schutz vor unbeabsichtigtem Überschreiben. Die technische App-ID bleibt `apple_photos_connector`. Die manuellen Idempotenz- und Album-Recovery-Tests waren erfolgreich:
 
 Apple Photos → PhotoKit-Auswahl → Stable Identity → Inventory → Upload-Ticket → Originalexport → Prepare → WebDAV PUT → Complete → Datei im konfigurierten Nextcloud Target Root.
 
@@ -86,7 +86,7 @@ Historische Entwicklungs- und Testberichte liegen unter `docs/`; sie sind keine 
 
 - Breitere manuelle Prüfung mit mehreren Sources und Mediatheken
 - Vollständigere Validierung der Photos-Album-Kompatibilität
-- App-Store-Signierung und Einreichung abschließen
+- Den veröffentlichten App-Store-Release pflegen und die Kompatibilität weiter validieren
 - Upstream-Abstimmung zu einer generischen Abstraktion für externe Fotoquellen
 
 ## Projektstatus

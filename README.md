@@ -2,9 +2,10 @@
 
 English | [Deutsch](README.de.md)
 
-The current server app patch is 0.8.6; the separate **Photos Connector** macOS
-agent is at 0.8.3. App Store submission is being prepared; the signing
-certificate is pending. The macOS app is required
+The current server app release is [0.8.7](https://github.com/frake65/nextcloud-apple-photos-connector/releases/tag/v0.8.7); the separate **Photos Connector** macOS
+agent is at 0.8.3. The signed server package is available as
+[apple_photos_connector-0.8.7-signed.tar.gz](https://github.com/frake65/nextcloud-apple-photos-connector/releases/download/v0.8.7/apple_photos_connector-0.8.7-signed.tar.gz).
+The macOS app is required
 and will not be distributed through the Nextcloud App Store. Server metadata
 targets Nextcloud 34–35. Idempotence and album recovery were manually verified
 against Nextcloud 35 and Photos 8.0.0.
@@ -51,13 +52,17 @@ not re-upload photos that are already known to the server.
 
 Album Membership and file transfer are separate operations. Album names are not identities; Source and Asset identities remain stable across retries.
 
-## Release 0.8.2
+## Release 0.8.7
 
-Release 0.8.2 contains the current stable connector architecture. The GitHub
-release provides both required components:
+Release 0.8.7 is the current signed server-app release. The GitHub
+release provides:
 
-- `apple_photos_connector-0.8.2.tar.gz` — Nextcloud server app
-- `Photos-Connector-0.8.2.zip` — universal macOS agent for Apple Silicon and Intel
+- `apple_photos_connector-0.8.7-signed.tar.gz` — signed server app
+
+The technical app ID remains `apple_photos_connector`. The release supports
+photo and video import from Apple Photos, album membership transfer, additive
+delta imports, and non-destructive collision protection. Existing files are
+not deleted or overwritten automatically.
 
 ## Albums
 
@@ -78,7 +83,7 @@ agent. Then configure the connection in the agent and start an import.
 
 ### Nextcloud server app — standard installation
 
-1. Download `apple_photos_connector-0.8.2.tar.gz` from the GitHub release.
+1. Download the [signed 0.8.7 server archive](https://github.com/frake65/nextcloud-apple-photos-connector/releases/download/v0.8.7/apple_photos_connector-0.8.7-signed.tar.gz) from the GitHub release.
 2. Extract it; the archive contains the app directory
    `apple_photos_connector/`.
 3. Copy that directory to the Nextcloud directory configured for additional
@@ -88,7 +93,7 @@ agent. Then configure the connection in the agent and start an import.
 For a typical installation under `/var/www/html`:
 
 ```sh
-tar xzf apple_photos_connector-0.8.2.tar.gz
+tar xzf apple_photos_connector-0.8.7-signed.tar.gz
 sudo mv apple_photos_connector /var/www/html/custom_apps/
 sudo chown -R www-data:www-data /var/www/html/custom_apps/apple_photos_connector
 cd /var/www/html
@@ -109,9 +114,9 @@ One safe AIO procedure is to copy the archive to the container, extract it in
 a temporary container directory, and then copy the app into `custom_apps`:
 
 ```sh
-docker cp apple_photos_connector-0.8.2.tar.gz nextcloud-aio-nextcloud:/tmp/
+docker cp apple_photos_connector-0.8.7-signed.tar.gz nextcloud-aio-nextcloud:/tmp/
 docker exec nextcloud-aio-nextcloud sh -c \
-  'rm -rf /tmp/apple_photos_connector && tar xzf /tmp/apple_photos_connector-0.8.2.tar.gz -C /tmp'
+  'rm -rf /tmp/apple_photos_connector && tar xzf /tmp/apple_photos_connector-0.8.7-signed.tar.gz -C /tmp'
 docker exec nextcloud-aio-nextcloud sh -c \
   'rm -rf /var/www/html/custom_apps/apple_photos_connector && \
    cp -a /tmp/apple_photos_connector /var/www/html/custom_apps/'
@@ -132,7 +137,7 @@ persist custom apps.
 
 ### macOS agent
 
-1. Download `Photos-Connector-0.8.2.zip` from the GitHub release.
+1. Download the current **Photos Connector** macOS release from the [GitHub repository](https://github.com/frake65/nextcloud-apple-photos-connector/releases).
 2. Extract the ZIP and move `Photos Connector.app` to `/Applications` (Programme).
 3. Start the app.
 4. Allow access to Apple Photos when macOS asks for permission.
@@ -180,7 +185,7 @@ Historical development and test reports remain in `docs/`; they are not normativ
 
 - Broader manual validation across multiple Sources and libraries
 - More complete Photos album interoperability validation
-- Complete App Store signing and submission
+- Maintain the published App Store release and continue compatibility validation
 - Upstream discussion of a generic external-photo-source abstraction
 
 ## Project status
