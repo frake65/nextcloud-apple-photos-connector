@@ -687,6 +687,16 @@ final class BackgroundTransferCoordinator: NSObject, URLSessionTaskDelegate, URL
     private func completionInFlightSnapshot() -> Set<UUID> { lock.lock(); defer { lock.unlock() }; return completionInFlight }
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) { completionHandler(nil) }
     func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64, totalBytesExpectedToSend: Int64) { lock.lock(); let handler = progressHandlers[task.taskIdentifier]; lock.unlock(); let identifier = session.configuration.identifier ?? "unknown"; updatePUTTaskState { $0.sending(taskKey(sessionIdentifier: identifier, taskIdentifier: task.taskIdentifier)) }; IOSImportDiagnostics.log("[BackgroundPUT] task=\(task.taskIdentifier) didSendBodyData=\(bytesSent) totalBytesSent=\(totalBytesSent) expected=\(totalBytesExpectedToSend) state=sending"); handler?(totalBytesSent, totalBytesExpectedToSend) }
+    func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
+        guard IOSImportDiagnostics.enabled, task.originalRequest?.httpMethod == "PUT" else { return }
+        func seconds(_ start: Date?, _ end: Date?) -> String {
+            guard let start, let end else { return "unavailable" }
+            return String(format: "%.3f", end.timeIntervalSince(start))
+        }
+        for (index, transaction) in metrics.transactionMetrics.enumerated() {
+            IOSImportDiagnostics.log("[BackgroundPUT] metrics task=\(task.taskIdentifier) transaction=\(index) protocol=\(transaction.networkProtocolName ?? "unknown") queue=\(seconds(transaction.fetchStartDate, transaction.requestStartDate)) request=\(seconds(transaction.requestStartDate, transaction.requestEndDate)) responseWait=\(seconds(transaction.requestEndDate, transaction.responseStartDate)) response=\(seconds(transaction.responseStartDate, transaction.responseEndDate)) bytesSent=\(transaction.countOfRequestBodyBytesSent)")
+        }
+    }
     func urlSession(_ session: URLSession, taskIsWaitingForConnectivity task: URLSessionTask) { let identifier = session.configuration.identifier ?? "unknown"; updatePUTTaskState { $0.waiting(taskKey(sessionIdentifier: identifier, taskIdentifier: task.taskIdentifier)) }; IOSImportDiagnostics.log("background-task waitingForConnectivity session=\(identifier) taskIdentifier=\(task.taskIdentifier) state=waiting") }
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) { lock.lock(); if let current = responses[dataTask.taskIdentifier] { responses[dataTask.taskIdentifier] = (current.0 + data, current.1) }; lock.unlock() }
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
