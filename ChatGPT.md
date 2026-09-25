@@ -1,4 +1,4 @@
-Nextcloud Apple Photos Connector – verständlichere Beschreibung und Upload-Zusammenfassung
+Photos Connector – verständlichere Beschreibung und Upload-Zusammenfassung
 
 Bitte zwei kleine UI-Anpassungen vornehmen.
 

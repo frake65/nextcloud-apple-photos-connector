@@ -3,6 +3,12 @@ import XCTest
 @testable import ApplePhotosConnector
 import InventoryCore
 
+private actor RetryAttemptCounter {
+    private var attempts = 0
+    func next() -> Int { attempts += 1; return attempts }
+    var value: Int { attempts }
+}
+
 final class IOSCoreFlowTests: XCTestCase {
     func testImportPresentationSeparatesTransferAlbumSyncAndCompletion() {
         XCTAssertEqual(ImportPresentationPhase.resolve(phase: .idle, completed: 0, total: 3, isVerifyingCompletedUpload: false), .idle)
@@ -15,6 +21,94 @@ final class IOSCoreFlowTests: XCTestCase {
     func testImportPresentationDoesNotTreatFailureOrCancellationAsCompleted() {
         XCTAssertEqual(ImportPresentationPhase.resolve(phase: .failed, completed: 3, total: 3, isVerifyingCompletedUpload: false), .stopped)
         XCTAssertEqual(ImportPresentationPhase.resolve(phase: .cancelled, completed: 3, total: 3, isVerifyingCompletedUpload: false), .stopped)
+        XCTAssertEqual(ImportPresentationPhase.resolve(phase: .cancelling, completed: 1, total: 3, isVerifyingCompletedUpload: false), .stopped)
+        XCTAssertEqual(ImportPresentationPhase.resolve(phase: .interrupted, completed: 2, total: 4, isVerifyingCompletedUpload: false), .stopped)
+    }
+
+    func testResumeButtonHidesDuringAutomaticRecoveryAndWaiting() {
+        XCTAssertFalse(ImportPresentationPhase.showsResumeButton(hasRecoverableRun: true, isRunning: true, hasActiveBackgroundTransfer: false, waitingForWiFi: false))
+        XCTAssertFalse(ImportPresentationPhase.showsResumeButton(hasRecoverableRun: true, isRunning: false, hasActiveBackgroundTransfer: true, waitingForWiFi: false))
+        XCTAssertFalse(ImportPresentationPhase.showsResumeButton(hasRecoverableRun: true, isRunning: false, hasActiveBackgroundTransfer: false, waitingForWiFi: true))
+        XCTAssertFalse(ImportPresentationPhase.showsResumeButton(hasRecoverableRun: false, isRunning: false, hasActiveBackgroundTransfer: false, waitingForWiFi: false))
+        XCTAssertTrue(ImportPresentationPhase.showsResumeButton(hasRecoverableRun: true, isRunning: false, hasActiveBackgroundTransfer: false, waitingForWiFi: false))
+        XCTAssertFalse(ImportPresentationPhase.showsResumeButton(hasRecoverableRun: true, isRunning: true, hasActiveBackgroundTransfer: true, waitingForWiFi: false))
+    }
+
+    func testBackgroundTransferMessageDistinguishesNetworkHandoverFromProgress() {
+        XCTAssertEqual(ImportPresentationPhase.backgroundTransferMessage(hasActiveBackgroundTransfer: true, hasProgress: false, waitingForWiFi: false, allowsCellularAccess: true), "Übertragung wird fortgesetzt …")
+        XCTAssertEqual(ImportPresentationPhase.backgroundTransferMessage(hasActiveBackgroundTransfer: true, hasProgress: true, waitingForWiFi: false, allowsCellularAccess: true), "Übertragung läuft …")
+        XCTAssertEqual(ImportPresentationPhase.backgroundTransferMessage(hasActiveBackgroundTransfer: true, hasProgress: false, waitingForWiFi: true, allowsCellularAccess: false), "Upload wartet auf WLAN.")
+        XCTAssertNil(ImportPresentationPhase.backgroundTransferMessage(hasActiveBackgroundTransfer: false, hasProgress: true, waitingForWiFi: false, allowsCellularAccess: true))
+    }
+
+    func testTransientUploadConnectivityUsesWaitingMessage() {
+        XCTAssertEqual(UploadError.networkUnavailable.errorDescription, "Upload wartet auf WLAN.")
+    }
+
+    func testTransientMKCOLAndPrepareFailuresRetrySuccessfully() async throws {
+        for (method, path) in [("MKCOL", "/remote.php/dav/Photos"), ("POST", "/uploads/prepare")] {
+            let attempts = RetryAttemptCounter()
+            var request = URLRequest(url: URL(string: "https://cloud.example\(path)")!)
+            request.httpMethod = method
+            let response = try await ImportTransientRequestRetry.run(
+                maxRetries: ImportTransientRequestRetry.maxRetries(for: request),
+                waitUntilUsable: { true },
+                isCurrentlyUsable: { true }
+            ) {
+                let attempt = await attempts.next()
+                if attempt == 1 { throw URLError(.networkConnectionLost) }
+                return DAVResponse(status: 200, requestMethod: method, requestPath: path)
+            }
+            let attemptCount = await attempts.value
+            XCTAssertEqual(attemptCount, 2, "Expected one retry for \(method) \(path)")
+            XCTAssertEqual(response.status, 200)
+            XCTAssertEqual(response.requestMethod, method)
+            XCTAssertEqual(response.requestPath, path)
+        }
+    }
+
+    func testExhaustedTransientRequestRetriesBecomeRecoverableConnectivityFailure() async {
+        let attempts = RetryAttemptCounter()
+        do {
+            _ = try await ImportTransientRequestRetry.run(
+                maxRetries: 1,
+                waitUntilUsable: { true },
+                isCurrentlyUsable: { true }
+            ) {
+                _ = await attempts.next()
+                throw URLError(.networkConnectionLost)
+            } as DAVResponse
+            XCTFail("Expected exhausted transient retries to be classified")
+        } catch let error as UploadError {
+            if case .networkUnavailable = error {} else { XCTFail("Unexpected UploadError: \(error)") }
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+        let attemptCount = await attempts.value
+        XCTAssertEqual(attemptCount, 2)
+    }
+
+    func testInventoryPostIsNotBlindlyRetriedAfterAmbiguousNetworkFailure() async {
+        let attempts = RetryAttemptCounter()
+        var request = URLRequest(url: URL(string: "https://cloud.example/index.php/apps/apple_photos_connector/api/v1/inventory")!)
+        request.httpMethod = "POST"
+        do {
+            _ = try await ImportTransientRequestRetry.run(
+                maxRetries: ImportTransientRequestRetry.maxRetries(for: request),
+                waitUntilUsable: { true },
+                isCurrentlyUsable: { true }
+            ) {
+                _ = await attempts.next()
+                throw URLError(.networkConnectionLost)
+            } as DAVResponse
+            XCTFail("Expected a recoverable network error")
+        } catch let error as UploadError {
+            if case .networkUnavailable = error {} else { XCTFail("Unexpected UploadError: \(error)") }
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+        let attemptCount = await attempts.value
+        XCTAssertEqual(attemptCount, 1)
     }
 
     func testUploadAreaAllowsNavigationWithoutSelectionButNotNewImport() {
@@ -100,6 +194,25 @@ final class IOSCoreFlowTests: XCTestCase {
         XCTAssertFalse(text.contains("Authorization")); XCTAssertFalse(text.contains("password"))
     }
 
+    func testFinalBackgroundBindingCleanupRemovesItAfterPUTCompletion() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = BackgroundTaskBindingStore(directoryURL: directory)
+        let binding = BackgroundTaskBinding(queueAssetID: UUID(), localRunID: UUID(), uploadAttemptID: UUID(),
+            sessionIdentifier: BackgroundTransferCoordinator.wifiSessionIdentifier, taskIdentifier: 44,
+            relativeTransferPath: "attempt.upload", expectedHost: "cloud.example", targetPath: "/remote/file.jpg", createdAt: Date())
+        try await store.upsert(binding)
+        let transfer = BackgroundTransferCoordinator(bindingStore: store,
+            fileStore: BackgroundTransferFileStore(directoryURL: directory.appendingPathComponent("Transfers")))
+
+        await transfer.cleanup(uploadAttemptID: binding.uploadAttemptID, deleteFile: false)
+
+        let remainingBindings = await store.all()
+        let activeBindings = await transfer.activeBindings()
+        XCTAssertTrue(remainingBindings.isEmpty)
+        XCTAssertTrue(activeBindings.isEmpty)
+    }
+
     func testBackgroundTaskBindingDoesNotRepresentCompletedAsset() {
         let binding = BackgroundTaskBinding(queueAssetID: UUID(), localRunID: UUID(), uploadAttemptID: UUID(), sessionIdentifier: BackgroundTransferCoordinator.sessionIdentifier, taskIdentifier: 1, relativeTransferPath: "attempt.upload", expectedHost: "cloud.example", targetPath: "/remote.php/dav/files/alice/Photos/clip.mov", createdAt: Date())
         XCTAssertNotEqual(binding.taskIdentifier, 0)
@@ -162,6 +275,45 @@ final class IOSCoreFlowTests: XCTestCase {
         let recoverable = await store.recoverableRuns()
         XCTAssertEqual(recoverable.map(\.localRunID), [run.localRunID])
         XCTAssertEqual(recoverable.first?.assets.first?.state, .needsReconcile)
+    }
+
+    @MainActor
+    func testRecoverableRunRestoresCompletedProgressAndDoesNotReuploadCompletedAssets() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ImportQueueStore(directoryURL: directory)
+        let seed = queueRun()
+        var assets: [PersistedImportAsset] = []
+        for index in 0..<4 {
+            var asset = seed.assets[0]
+            asset = PersistedImportAsset(
+                queueAssetID: UUID(), stableIdentity: asset.stableIdentity, localIdentifier: "local-\(index)",
+                cloudIdentifier: asset.cloudIdentifier, mediaType: asset.mediaType, filenameHint: asset.filenameHint,
+                captureDate: asset.captureDate, state: index < 2 ? .completed : .needsReconcile,
+                serverAssetID: asset.serverAssetID, uploadID: asset.uploadID, targetPath: asset.targetPath,
+                expectedBytes: asset.expectedBytes, expectedSHA256: asset.expectedSHA256,
+                lastConfirmedStep: index < 2 ? "complete-confirmed" : "connectivity-lost",
+                retryCount: asset.retryCount, lastErrorCode: asset.lastErrorCode
+            )
+            assets.append(asset)
+        }
+        let run = PersistedImportRun(schemaVersion: seed.schemaVersion, localRunID: seed.localRunID,
+            account: seed.account, sourceID: seed.sourceID, createdAt: seed.createdAt, updatedAt: seed.updatedAt,
+            state: seed.state, serverRunID: seed.serverRunID, assetOrder: assets.map(\.queueAssetID),
+            albumSyncPending: false, assets: assets)
+        try await store.save(run)
+
+        let coordinator = IOSForegroundImportCoordinator(queueStore: store)
+        coordinator.restoreRecoverableRun(run)
+
+        XCTAssertEqual(coordinator.total, 4)
+        XCTAssertEqual(coordinator.completed, 2)
+        XCTAssertEqual(coordinator.uploaded, 2)
+        XCTAssertEqual(coordinator.phase, .interrupted)
+        XCTAssertFalse(coordinator.isRunning)
+        XCTAssertNil(IOSForegroundImportCoordinator.resumeInventoryState(localState: .completed, serverState: .new))
+        XCTAssertEqual(ImportRecoveryCoordinator.action(for: run, asset: assets[0]), .none)
+        XCTAssertEqual(ImportRecoveryCoordinator.action(for: run, asset: assets[2]), .reconcile)
     }
 
     func testImportQueueSelectsNewestRecoverableRunPerAccountAndSource() async throws {
@@ -443,6 +595,22 @@ final class IOSCoreFlowTests: XCTestCase {
         XCTAssertTrue(cellularAllowed.waitsForConnectivity)
     }
 
+    func testBackgroundSessionConfigurationUsesCurrentCellularPolicy() {
+        let wifiOnly = BackgroundTransferCoordinator.makeBackgroundConfiguration(
+            identifier: "apc-test-wifi-\(UUID().uuidString)",
+            allowsCellularAccess: false
+        )
+        XCTAssertFalse(wifiOnly.allowsCellularAccess)
+        XCTAssertTrue(wifiOnly.waitsForConnectivity)
+
+        let cellularAllowed = BackgroundTransferCoordinator.makeBackgroundConfiguration(
+            identifier: "apc-test-cellular-\(UUID().uuidString)",
+            allowsCellularAccess: true
+        )
+        XCTAssertTrue(cellularAllowed.allowsCellularAccess)
+        XCTAssertTrue(cellularAllowed.waitsForConnectivity)
+    }
+
     func testImportConnectivityPolicyWaitsOnlyForMissingRequiredPath() {
         XCTAssertTrue(ImportConnectivityPolicy.shouldWait(allowsCellular: false, networkSatisfied: false, wifiAvailable: false))
         XCTAssertTrue(ImportConnectivityPolicy.shouldWait(allowsCellular: false, networkSatisfied: true, wifiAvailable: false))
@@ -450,6 +618,34 @@ final class IOSCoreFlowTests: XCTestCase {
         XCTAssertFalse(ImportConnectivityPolicy.shouldWait(allowsCellular: true, networkSatisfied: true, wifiAvailable: false))
         XCTAssertFalse(ImportConnectivityPolicy.shouldWait(allowsCellular: true, networkSatisfied: true, wifiAvailable: true))
         XCTAssertTrue(ImportConnectivityPolicy.shouldWait(allowsCellular: true, networkSatisfied: false, wifiAvailable: false))
+    }
+
+    func testCellularPolicyRevocationMigratesExistingCellularTasksToWiFiOnly() {
+        XCTAssertTrue(ImportConnectivityPolicy.shouldMigrateBackgroundTask(sessionIdentifier: BackgroundTransferCoordinator.cellularSessionIdentifier, wifiSessionIdentifier: BackgroundTransferCoordinator.wifiSessionIdentifier, allowsCellular: false))
+        XCTAssertTrue(ImportConnectivityPolicy.shouldMigrateBackgroundTask(sessionIdentifier: BackgroundTransferCoordinator.sessionIdentifier, wifiSessionIdentifier: BackgroundTransferCoordinator.wifiSessionIdentifier, allowsCellular: false))
+        XCTAssertFalse(ImportConnectivityPolicy.shouldMigrateBackgroundTask(sessionIdentifier: BackgroundTransferCoordinator.wifiSessionIdentifier, wifiSessionIdentifier: BackgroundTransferCoordinator.wifiSessionIdentifier, allowsCellular: false))
+        XCTAssertFalse(ImportConnectivityPolicy.shouldMigrateBackgroundTask(sessionIdentifier: BackgroundTransferCoordinator.cellularSessionIdentifier, wifiSessionIdentifier: BackgroundTransferCoordinator.wifiSessionIdentifier, allowsCellular: true))
+    }
+
+    func testPolicyWaitWinsDuringReattachAndClearsWhenWiFiReturns() {
+        XCTAssertTrue(ImportConnectivityPolicy.shouldShowWiFiWait(allowsCellular: false, wifiAvailable: nil, gateWaiting: false, cancelling: false))
+        XCTAssertTrue(ImportConnectivityPolicy.shouldShowWiFiWait(allowsCellular: false, wifiAvailable: false, gateWaiting: false, cancelling: false))
+        XCTAssertTrue(ImportConnectivityPolicy.shouldShowWiFiWait(allowsCellular: false, wifiAvailable: false, gateWaiting: true, cancelling: false))
+        XCTAssertFalse(ImportConnectivityPolicy.shouldShowWiFiWait(allowsCellular: false, wifiAvailable: true, gateWaiting: false, cancelling: false))
+        XCTAssertFalse(ImportConnectivityPolicy.shouldShowWiFiWait(allowsCellular: true, wifiAvailable: false, gateWaiting: false, cancelling: false))
+        XCTAssertFalse(ImportConnectivityPolicy.shouldShowWiFiWait(allowsCellular: false, wifiAvailable: false, gateWaiting: true, cancelling: true))
+    }
+
+    func testStaleGateCallbackAndCallbackAfterCancelAreIgnored() {
+        XCTAssertTrue(ImportConnectivityPolicy.acceptsCallback(callbackGeneration: 4, currentGeneration: 4, cancelling: false))
+        XCTAssertFalse(ImportConnectivityPolicy.acceptsCallback(callbackGeneration: 3, currentGeneration: 4, cancelling: false))
+        XCTAssertFalse(ImportConnectivityPolicy.acceptsCallback(callbackGeneration: 4, currentGeneration: 4, cancelling: true))
+    }
+
+    func testDisablingCellularWithoutWiFiKeepsImportInWaitingPresentation() {
+        XCTAssertTrue(ImportConnectivityPolicy.shouldWait(allowsCellular: false, networkSatisfied: true, wifiAvailable: false))
+        XCTAssertEqual(ImportPresentationPhase.backgroundTransferMessage(hasActiveBackgroundTransfer: true, hasProgress: false, waitingForWiFi: true, allowsCellularAccess: false), "Upload wartet auf WLAN.")
+        XCTAssertFalse(ImportPresentationPhase.showsResumeButton(hasRecoverableRun: true, isRunning: true, hasActiveBackgroundTransfer: true, waitingForWiFi: true))
     }
 
     func testActiveConnectivityWaitDoesNotAllowSecondImportOrIdleHelp() {
@@ -593,13 +789,62 @@ final class IOSCoreFlowTests: XCTestCase {
     }
 
     @MainActor
+    func testLoginFlowErrorsExposeSafeDiagnosticCategories() {
+        XCTAssertEqual(LoginFlowError.network.diagnosticCategory, "networkUnavailable")
+        XCTAssertEqual(LoginFlowError.timeout.diagnosticCategory, "timeout")
+        XCTAssertEqual(LoginFlowError.http(403).diagnosticCategory, "httpError")
+        XCTAssertEqual(LoginFlowError.invalidResponse.diagnosticCategory, "invalidLoginFlowResponse")
+        XCTAssertEqual(LoginFlowError.cancelled.diagnosticCategory, "cancelled")
+        XCTAssertTrue(IOSConnectionModel.loginFailureMessage(phase: "polling", category: "pollingTimeout").contains("Zeitüberschreitung"))
+        XCTAssertTrue(IOSConnectionModel.loginFailureMessage(phase: "fetchUserID", category: "userIDRequestFailed").contains("Benutzer-ID"))
+    }
+
+    @MainActor
     func testSavedConnectionStartsInNotTestedState() throws {
         let suite = "apc-ios-tests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let preferences = IOSConnectionPreferences(defaults: defaults, passwordStore: TestPasswordStore())
-        try preferences.save(server: "https://cloud.example", username: "alice", password: "app-password", sourceId: UUID())
+        let sourceId = UUID()
+        try preferences.save(server: "https://cloud.example", username: "alice", password: "app-password", sourceId: sourceId, targetDirectory: "Photos/iPhone")
         XCTAssertEqual(IOSConnectionModel(preferences: preferences).state, .notTested)
+    }
+
+    @MainActor
+    func testDisconnectIsAvailableForStoredCredentialsBeforeValidation() throws {
+        let suite = "apc-ios-disconnect-unvalidated-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = IOSConnectionPreferences(defaults: defaults, passwordStore: TestPasswordStore())
+        try preferences.save(server: "https://cloud.example", username: "alice", password: "app-password", sourceId: UUID())
+        let model = IOSConnectionModel(preferences: preferences)
+
+        XCTAssertTrue(model.hasStoredCredentials)
+        XCTAssertEqual(model.state, .notTested)
+    }
+
+    @MainActor
+    func testDisconnectIsAvailableForStoredCredentialsAfterValidation() throws {
+        let suite = "apc-ios-disconnect-validated-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = IOSConnectionPreferences(defaults: defaults, passwordStore: TestPasswordStore())
+        try preferences.save(server: "https://cloud.example", username: "alice", password: "app-password", sourceId: UUID())
+        let model = IOSConnectionModel(preferences: preferences)
+        model.markConnectionValidated(userID: "alice")
+
+        XCTAssertTrue(model.hasStoredCredentials)
+        XCTAssertEqual(model.state, .connected)
+    }
+
+    @MainActor
+    func testDisconnectIsUnavailableWithoutStoredCredentials() {
+        let suite = "apc-ios-disconnect-empty-\(UUID().uuidString)"
+        let defaults = try! XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let model = IOSConnectionModel(preferences: IOSConnectionPreferences(defaults: defaults, passwordStore: TestPasswordStore()))
+
+        XCTAssertFalse(model.hasStoredCredentials)
     }
 
     @MainActor
@@ -629,6 +874,30 @@ final class IOSCoreFlowTests: XCTestCase {
         let model = IOSConnectionModel(preferences: preferences)
         XCTAssertTrue(model.hasConfiguredConnection)
         XCTAssertEqual(model.state, .notTested)
+    }
+
+    @MainActor
+    func testDisconnectRemovesPersistedCredentialsAndResetsModel() throws {
+        let suite = "apc-ios-disconnect-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let passwordStore = TestPasswordStore()
+        let preferences = IOSConnectionPreferences(defaults: defaults, passwordStore: passwordStore)
+        let sourceId = UUID()
+        try preferences.save(server: "https://cloud.example", username: "alice", password: "app-password", sourceId: sourceId, targetDirectory: "Photos/iPhone")
+        let model = IOSConnectionModel(preferences: preferences)
+        model.markConnectionValidated(userID: "alice")
+
+        try model.disconnect()
+
+        XCTAssertFalse(model.hasConfiguredConnection)
+        XCTAssertEqual(model.state, .notConfigured)
+        XCTAssertEqual(model.loginFlowState, .idle)
+        XCTAssertNil(model.userId)
+        XCTAssertEqual(preferences.load().password, "")
+        XCTAssertEqual(preferences.load().details.server, "")
+        XCTAssertEqual(preferences.load().details.sourceId, sourceId)
+        XCTAssertEqual(preferences.load().details.targetDirectory, "Photos/iPhone")
     }
 
     @MainActor

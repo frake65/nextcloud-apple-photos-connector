@@ -210,7 +210,14 @@ private struct GalleryScreen: View {
             else {
                 LazyVGrid(columns: columns, spacing: 2) {
                     ForEach(assets) { item in
-                        Button { selection.toggle(item) } label: {
+                        Button {
+                            #if DEBUG
+                            let ratio = item.asset.pixelHeight > 0 ? Double(item.asset.pixelWidth) / Double(item.asset.pixelHeight) : 0
+                            let frame = cellFrames[item.id]
+                            print("SELECT SHORT-TAP asset=\(String(item.id.prefix(8))) pixels=\(item.asset.pixelWidth)x\(item.asset.pixelHeight) aspect=\(String(format: "%.3f", ratio)) cellFrame=\(String(describing: frame))")
+                            #endif
+                            selection.toggle(item)
+                        } label: {
                             GeometryReader { proxy in
                                 let side = proxy.size.width
                                 ZStack(alignment: .bottomTrailing) {
@@ -226,8 +233,17 @@ private struct GalleryScreen: View {
                             .aspectRatio(1, contentMode: .fit)
                         }
                         .buttonStyle(.plain)
+                        .frame(maxWidth: .infinity)
                         .background(GeometryReader { proxy in
-                            Color.clear.preference(key: CellFramesKey.self, value: [item.id: proxy.frame(in: .global)])
+                            let frame = proxy.frame(in: .global)
+                            Color.clear
+                                .preference(key: CellFramesKey.self, value: [item.id: frame])
+                                #if DEBUG
+                                .onAppear {
+                                    let ratio = item.asset.pixelHeight > 0 ? Double(item.asset.pixelWidth) / Double(item.asset.pixelHeight) : 0
+                                    print("SELECT CELL asset=\(String(item.id.prefix(8))) pixels=\(item.asset.pixelWidth)x\(item.asset.pixelHeight) aspect=\(String(format: "%.3f", ratio)) frame=(\(frame.minX),\(frame.minY),\(frame.width),\(frame.height))")
+                                }
+                                #endif
                         })
                         .accessibilityLabel(selection.contains(item) ? "Auswahl aufheben" : "Foto auswählen")
                     }
@@ -762,6 +778,17 @@ private struct ThumbnailView: View {
             }
             else { ProgressView().controlSize(.small) }
         }
+        #if DEBUG
+        .background {
+            GeometryReader { proxy in
+                Color.clear.onAppear {
+                    let ratio = asset.pixelHeight > 0 ? Double(asset.pixelWidth) / Double(asset.pixelHeight) : 0
+                    let frame = proxy.frame(in: .global)
+                    print("SELECT THUMBNAIL asset=\(String(asset.localIdentifier.prefix(8))) pixels=\(asset.pixelWidth)x\(asset.pixelHeight) aspect=\(String(format: "%.3f", ratio)) frame=(\(frame.minX),\(frame.minY),\(frame.width),\(frame.height))")
+                }
+            }
+        }
+        #endif
         .onAppear {
             requestID = library.requestThumbnail(for: asset, size: CGSize(width: dimension * UIScreen.main.scale, height: dimension * UIScreen.main.scale)) { image in
                 DispatchQueue.main.async { self.image = image }
@@ -791,7 +818,8 @@ enum ImportPresentationPhase: Equatable {
             if completed > 0, completed >= total { return .albumSync }
             return isVerifyingCompletedUpload ? .serverVerification : .transferring
         case .finished: return .completed
-        case .failed, .cancelled: return .stopped
+        case .cancelling: return .stopped
+        case .interrupted, .failed, .cancelled: return .stopped
         default: return .transferring
         }
     }
@@ -810,6 +838,16 @@ enum ImportPresentationPhase: Equatable {
 
     static func showsCancel(isRunning: Bool, waitingForWiFi: Bool) -> Bool {
         isRunning || waitingForWiFi
+    }
+
+    static func showsResumeButton(hasRecoverableRun: Bool, isRunning: Bool, hasActiveBackgroundTransfer: Bool, waitingForWiFi: Bool) -> Bool {
+        hasRecoverableRun && !isRunning && !hasActiveBackgroundTransfer && !waitingForWiFi
+    }
+
+    static func backgroundTransferMessage(hasActiveBackgroundTransfer: Bool, hasProgress: Bool, waitingForWiFi: Bool, allowsCellularAccess: Bool) -> String? {
+        if waitingForWiFi && !allowsCellularAccess { return "Upload wartet auf WLAN." }
+        guard hasActiveBackgroundTransfer else { return nil }
+        return hasProgress ? "Übertragung läuft …" : "Übertragung wird fortgesetzt …"
     }
 }
 
@@ -843,11 +881,7 @@ private struct InventoryReviewScreen: View {
                 }
             }
             Section("Übertragungen") {
-                Toggle("Mobile Daten für Übertragungen verwenden", isOn: Binding(
-                    get: { connection.useCellularForTransfers },
-                    set: { connection.setUseCellularForTransfers($0) }
-                ))
-                Text("Wenn deaktiviert, werden Fotos und Videos nur über WLAN übertragen.")
+                Text("Mobilfunkverbindungen für Foto- und Videoübertragungen werden in den Einstellungen gesteuert. Anmeldung und Verbindungsprüfung dürfen weiterhin Mobilfunk verwenden.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             #if DEBUG
@@ -920,7 +954,7 @@ private struct InventoryReviewScreen: View {
             #endif
             if let error { Section { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red) } }
             Section("Import") {
-                if let interruptedRun {
+                if let interruptedRun, ImportPresentationPhase.showsResumeButton(hasRecoverableRun: true, isRunning: importer.isRunning, hasActiveBackgroundTransfer: importer.hasActiveBackgroundTransfer, waitingForWiFi: importer.isWaitingForWiFi) {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Unterbrochene Übertragung")
                         Text("Die Übertragung wurde unterbrochen und kann fortgesetzt werden.").font(.caption).foregroundStyle(.secondary)
@@ -929,12 +963,31 @@ private struct InventoryReviewScreen: View {
                     }
                 }
                 let presentation = ImportPresentationPhase.resolve(phase: importer.phase, completed: importer.completed, total: importer.total, isVerifyingCompletedUpload: importer.isVerifyingCompletedUpload)
-                if importer.isWaitingForWiFi {
-                    Text("Warten auf WLAN …").font(.caption).foregroundStyle(.secondary)
-                    Text("Die Übertragung wird fortgesetzt, sobald WLAN bereitsteht.").font(.caption).foregroundStyle(.secondary)
+                if importer.isCancelling {
+                    Text("Übertragung wird abgebrochen …")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else if importer.isWaitingForWiFi {
+                    Text(ImportPresentationPhase.backgroundTransferMessage(hasActiveBackgroundTransfer: importer.hasActiveBackgroundTransfer, hasProgress: !importer.activeTransfers.isEmpty, waitingForWiFi: true, allowsCellularAccess: IOSTransferNetworkPreferences.useCellularAccess()) ?? "Upload wartet auf WLAN.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if !IOSTransferNetworkPreferences.useCellularAccess() {
+                        Text("Mobilfunkübertragungen sind in den Einstellungen deaktiviert.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if importer.total > 0 {
+                        Text("\(importer.completed) von \(importer.total) übertragen")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 } else if importer.hasActiveBackgroundTransfer {
-                    Text("Übertragung läuft …").font(.caption).foregroundStyle(.secondary)
-                    Text("Die Übertragung läuft weiter.").font(.caption).foregroundStyle(.secondary)
+                    if let message = ImportPresentationPhase.backgroundTransferMessage(hasActiveBackgroundTransfer: true, hasProgress: !importer.activeTransfers.isEmpty, waitingForWiFi: false, allowsCellularAccess: IOSTransferNetworkPreferences.useCellularAccess()) {
+                        Text(message).font(.caption).foregroundStyle(.secondary)
+                    }
+                    if importer.activeTransfers.isEmpty {
+                        Text("Die Netzwerkverbindung wurde gewechselt. Der Upload läuft weiter.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Text("\(importer.completed) von \(importer.total) übertragen").font(.caption).foregroundStyle(.secondary)
+                    if importer.uploaded > 0 { Text("Übertragen: \(importer.uploaded)") }
+                    if importer.alreadyPresent > 0 { Text("Bereits vorhanden: \(importer.alreadyPresent)") }
                 } else if presentation == .albumSync {
                     Text("Übertragung abgeschlossen")
                     ProgressView()
@@ -977,7 +1030,7 @@ private struct InventoryReviewScreen: View {
                     }
                     .disabled(!ImportPresentationPhase.allowsNewImport(selectionCount: selection.count, canImport: connectionHasConfiguration))
                 }
-                if ImportPresentationPhase.showsCancel(isRunning: importer.isRunning, waitingForWiFi: importer.isWaitingForWiFi) {
+                if !importer.isCancelling && ImportPresentationPhase.showsCancel(isRunning: importer.isRunning, waitingForWiFi: importer.isWaitingForWiFi) {
                     Button("Import abbrechen") { importer.cancel() }
                 }
                 if ImportPresentationPhase.showsIdleHelp(phase: presentation, isRunning: importer.isRunning, hasActiveBackgroundTransfer: importer.hasActiveBackgroundTransfer, waitingForWiFi: importer.isWaitingForWiFi, hasRecoverableRun: interruptedRun != nil) {
@@ -1002,9 +1055,21 @@ private struct InventoryReviewScreen: View {
         .navigationTitle("Fotos & Videos übertragen")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Fertig") { dismiss() } } }
-        .task { await loadInterruptedRun() }
+        .onAppear { IOSImportDiagnostics.state("UI_RENDER_STATE", values: importer.diagnosticValues()) }
+        .task {
+            await loadInterruptedRun()
+            IOSImportDiagnostics.state("UI_RENDER_STATE", values: importer.diagnosticValues(extra: "afterLifecycleTask"))
+        }
+        .onChange(of: importer.phase) { _, phase in
+            if phase == .interrupted {
+                Task { await loadInterruptedRun() }
+            }
+        }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await loadInterruptedRun() } }
+            if phase == .active {
+                IOSImportDiagnostics.state("UI_RENDER_STATE", values: importer.diagnosticValues(extra: "sceneActive"))
+                Task { await loadInterruptedRun() }
+            }
         }
     }
 
@@ -1054,6 +1119,7 @@ private struct InventoryReviewScreen: View {
             run.sourceID == sourceID && run.account.serverBaseURL == connection.server && run.account.username == connection.username
                 && run.assets.allSatisfy { persistedAsset in library.assets.contains { galleryAsset in galleryAsset.id == persistedAsset.localIdentifier } }
         }
+        if let interruptedRun { importer.restoreRecoverableRun(interruptedRun) }
     }
 
     @MainActor
@@ -1075,6 +1141,7 @@ private struct InventoryReviewScreen: View {
         case .exporting, .hashing, .preparing: "Dateien werden vorbereitet …"
         case .uploading: "Übertragung läuft …"
         case .completing: "Übertragung wird geprüft …"
+        case .interrupted: "Die Übertragung kann fortgesetzt werden."
         case .finished: "Alben werden abgeglichen …"
         default: ""
         }

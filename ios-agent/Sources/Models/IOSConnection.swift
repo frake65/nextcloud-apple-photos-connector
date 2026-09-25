@@ -126,6 +126,17 @@ final class IOSConnectionPreferences {
         try passwordStore.delete(account: account(server: server, username: username))
     }
 
+    func hasStoredCredentials() -> Bool {
+        !load().password.isEmpty
+    }
+
+    func reset() throws {
+        let details = load().details
+        try deletePassword(server: details.server, username: details.username)
+        let resetDetails = IOSConnectionDetails(server: "", username: "", sourceId: details.sourceId, userId: nil, targetDirectory: details.targetDirectory)
+        defaults.set(try JSONEncoder().encode(resetDetails), forKey: key)
+    }
+
     private func account(server: String, username: String) -> String {
         "\(server.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased())|\(username)"
     }
@@ -170,10 +181,12 @@ final class IOSConnectionModel: ObservableObject {
     @Published private(set) var userId: String?
     @Published var useCellularForTransfers: Bool
     @Published private(set) var loginFlowState: IOSLoginFlowState = .idle
+    @Published private(set) var loginFailureMessage: String?
     @Published private(set) var state: IOSConnectionState = .notConfigured
     @Published var isShowingSaveError = false
     private let preferences: IOSConnectionPreferences
     private var loginTask: Task<Void, Never>?
+    private var connectionCheckTask: Task<Void, Never>?
     private var validatedConnection: (server: String, username: String, password: String)?
 
     init(preferences: IOSConnectionPreferences = IOSConnectionPreferences()) {
@@ -191,10 +204,11 @@ final class IOSConnectionModel: ObservableObject {
         IOSImportDiagnostics.log("[Startup] IOSConnectionModel init end")
     }
 
-    deinit { loginTask?.cancel() }
+    deinit { loginTask?.cancel(); connectionCheckTask?.cancel() }
 
     var parsedSourceId: UUID? { UUID(uuidString: sourceId.trimmingCharacters(in: .whitespacesAndNewlines)) }
     var hasConfiguredConnection: Bool { !server.isEmpty && !username.isEmpty && !password.isEmpty }
+    var hasStoredCredentials: Bool { preferences.hasStoredCredentials() }
 
     func save() throws {
         guard let parsedSourceId else { throw UploadError.invalidConfiguration }
@@ -223,6 +237,13 @@ final class IOSConnectionModel: ObservableObject {
     func setUseCellularForTransfers(_ value: Bool) {
         useCellularForTransfers = value
         IOSTransferNetworkPreferences.setUseCellularAccess(value)
+        guard hasConfiguredConnection else { return }
+        loginFlowState = .idle
+        state = .notTested
+        connectionCheckTask?.cancel()
+        connectionCheckTask = Task { @MainActor [weak self] in
+            await self?.testConnection()
+        }
     }
     func showSaveError() { isShowingSaveError = true }
 
@@ -241,20 +262,60 @@ final class IOSConnectionModel: ObservableObject {
     }
 
     func startBrowserLogin() {
+        let flowID = String(UUID().uuidString.prefix(8)).lowercased()
+        IOSImportDiagnostics.log("login[\(flowID)] startBrowserLogin ENTER")
+        IOSImportDiagnostics.log("login[\(flowID)] existing loginTask will be cancelled=\(loginTask != nil)")
+        IOSImportDiagnostics.log("login[\(flowID)] loginFlowState beforeStart=\(loginFlowState)")
         loginTask?.cancel()
+        loginFailureMessage = nil
         loginTask = Task { @MainActor [weak self] in
             guard let self else { return }
             loginFlowState = .starting
+            IOSImportDiagnostics.log("login[\(flowID)] loginFlowState -> starting")
+            var phase = "initiate"
             do {
-                let service = NextcloudLoginFlowService()
+                let service = NextcloudLoginFlowService(diagnostic: { status in
+                    IOSImportDiagnostics.log("login[\(flowID)] polling HTTP status=\(status)")
+                })
+                IOSImportDiagnostics.log("login[\(flowID)] POST /index.php/login/v2 START")
                 let start = try await service.initiate(server: server)
-                guard await UIApplication.shared.open(start.login) else { throw LoginFlowError.network }
+                IOSImportDiagnostics.log("login[\(flowID)] POST /index.php/login/v2 SUCCESS loginHost=\(start.login.host ?? "<missing>") pollHost=\(start.poll.endpoint.host ?? "<missing>")")
+                phase = "browser"
+                IOSImportDiagnostics.log("login[\(flowID)] Browser open START endpoint=login")
+                let browserOpened = await UIApplication.shared.open(start.login)
+                IOSImportDiagnostics.log("login[\(flowID)] Browser open RESULT success=\(browserOpened)")
+                guard browserOpened else { throw LoginFlowError.network }
                 loginFlowState = .waiting
-                let credentials = try await service.poll(start)
-                let userID = try await Self.fetchUserID(server: credentials.server, loginName: credentials.loginName, appPassword: credentials.appPassword)
+                phase = "polling"
+                IOSImportDiagnostics.log("login[\(flowID)] loginFlowState -> waiting")
+                IOSImportDiagnostics.log("login[\(flowID)] polling START")
+                let credentials: LoginFlowCredentials
+                do {
+                    credentials = try await service.poll(start)
+                    IOSImportDiagnostics.log("login[\(flowID)] polling SUCCESS")
+                } catch is CancellationError {
+                    IOSImportDiagnostics.log("login[\(flowID)] polling CANCELLED")
+                    throw CancellationError()
+                } catch LoginFlowError.cancelled {
+                    IOSImportDiagnostics.log("login[\(flowID)] polling CANCELLED")
+                    throw LoginFlowError.cancelled
+                } catch {
+                    IOSImportDiagnostics.log("login[\(flowID)] polling FAILED error=\(String(describing: type(of: error)))")
+                    throw error
+                }
+                phase = "fetchUserID"
+                IOSImportDiagnostics.log("login[\(flowID)] credentials received phase=fetchUserID")
+                let userID: String
+                do { userID = try await Self.fetchUserID(server: credentials.server, loginName: credentials.loginName, appPassword: credentials.appPassword) }
+                catch { throw LoginFlowPhaseError(category: "userIDRequestFailed", phase: phase, message: Self.loginFailureMessage(phase: phase, category: "userIDRequestFailed"), underlying: error) }
                 let connection = try ConnectorConnection(server: credentials.server.absoluteString, authUser: credentials.loginName, davUser: userID, password: credentials.appPassword)
+                phase = "status.php"
                 let validation = await NextcloudConnectionClient(connection: connection).validate()
-                guard validation.result == .success else { throw LoginFlowError.http(validation.statusCode ?? 0) }
+                guard validation.result == .success else {
+                    let category = validation.result == .authenticationFailed ? "authenticationFailed" : "serverValidationFailed"
+                    throw LoginFlowPhaseError(category: category, phase: phase, message: Self.loginFailureMessage(phase: phase, category: category), underlying: LoginFlowError.http(validation.statusCode ?? 0))
+                }
+                phase = "storage"
                 guard let sourceID = parsedSourceId else { throw UploadError.invalidConfiguration }
                 try preferences.save(server: credentials.server.absoluteString, username: credentials.loginName, password: credentials.appPassword, sourceId: sourceID, userId: userID, targetDirectory: targetDirectory)
                 server = credentials.server.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -263,13 +324,31 @@ final class IOSConnectionModel: ObservableObject {
                 userId = userID
                 markConnectionValidated(userID: userID)
                 loginFlowState = .connected(userID: userID)
-            } catch is CancellationError { loginFlowState = .idle }
-            catch LoginFlowError.cancelled { loginFlowState = .idle }
-            catch { loginFlowState = .failed }
+                IOSImportDiagnostics.log("login[\(flowID)] loginFlowState -> connected")
+            } catch is CancellationError { loginFailureMessage = "Anmeldung abgebrochen (cancelled)."; loginFlowState = .idle; IOSImportDiagnostics.log("login[\(flowID)] phase=\(phase) category=cancelled") }
+            catch let error as LoginFlowPhaseError { loginFailureMessage = error.message; loginFlowState = .failed; IOSImportDiagnostics.log("login[\(flowID)] phase=\(error.phase) category=\(error.category) underlying=\(String(describing: type(of: error.underlying)))") }
+            catch let error as LoginFlowError {
+                let category = phase == "polling" && error == .timeout ? "pollingTimeout" : phase == "polling" && error == .network ? "pollingFailed" : error.diagnosticCategory
+                loginFailureMessage = Self.loginFailureMessage(phase: phase, category: category); loginFlowState = .failed; IOSImportDiagnostics.log("login[\(flowID)] phase=\(phase) category=\(category)")
+            }
+            catch { loginFailureMessage = Self.loginFailureMessage(phase: phase, category: "pollingFailed"); loginFlowState = .failed; IOSImportDiagnostics.log("login[\(flowID)] phase=\(phase) category=pollingFailed error=\(String(describing: type(of: error)))") }
         }
     }
 
     func cancelBrowserLogin() { loginTask?.cancel(); loginTask = nil; loginFlowState = .idle }
+
+    func disconnect() throws {
+        loginTask?.cancel()
+        loginTask = nil
+        try preferences.reset()
+        server = ""
+        username = ""
+        password = ""
+        userId = nil
+        validatedConnection = nil
+        loginFlowState = .idle
+        state = .notConfigured
+    }
 
     private static func fetchUserID(server: URL, loginName: String, appPassword: String) async throws -> String {
         let connection = try ConnectorConnection(server: server.absoluteString, user: loginName, password: appPassword)
@@ -288,9 +367,29 @@ final class IOSConnectionModel: ObservableObject {
         return id
     }
 
+    static func loginFailureMessage(phase: String, category: String) -> String {
+        switch category {
+        case "networkUnavailable": return "Anmeldung nicht möglich: kein Netzwerk verfügbar (Phase: \(phase))."
+        case "timeout", "pollingTimeout": return "Anmeldung abgebrochen: Zeitüberschreitung beim Warten auf Nextcloud (Phase: \(phase))."
+        case "authenticationFailed": return "Nextcloud hat die Anmeldung abgelehnt (Phase: \(phase))."
+        case "userIDRequestFailed": return "Die Benutzer-ID konnte nach der Anmeldung nicht geladen werden."
+        case "serverValidationFailed": return "Die Verbindung konnte nach der Anmeldung nicht bestätigt werden."
+        case "invalidLoginFlowResponse": return "Nextcloud lieferte eine ungültige Login-Flow-Antwort (Phase: \(phase))."
+        case "httpError": return "Nextcloud meldete einen HTTP-Fehler (Phase: \(phase))."
+        default: return "Anmeldung fehlgeschlagen (Phase: \(phase), Ursache: \(category))."
+        }
+    }
+
     func makeConnection() throws -> ConnectorConnection {
         try ConnectorConnection(server: server, authUser: username, davUser: userId ?? username, password: password)
     }
+}
+
+private struct LoginFlowPhaseError: Error {
+    let category: String
+    let phase: String
+    let message: String
+    let underlying: Error
 }
 
 enum IOSLoginFlowState: Equatable {

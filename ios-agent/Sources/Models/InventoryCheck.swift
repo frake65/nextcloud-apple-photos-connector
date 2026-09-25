@@ -12,6 +12,7 @@ import Photos
 enum IOSImportDiagnostics {
     private static let processStart = ContinuousClock.now
     static let defaultsKey = "apc.debug.importDiagnostics"
+    static let diagnosticBuildID = "HEAD=f7411d3bda09c8eacab459e34af34b9799887f13 InventoryCheckSHA256=6a1935074571962e623243b7fb2545d5dd5df749618257533adf5e65d39d7433-preinstrumentation"
 #if DEBUG
     nonisolated(unsafe) static var testLogHandler: ((String) -> Void)?
 #endif
@@ -36,6 +37,7 @@ enum IOSImportDiagnostics {
         #endif
         #endif
     }
+    static func state(_ event: String, values: String) { log("APC WAITSTATE \(event) \(values)") }
     static func announceIfEnabled() {
         #if DEBUG
         if enabled { print("APC IMPORT DIAGNOSTICS ENABLED") }
@@ -57,6 +59,28 @@ enum IOSImportDiagnostics {
         else if case let UploadError.http(status) = error { category = "httpStatus=\(status)" }
         else { category = "error=\(String(describing: type(of: error)))" }
         log("\(phase) ERROR elapsed=\(started.duration(to: .now)) \(category)")
+    }
+
+    static func response(step: String, response: DAVResponse, expected: String? = nil, decodeError: Error? = nil) {
+        let method = response.requestMethod ?? "?"
+        let path = response.requestPath ?? step
+        let contentType = response.headers.first { $0.key.lowercased() == "content-type" }?.value ?? "<missing>"
+        var line = "HTTP step=\(step) endpoint=\(path) method=\(method) status=\(response.status) contentType=\(contentType) bytes=\(response.data.count)"
+        if let expected { line += " expected=\(expected)" }
+        if let decodeError { line += " decodeError=\(String(describing: type(of: decodeError)))" }
+        log(line)
+        guard !(200..<300).contains(response.status) || decodeError != nil else { return }
+        guard let object = try? JSONSerialization.jsonObject(with: response.data) as? [String: Any] else {
+            log("HTTP body summary=unavailable")
+            return
+        }
+        let safeKeys = ["error", "message", "code"]
+        let summary = safeKeys.compactMap { key -> String? in
+            guard let value = object[key] as? String else { return nil }
+            let bounded = String(value.prefix(256)).replacingOccurrences(of: "\\n", with: " ")
+            return "\(key)=\(bounded)"
+        }.joined(separator: " ")
+        log(summary.isEmpty ? "HTTP body summary=JSON-without-safe-fields" : "HTTP body summary=\(summary)")
     }
 
     static func memory(phase: String, asset: String? = nil, job: Int? = nil, readMiB: Double? = nil) {
@@ -340,7 +364,7 @@ actor BackgroundTaskBindingStore {
 }
 
 enum BackgroundTransferOutcome: Equatable, Sendable { case success, failure, unknown }
-enum BackgroundTaskReconciliation: Equatable, Sendable { case attached, missingTask, orphanTask, conflictingBinding }
+enum BackgroundTaskReconciliation: Equatable, Sendable { case attached, missingTask, orphanTask, conflictingBinding, networkPolicyChanged }
 
 struct BackgroundTransferNetworkPolicy: Equatable, Sendable {
     let allowsCellularAccess: Bool
@@ -356,12 +380,25 @@ enum ImportConnectivityPolicy {
     static func shouldWait(allowsCellular: Bool, networkSatisfied: Bool, wifiAvailable: Bool) -> Bool {
         !networkSatisfied || (!allowsCellular && !wifiAvailable)
     }
+
+    static func shouldMigrateBackgroundTask(sessionIdentifier: String, wifiSessionIdentifier: String, allowsCellular: Bool) -> Bool {
+        !allowsCellular && sessionIdentifier != wifiSessionIdentifier
+    }
+
+    static func shouldShowWiFiWait(allowsCellular: Bool, wifiAvailable: Bool?, gateWaiting: Bool, cancelling: Bool) -> Bool {
+        !cancelling && !allowsCellular && (wifiAvailable != true || gateWaiting)
+    }
+
+    static func acceptsCallback(callbackGeneration: Int, currentGeneration: Int, cancelling: Bool) -> Bool {
+        !cancelling && callbackGeneration == currentGeneration
+    }
 }
 
 /// Gates the import workflow before each control request. URLSession also
 /// waits for connectivity, but this gate prevents a Wi-Fi-only import from
 /// turning an unavailable path into a misleading server error.
 final class ImportConnectivityGate: @unchecked Sendable {
+    private let instanceID = String(UUID().uuidString.prefix(8))
     private let monitor = NWPathMonitor()
     private let queue = DispatchQueue(label: "de.applephotosconnector.import-connectivity")
     private let lock = NSLock()
@@ -371,10 +408,21 @@ final class ImportConnectivityGate: @unchecked Sendable {
 
     init(waitingHandler: (@Sendable (Bool) -> Void)? = nil) {
         self.waitingHandler = waitingHandler
-        monitor.pathUpdateHandler = { [weak self] _ in self?.resumeIfUsable() }
+        IOSImportDiagnostics.state("GATE_INIT", values: "gate=\(instanceID)")
+        monitor.pathUpdateHandler = { [weak self] _ in
+            guard let self else { return }
+            let path = self.monitor.currentPath
+            IOSImportDiagnostics.state("PATH_CALLBACK", values: "gate=\(self.instanceID) useCellular=\(IOSTransferNetworkPreferences.useCellularAccess()) path=\(path.status) wifiAvailable=\(path.usesInterfaceType(.wifi)) waiting=\(!self.isUsable())")
+            self.waitingHandler?(!self.isUsable())
+            self.resumeIfUsable()
+        }
         monitor.start(queue: queue)
         preferenceObserver = NotificationCenter.default.addObserver(forName: IOSTransferNetworkPreferences.didChangeNotification, object: nil, queue: nil) { [weak self] _ in
-            self?.resumeIfUsable()
+            guard let self else { return }
+            let path = self.monitor.currentPath
+            IOSImportDiagnostics.state("POLICY_NOTIFICATION", values: "gate=\(self.instanceID) useCellular=\(IOSTransferNetworkPreferences.useCellularAccess()) path=\(path.status) wifiAvailable=\(path.usesInterfaceType(.wifi))")
+            self.waitingHandler?(!self.isUsable())
+            self.resumeIfUsable()
         }
     }
 
@@ -446,27 +494,57 @@ final class ImportNetworkTransport: @unchecked Sendable, DAVTransport {
     }
 
     func send(_ request: URLRequest, file: URL?, kind: DAVRequestKind, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> DAVResponse {
-        guard await gate.waitUntilUsable() else { throw CancellationError() }
-        try Task.checkCancellation()
-        do {
-            return try await base.send(request, file: file, kind: kind, progress: progress)
-        } catch let error as URLError where Self.isConnectivityError(error) && !gate.isCurrentlyUsable {
-            IOSImportDiagnostics.log("import connectivity request transient error code=\(error.code.rawValue); waiting for permitted path")
-            guard await gate.waitUntilUsable() else { throw CancellationError() }
-            try Task.checkCancellation()
-            return try await base.send(request, file: file, kind: kind, progress: progress)
+        return try await ImportTransientRequestRetry.run(
+            maxRetries: ImportTransientRequestRetry.maxRetries(for: request),
+            waitUntilUsable: { await gate.waitUntilUsable() },
+            isCurrentlyUsable: { gate.isCurrentlyUsable }
+        ) {
+            try await base.send(request, file: file, kind: kind, progress: progress)
         }
     }
 
-    private static func isConnectivityError(_ error: URLError) -> Bool {
+    static func isTransientConnectivityError(_ error: URLError) -> Bool {
         [.notConnectedToInternet, .networkConnectionLost, .timedOut, .cannotConnectToHost, .dnsLookupFailed].contains(error.code)
+    }
+}
+
+enum ImportTransientRequestRetry {
+    static func maxRetries(for request: URLRequest) -> Int {
+        let method = request.httpMethod?.uppercased()
+        let path = request.url?.path ?? ""
+        if method == "MKCOL" { return 2 }
+        if method == "POST" && (path.hasSuffix("/uploads/prepare") || path.hasSuffix("/uploads/complete")) { return 2 }
+        return 0
+    }
+
+    static func run<Value>(
+        maxRetries: Int,
+        waitUntilUsable: @Sendable () async -> Bool,
+        isCurrentlyUsable: @Sendable () -> Bool,
+        operation: @Sendable () async throws -> Value
+    ) async throws -> Value {
+        var retries = 0
+        while true {
+            guard await waitUntilUsable() else { throw CancellationError() }
+            try Task.checkCancellation()
+            do {
+                return try await operation()
+            } catch let error as URLError where ImportNetworkTransport.isTransientConnectivityError(error) {
+                guard retries < maxRetries else { throw UploadError.networkUnavailable }
+                retries += 1
+                IOSImportDiagnostics.log("import request transient connectivity error attempt=\(retries) code=\(error.code.rawValue)")
+                if isCurrentlyUsable() {
+                    try await Task.sleep(for: .milliseconds(250 * retries))
+                }
+            }
+        }
     }
 }
 
 enum IOSImportTransportFactory {
     static func make(base: (any DAVTransport)? = nil, waitingHandler: (@Sendable (Bool) -> Void)? = nil) -> ImportNetworkTransport {
         let baseTransport = base ?? NetworkTransport(allowsCellularAccess: true, waitsForConnectivity: true, responseDiagnostics: { response in
-            InventoryCheckClient.logInventoryResponse(response)
+            IOSImportDiagnostics.response(step: response.requestPath ?? "network", response: response)
         })
         return ImportNetworkTransport(base: baseTransport, waitingHandler: waitingHandler)
     }
@@ -509,6 +587,14 @@ struct BackgroundPUTTaskStateAggregation: Equatable, Sendable {
 /// Background URLSession adapter for the existing WebDAV PUT contract.
 /// Prepare and Complete remain on the existing DAVTransport path.
 final class BackgroundTransferCoordinator: NSObject, URLSessionTaskDelegate, URLSessionDataDelegate, @unchecked Sendable {
+    private struct TaskKey: Hashable {
+        let sessionIdentifier: String
+        let taskIdentifier: Int
+    }
+    private struct PolicyMigration {
+        let binding: BackgroundTaskBinding
+        let request: URLRequest?
+    }
     static let sessionIdentifier = "com.applephotosconnector.background-webdav-put.v1"
     static let wifiSessionIdentifier = "com.applephotosconnector.background-webdav-put.wifi.v1"
     static let cellularSessionIdentifier = "com.applephotosconnector.background-webdav-put.cellular.v1"
@@ -517,15 +603,28 @@ final class BackgroundTransferCoordinator: NSObject, URLSessionTaskDelegate, URL
     private let fileStore: BackgroundTransferFileStore
     private let queueStore: ImportQueueStore?
     private let lock = NSLock()
-    private var continuations: [Int: CheckedContinuation<DAVResponse, Error>] = [:]
-    private var responses: [Int: (Data, HTTPURLResponse)] = [:]
-    private var progressHandlers: [Int: @Sendable (Int64, Int64) -> Void] = [:]
+    private var continuations: [TaskKey: CheckedContinuation<DAVResponse, Error>] = [:]
+    private var responses: [TaskKey: (Data, HTTPURLResponse)] = [:]
+    private var progressHandlers: [TaskKey: @Sendable (Int64, Int64) -> Void] = [:]
+    private var policyMigrations: [TaskKey: PolicyMigration] = [:]
+    private var cancelledRuns = Set<UUID>()
+    private var policyObserver: NSObjectProtocol?
     private var completionInFlight = Set<UUID>()
     private var connectivityWaitingHandler: (@Sendable (Bool) -> Void)?
     private var putTaskStates = BackgroundPUTTaskStateAggregation()
     private let lifecycleLock = NSLock()
     private var backgroundEventsCompletionHandler: (() -> Void)?
     private var sessions: [String: URLSession] = [:]
+    static func makeBackgroundConfiguration(identifier: String, allowsCellularAccess: Bool) -> URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.background(withIdentifier: identifier)
+        configuration.httpCookieStorage = nil
+        configuration.timeoutIntervalForRequest = 1800
+        configuration.timeoutIntervalForResource = 1800
+        let policy = BackgroundTransferNetworkPolicy(allowsCellularAccess: allowsCellularAccess)
+        configuration.allowsCellularAccess = policy.allowsCellularAccess
+        configuration.waitsForConnectivity = policy.waitsForConnectivity
+        return configuration
+    }
     private func sessionIdentifier(allowsCellular: Bool) -> String {
         allowsCellular ? Self.cellularSessionIdentifier : Self.wifiSessionIdentifier
     }
@@ -533,13 +632,8 @@ final class BackgroundTransferCoordinator: NSObject, URLSessionTaskDelegate, URL
         let identifier = sessionIdentifier(allowsCellular: allowsCellular)
         if let existing = sessions[identifier] { return existing }
         IOSImportDiagnostics.log("background session create identifier=\(identifier)")
-        let configuration = URLSessionConfiguration.background(withIdentifier: identifier)
-        configuration.httpCookieStorage = nil
-        configuration.timeoutIntervalForRequest = 1800
-        configuration.timeoutIntervalForResource = 1800
+        let configuration = Self.makeBackgroundConfiguration(identifier: identifier, allowsCellularAccess: allowsCellular)
         let policy = BackgroundTransferNetworkPolicy(allowsCellularAccess: allowsCellular)
-        configuration.allowsCellularAccess = policy.allowsCellularAccess
-        configuration.waitsForConnectivity = policy.waitsForConnectivity
         IOSImportDiagnostics.log("[NetworkPolicy] mobileTransfersEnabled=\(policy.allowsCellularAccess) allowsCellularAccess=\(configuration.allowsCellularAccess) waitsForConnectivity=\(configuration.waitsForConnectivity) sessionIdentifier=\(identifier)")
         let created = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
         sessions[identifier] = created
@@ -553,11 +647,10 @@ final class BackgroundTransferCoordinator: NSObject, URLSessionTaskDelegate, URL
     private func legacySession() -> URLSession {
         if let existing = sessions[Self.sessionIdentifier] { return existing }
         IOSImportDiagnostics.log("background session reconstruct legacy identifier=\(Self.sessionIdentifier)")
-        let configuration = URLSessionConfiguration.background(withIdentifier: Self.sessionIdentifier)
-        configuration.httpCookieStorage = nil
-        configuration.timeoutIntervalForRequest = 1800
-        configuration.timeoutIntervalForResource = 1800
-        configuration.waitsForConnectivity = true
+        let configuration = Self.makeBackgroundConfiguration(
+            identifier: Self.sessionIdentifier,
+            allowsCellularAccess: IOSTransferNetworkPreferences.useCellularAccess()
+        )
         let created = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
         sessions[Self.sessionIdentifier] = created
         return created
@@ -574,11 +667,36 @@ final class BackgroundTransferCoordinator: NSObject, URLSessionTaskDelegate, URL
         lock.unlock()
         handler?(current)
     }
+    private func isRunCancelled(_ runID: UUID) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return cancelledRuns.contains(runID)
+    }
+    private func markRunCancelled(_ runID: UUID) {
+        lock.lock(); cancelledRuns.insert(runID); lock.unlock()
+    }
+    private func registerPolicyMigration(key: TaskKey, binding: BackgroundTaskBinding, request: URLRequest?) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard policyMigrations[key] == nil else { return false }
+        policyMigrations[key] = PolicyMigration(binding: binding, request: request)
+        return true
+    }
+    private func installContinuation(_ continuation: CheckedContinuation<DAVResponse, Error>?, progress: (@Sendable (Int64, Int64) -> Void)?, for key: TaskKey) {
+        lock.lock(); defer { lock.unlock() }
+        if let continuation { continuations[key] = continuation }
+        if let progress { progressHandlers[key] = progress }
+    }
     init(bindingStore: BackgroundTaskBindingStore = BackgroundTaskBindingStore(), fileStore: BackgroundTransferFileStore = BackgroundTransferFileStore(), queueStore: ImportQueueStore? = nil) {
         self.bindingStore = bindingStore; self.fileStore = fileStore; self.queueStore = queueStore
+        super.init()
         IOSImportDiagnostics.log("background session coordinator initialized/reconstructed identifier=\(Self.sessionIdentifier)")
+        policyObserver = NotificationCenter.default.addObserver(forName: IOSTransferNetworkPreferences.didChangeNotification, object: nil, queue: nil) { [weak self] _ in
+            guard let self, !IOSTransferNetworkPreferences.useCellularAccess() else { return }
+            Task { await self.enforceWiFiOnlyPolicy() }
+        }
     }
+    deinit { if let policyObserver { NotificationCenter.default.removeObserver(policyObserver) } }
     func send(_ request: URLRequest, file: URL, queueAssetID: UUID, localRunID: UUID, uploadAttemptID: UUID, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> DAVResponse {
+        guard !isRunCancelled(localRunID) else { throw CancellationError() }
         guard let url = request.url, url.scheme == "https", let host = url.host else { throw UploadError.invalidConfiguration }
         IOSImportDiagnostics.memory(phase: "transfer-file-prepare-start", asset: queueAssetID.uuidString)
         let prepared = try await fileStore.prepare(source: file, uploadAttemptID: uploadAttemptID)
@@ -591,15 +709,24 @@ final class BackgroundTransferCoordinator: NSObject, URLSessionTaskDelegate, URL
                 IOSImportDiagnostics.memory(phase: "background-upload-task-create-start", asset: queueAssetID.uuidString)
                 let task = activeSession.uploadTask(with: request, fromFile: prepared.url)
                 IOSImportDiagnostics.memory(phase: "background-upload-task-create-end", asset: queueAssetID.uuidString)
-                lock.lock(); continuations[task.taskIdentifier] = continuation; progressHandlers[task.taskIdentifier] = progress; lock.unlock()
+                let sessionIdentifier = activeSession.configuration.identifier ?? Self.sessionIdentifier
+                let callbackKey = TaskKey(sessionIdentifier: sessionIdentifier, taskIdentifier: task.taskIdentifier)
+                installContinuation(continuation, progress: progress, for: callbackKey)
                 task.taskDescription = uploadAttemptID.uuidString
                 IOSImportDiagnostics.log("[BackgroundPUT] task=\(task.taskIdentifier) asset=\(queueAssetID.uuidString.prefix(8)) bytes=\(try? FileManager.default.attributesOfItem(atPath: prepared.url.path)[.size] as? NSNumber ?? 0) policyCellular=\(IOSTransferNetworkPreferences.useCellularAccess())")
-                let sessionIdentifier = sessionIdentifier(allowsCellular: allowsCellular)
-                let key = taskKey(sessionIdentifier: sessionIdentifier, taskIdentifier: task.taskIdentifier)
-                updatePUTTaskState { $0.started(key) }
+                let aggregateKey = taskKey(sessionIdentifier: sessionIdentifier, taskIdentifier: task.taskIdentifier)
+                updatePUTTaskState { $0.started(aggregateKey) }
                 IOSImportDiagnostics.log("background task start taskIdentifier=\(task.taskIdentifier) queueAssetID=\(queueAssetID.uuidString.prefix(8)) uploadAttemptID=\(uploadAttemptID.uuidString) session=\(sessionIdentifier)")
-                Task { let binding = BackgroundTaskBinding(queueAssetID: queueAssetID, localRunID: localRunID, uploadAttemptID: uploadAttemptID, sessionIdentifier: sessionIdentifier, taskIdentifier: task.taskIdentifier, relativeTransferPath: prepared.relativePath, expectedHost: host, targetPath: request.url?.path ?? "", createdAt: Date()); try? await bindingStore.upsert(binding); IOSImportDiagnostics.log("binding created taskIdentifier=\(task.taskIdentifier) queueAssetID=\(queueAssetID.uuidString.prefix(8)) uploadAttemptID=\(uploadAttemptID.uuidString)") }
-                task.resume()
+                let binding = BackgroundTaskBinding(queueAssetID: queueAssetID, localRunID: localRunID, uploadAttemptID: uploadAttemptID, sessionIdentifier: sessionIdentifier, taskIdentifier: task.taskIdentifier, relativeTransferPath: prepared.relativePath, expectedHost: host, targetPath: request.url?.path ?? "", createdAt: Date())
+                Task {
+                    try? await bindingStore.upsert(binding)
+                    IOSImportDiagnostics.log("binding created taskIdentifier=\(task.taskIdentifier) queueAssetID=\(queueAssetID.uuidString.prefix(8)) uploadAttemptID=\(uploadAttemptID.uuidString)")
+                    if !IOSTransferNetworkPreferences.useCellularAccess(), sessionIdentifier != Self.wifiSessionIdentifier {
+                        await self.migrateTaskToWiFi(task, binding: binding)
+                    } else {
+                        task.resume()
+                    }
+                }
                 IOSImportDiagnostics.memory(phase: "background-upload-started", asset: queueAssetID.uuidString)
             }
         } onCancel: {
@@ -643,6 +770,11 @@ final class BackgroundTransferCoordinator: NSObject, URLSessionTaskDelegate, URL
                 IOSImportDiagnostics.log("asset -> needsReconcile queueAssetID=\(binding.queueAssetID.uuidString.prefix(8)) reason=background-binding-conflict; binding removed")
                 result.append(.conflictingBinding); continue
             }
+            let allowsCellular = IOSTransferNetworkPreferences.useCellularAccess()
+            if ImportConnectivityPolicy.shouldMigrateBackgroundTask(sessionIdentifier: binding.sessionIdentifier, wifiSessionIdentifier: Self.wifiSessionIdentifier, allowsCellular: allowsCellular) {
+                await migrateTaskToWiFi(task, binding: binding)
+                result.append(.networkPolicyChanged); continue
+            }
             IOSImportDiagnostics.log("task + binding taskIdentifier=\(binding.taskIdentifier) queueAssetID=\(binding.queueAssetID.uuidString.prefix(8)) uploadAttemptID=\(binding.uploadAttemptID.uuidString)")
             result.append(.attached)
         }
@@ -651,6 +783,65 @@ final class BackgroundTransferCoordinator: NSObject, URLSessionTaskDelegate, URL
             for task in tasks where !boundIDs.contains(task.taskIdentifier) { IOSImportDiagnostics.log("task without binding session=\(identifier) taskIdentifier=\(task.taskIdentifier)"); IOSImportDiagnostics.log("background-task cancel requested reason=reconciliation session=\(identifier) taskIdentifier=\(task.taskIdentifier)"); task.cancel(); result.append(.orphanTask) }
         }
         return result
+    }
+    private func enforceWiFiOnlyPolicy() async {
+        guard !IOSTransferNetworkPreferences.useCellularAccess() else { return }
+        let bindings = await bindingStore.all().filter {
+            ImportConnectivityPolicy.shouldMigrateBackgroundTask(sessionIdentifier: $0.sessionIdentifier, wifiSessionIdentifier: Self.wifiSessionIdentifier, allowsCellular: false)
+        }
+        for binding in bindings {
+            let sourceSession = binding.sessionIdentifier == Self.cellularSessionIdentifier ? session(allowsCellular: true) : legacySession()
+            let tasks = await withCheckedContinuation { continuation in
+                sourceSession.getAllTasks { continuation.resume(returning: $0) }
+            }
+            guard let task = tasks.first(where: { $0.taskIdentifier == binding.taskIdentifier }) else { continue }
+            await migrateTaskToWiFi(task, binding: binding)
+        }
+    }
+
+    private func migrateTaskToWiFi(_ task: URLSessionTask, binding: BackgroundTaskBinding) async {
+        guard !IOSTransferNetworkPreferences.useCellularAccess() else { return }
+        // Stop the less-restricted task even if URLSession cannot provide its
+        // original request. In that exceptional case recovery will reconcile
+        // the persisted asset instead of allowing a cellular PUT to continue.
+        let request = task.originalRequest
+        let oldKey = TaskKey(sessionIdentifier: binding.sessionIdentifier, taskIdentifier: binding.taskIdentifier)
+        let firstRequest = registerPolicyMigration(key: oldKey, binding: binding, request: request)
+        guard firstRequest else { return }
+        try? await queueStore?.markAsset(runID: binding.localRunID, assetID: binding.queueAssetID, state: .needsReconcile, lastConfirmedStep: "cellular-policy-revoked", targetPath: binding.targetPath)
+        IOSImportDiagnostics.log("background-task policy migration requested queueAssetID=\(binding.queueAssetID.uuidString.prefix(8)) runID=\(binding.localRunID.uuidString.prefix(8))")
+        task.suspend()
+        task.cancel()
+    }
+
+    private func resumePolicyMigration(binding: BackgroundTaskBinding, request: URLRequest, oldKey: TaskKey, continuation: CheckedContinuation<DAVResponse, Error>?, progress: (@Sendable (Int64, Int64) -> Void)?) async {
+        guard let url = request.url, url.scheme == "https", url.host != nil else {
+            continuation?.resume(throwing: UploadError.networkUnavailable)
+            return
+        }
+        let file = await fileStore.url(relativePath: binding.relativeTransferPath)
+        let destination = session(allowsCellular: false)
+        let replacement = destination.uploadTask(with: request, fromFile: file)
+        replacement.taskDescription = binding.uploadAttemptID.uuidString
+        let identifier = destination.configuration.identifier ?? Self.wifiSessionIdentifier
+        let replacementKey = TaskKey(sessionIdentifier: identifier, taskIdentifier: replacement.taskIdentifier)
+        let replacementBinding = BackgroundTaskBinding(queueAssetID: binding.queueAssetID, localRunID: binding.localRunID, uploadAttemptID: binding.uploadAttemptID, sessionIdentifier: identifier, taskIdentifier: replacement.taskIdentifier, relativeTransferPath: binding.relativeTransferPath, expectedHost: binding.expectedHost, targetPath: binding.targetPath, createdAt: binding.createdAt)
+        installContinuation(continuation, progress: progress, for: replacementKey)
+        try? await bindingStore.upsert(replacementBinding)
+        guard !IOSTransferNetworkPreferences.useCellularAccess() else {
+            // A preference change while replacing does not make this Wi-Fi
+            // task unsafe; it remains on the restrictive session.
+            IOSImportDiagnostics.log("background-task policy replacement remains wifi-only")
+            let key = taskKey(sessionIdentifier: identifier, taskIdentifier: replacement.taskIdentifier)
+            updatePUTTaskState { $0.started(key) }
+            replacement.resume()
+            return
+        }
+        let key = taskKey(sessionIdentifier: identifier, taskIdentifier: replacement.taskIdentifier)
+        updatePUTTaskState { $0.started(key) }
+        replacement.resume()
+        _ = oldKey
+        IOSImportDiagnostics.log("background-task migrated to wifi-only session queueAssetID=\(binding.queueAssetID.uuidString.prefix(8)) runID=\(binding.localRunID.uuidString.prefix(8))")
     }
     func setBackgroundEventsCompletionHandler(_ handler: @escaping () -> Void) {
         _ = allSessions()
@@ -680,24 +871,69 @@ final class BackgroundTransferCoordinator: NSObject, URLSessionTaskDelegate, URL
     }
     func cancelAll(for uploadAttemptID: UUID) { Task { for binding in await bindingStore.all() where binding.uploadAttemptID == uploadAttemptID { let session = binding.sessionIdentifier == Self.cellularSessionIdentifier ? self.session(allowsCellular: true) : binding.sessionIdentifier == Self.wifiSessionIdentifier ? self.session(allowsCellular: false) : self.legacySession(); session.getAllTasks { tasks in if let task = tasks.first(where: { $0.taskIdentifier == binding.taskIdentifier }) { IOSImportDiagnostics.log("background-task cancel requested reason=swift-task-cancellation session=\(binding.sessionIdentifier) taskIdentifier=\(binding.taskIdentifier) queueAssetID=\(binding.queueAssetID.uuidString.prefix(8)) runID=\(binding.localRunID.uuidString.prefix(8))"); task.cancel() } } } } }
     func cancelAllForRun(_ localRunID: UUID) { Task { for binding in await bindingStore.all() where binding.localRunID == localRunID { let session = binding.sessionIdentifier == Self.cellularSessionIdentifier ? self.session(allowsCellular: true) : binding.sessionIdentifier == Self.wifiSessionIdentifier ? self.session(allowsCellular: false) : self.legacySession(); session.getAllTasks { tasks in if let task = tasks.first(where: { $0.taskIdentifier == binding.taskIdentifier }) { IOSImportDiagnostics.log("background-task cancel requested reason=user-cancel session=\(binding.sessionIdentifier) taskIdentifier=\(binding.taskIdentifier) queueAssetID=\(binding.queueAssetID.uuidString.prefix(8)) runID=\(binding.localRunID.uuidString.prefix(8))"); task.cancel() } } } } }
+    func cancelAllForRunAndRemoveBindings(_ localRunID: UUID) async {
+        markRunCancelled(localRunID)
+        let bindings = await bindingStore.all().filter { $0.localRunID == localRunID }
+        for binding in bindings {
+            let session = binding.sessionIdentifier == Self.cellularSessionIdentifier ? self.session(allowsCellular: true) : binding.sessionIdentifier == Self.wifiSessionIdentifier ? self.session(allowsCellular: false) : self.legacySession()
+            let tasks = await withCheckedContinuation { continuation in
+                session.getAllTasks { continuation.resume(returning: $0) }
+            }
+            if let task = tasks.first(where: { $0.taskIdentifier == binding.taskIdentifier }) {
+                IOSImportDiagnostics.log("background-task cancel requested reason=user-cancel session=\(binding.sessionIdentifier) taskIdentifier=\(binding.taskIdentifier) queueAssetID=\(binding.queueAssetID.uuidString.prefix(8)) runID=\(binding.localRunID.uuidString.prefix(8))")
+                task.cancel()
+            }
+            try? await bindingStore.remove(uploadAttemptID: binding.uploadAttemptID)
+        }
+    }
     func cancelAll() { for (identifier, session) in allSessions() { session.getAllTasks { tasks in tasks.forEach { task in IOSImportDiagnostics.log("background-task cancel requested reason=other session=\(identifier) taskIdentifier=\(task.taskIdentifier)"); task.cancel() } } } }
     func beginComplete(uploadAttemptID: UUID) { lock.lock(); completionInFlight.insert(uploadAttemptID); lock.unlock() }
     func endComplete(uploadAttemptID: UUID) { lock.lock(); completionInFlight.remove(uploadAttemptID); lock.unlock() }
     private func isCompleteInFlight(_ uploadAttemptID: UUID) -> Bool { lock.lock(); defer { lock.unlock() }; return completionInFlight.contains(uploadAttemptID) }
     private func completionInFlightSnapshot() -> Set<UUID> { lock.lock(); defer { lock.unlock() }; return completionInFlight }
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) { completionHandler(nil) }
-    func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64, totalBytesExpectedToSend: Int64) { lock.lock(); let handler = progressHandlers[task.taskIdentifier]; lock.unlock(); let identifier = session.configuration.identifier ?? "unknown"; updatePUTTaskState { $0.sending(taskKey(sessionIdentifier: identifier, taskIdentifier: task.taskIdentifier)) }; IOSImportDiagnostics.log("[BackgroundPUT] task=\(task.taskIdentifier) didSendBodyData=\(bytesSent) totalBytesSent=\(totalBytesSent) expected=\(totalBytesExpectedToSend) state=sending"); handler?(totalBytesSent, totalBytesExpectedToSend) }
+    func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64, totalBytesExpectedToSend: Int64) { let identifier = session.configuration.identifier ?? "unknown"; let key = TaskKey(sessionIdentifier: identifier, taskIdentifier: task.taskIdentifier); lock.lock(); let handler = progressHandlers[key]; let migrating = policyMigrations[key] != nil; lock.unlock(); guard !migrating else { return }; updatePUTTaskState { $0.sending(taskKey(sessionIdentifier: identifier, taskIdentifier: task.taskIdentifier)) }; IOSImportDiagnostics.log("[BackgroundPUT] task=\(task.taskIdentifier) didSendBodyData=\(bytesSent) totalBytesSent=\(totalBytesSent) expected=\(totalBytesExpectedToSend) state=sending"); handler?(totalBytesSent, totalBytesExpectedToSend) }
+    func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
+        guard IOSImportDiagnostics.enabled, task.originalRequest?.httpMethod == "PUT" else { return }
+        func seconds(_ start: Date?, _ end: Date?) -> String {
+            guard let start, let end else { return "unavailable" }
+            return String(format: "%.3f", end.timeIntervalSince(start))
+        }
+        for (index, transaction) in metrics.transactionMetrics.enumerated() {
+            IOSImportDiagnostics.log("[BackgroundPUT] metrics task=\(task.taskIdentifier) transaction=\(index) protocol=\(transaction.networkProtocolName ?? "unknown") queue=\(seconds(transaction.fetchStartDate, transaction.requestStartDate)) request=\(seconds(transaction.requestStartDate, transaction.requestEndDate)) responseWait=\(seconds(transaction.requestEndDate, transaction.responseStartDate)) response=\(seconds(transaction.responseStartDate, transaction.responseEndDate)) bytesSent=\(transaction.countOfRequestBodyBytesSent)")
+        }
+    }
     func urlSession(_ session: URLSession, taskIsWaitingForConnectivity task: URLSessionTask) { let identifier = session.configuration.identifier ?? "unknown"; updatePUTTaskState { $0.waiting(taskKey(sessionIdentifier: identifier, taskIdentifier: task.taskIdentifier)) }; IOSImportDiagnostics.log("background-task waitingForConnectivity session=\(identifier) taskIdentifier=\(task.taskIdentifier) state=waiting") }
-    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) { lock.lock(); if let current = responses[dataTask.taskIdentifier] { responses[dataTask.taskIdentifier] = (current.0 + data, current.1) }; lock.unlock() }
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) { let key = TaskKey(sessionIdentifier: session.configuration.identifier ?? "unknown", taskIdentifier: dataTask.taskIdentifier); lock.lock(); if let current = responses[key] { responses[key] = (current.0 + data, current.1) }; lock.unlock() }
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         let sessionIdentifier = session.configuration.identifier ?? "unknown"
         updatePUTTaskState { $0.completed(taskKey(sessionIdentifier: sessionIdentifier, taskIdentifier: task.taskIdentifier)) }
-        lock.lock(); let continuation = continuations.removeValue(forKey: task.taskIdentifier); let response = responses.removeValue(forKey: task.taskIdentifier); progressHandlers.removeValue(forKey: task.taskIdentifier); lock.unlock()
+        let taskKey = TaskKey(sessionIdentifier: sessionIdentifier, taskIdentifier: task.taskIdentifier)
+        lock.lock(); let continuation = continuations.removeValue(forKey: taskKey); let response = responses.removeValue(forKey: taskKey); let progress = progressHandlers.removeValue(forKey: taskKey); let migration = policyMigrations.removeValue(forKey: taskKey); lock.unlock()
         if let error {
             let nsError = error as NSError
             IOSImportDiagnostics.log("background-task completed session=\(sessionIdentifier) taskIdentifier=\(task.taskIdentifier) errorDomain=\(nsError.domain) errorCode=\(nsError.code)")
             Task { if let binding = await bindingStore.all().first(where: { $0.taskIdentifier == task.taskIdentifier }) { IOSImportDiagnostics.log("background-task completed correlation session=\(binding.sessionIdentifier) taskIdentifier=\(task.taskIdentifier) queueAssetID=\(binding.queueAssetID.uuidString.prefix(8)) uploadAttemptID=\(binding.uploadAttemptID.uuidString)") } }
-            continuation?.resume(throwing: error); return
+            if migration != nil {
+                let shouldDrop: Bool
+                lock.lock(); shouldDrop = cancelledRuns.contains(migration!.binding.localRunID); lock.unlock()
+                if shouldDrop {
+                    continuation?.resume(throwing: CancellationError())
+                } else if let request = migration?.request {
+                    Task { await self.resumePolicyMigration(binding: migration!.binding, request: request, oldKey: taskKey, continuation: continuation, progress: progress) }
+                } else {
+                    Task {
+                        try? await self.bindingStore.remove(uploadAttemptID: migration!.binding.uploadAttemptID)
+                        continuation?.resume(throwing: UploadError.networkUnavailable)
+                    }
+                }
+            } else if let urlError = error as? URLError,
+               [.networkConnectionLost, .notConnectedToInternet, .timedOut, .cannotConnectToHost, .dnsLookupFailed].contains(urlError.code) {
+                continuation?.resume(throwing: UploadError.networkUnavailable)
+            } else {
+                continuation?.resume(throwing: error)
+            }
+            return
         }
         guard let http = (task.response as? HTTPURLResponse) else { IOSImportDiagnostics.log("delegate completion taskIdentifier=\(task.taskIdentifier) error=invalid-response"); continuation?.resume(throwing: UploadError.invalidResponse); return }
         IOSImportDiagnostics.log("background-task completed session=\(sessionIdentifier) taskIdentifier=\(task.taskIdentifier) httpStatus=\(http.statusCode)")
@@ -792,11 +1028,9 @@ enum InventoryCheckClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = Data(json.utf8)
         let phase = IOSImportDiagnostics.start("asset-inventory")
-        let requestTransport = transport ?? NetworkTransport(allowsCellularAccess: true, waitsForConnectivity: false, responseDiagnostics: { response in
-            Self.logInventoryResponse(response)
-        })
+        let requestTransport = transport ?? IOSImportTransportFactory.make()
         let response: DAVResponse
-        do { response = try await requestTransport.send(request, file: nil); IOSImportDiagnostics.finish("asset-inventory", started: phase, detail: "status=\(response.status)") }
+        do { response = try await requestTransport.send(request, file: nil); IOSImportDiagnostics.response(step: "inventory", response: response, expected: "InventoryReply"); IOSImportDiagnostics.finish("asset-inventory", started: phase, detail: "status=\(response.status)") }
         catch let error {
             IOSImportDiagnostics.failure("asset-inventory", started: phase, error: error)
             if case let UploadError.http(status) = error {
@@ -813,9 +1047,11 @@ enum InventoryCheckClient {
         do {
             decoded = try JSONDecoder().decode(InventoryReply.self, from: response.data)
         } catch let error as DecodingError {
+            IOSImportDiagnostics.response(step: "inventory", response: response, expected: "InventoryReply", decodeError: error)
             IOSImportDiagnostics.log(Self.decodingDiagnostic(error))
             throw InventoryCheckError.invalidResponse
         } catch {
+            IOSImportDiagnostics.response(step: "inventory", response: response, expected: "InventoryReply", decodeError: error)
             IOSImportDiagnostics.log("Inventory decoding failed error=\(String(describing: type(of: error)))")
             throw InventoryCheckError.invalidResponse
         }
@@ -883,7 +1119,7 @@ enum IOSUploadPath {
 }
 
 enum IOSAlbumSyncClient {
-    static func inventoryAndSync(connection: ConnectorConnection, source: PhotoSource, albums: [AlbumInventory], selectedAssets: [AssetInventory], transport: any DAVTransport = NetworkTransport()) async throws {
+    static func inventoryAndSync(connection: ConnectorConnection, source: PhotoSource, albums: [AlbumInventory], selectedAssets: [AssetInventory], transport: any DAVTransport = IOSImportTransportFactory.make()) async throws {
         let document = AlbumInventoryDocument(source: source, albums: albums)
         IOSImportDiagnostics.log("album-inventory-build OK albums=\(albums.count) memberships=\(albums.reduce(0) { $0 + $1.assetIdentities.count })")
         var request = connection.request(path: ["index.php", "apps", "apple_photos_connector", "api", "v1", "albums", "inventory"], method: "POST")
@@ -891,7 +1127,7 @@ enum IOSAlbumSyncClient {
         request.httpBody = try JSONEncoder().encode(document)
         let inventoryPhase = IOSImportDiagnostics.start("albums/inventory")
         let response: DAVResponse
-        do { response = try await transport.send(request, file: nil); IOSImportDiagnostics.finish("albums/inventory", started: inventoryPhase, detail: "status=\(response.status)") }
+        do { response = try await transport.send(request, file: nil); IOSImportDiagnostics.response(step: "albums/inventory", response: response); IOSImportDiagnostics.finish("albums/inventory", started: inventoryPhase, detail: "status=\(response.status)") }
         catch { IOSImportDiagnostics.failure("albums/inventory", started: inventoryPhase, error: error); throw error }
         guard (200..<300).contains(response.status) else { throw UploadError.http(response.status) }
         let selectedAlbumIDs = albums.filter { album in
@@ -902,7 +1138,7 @@ enum IOSAlbumSyncClient {
         sync.httpBody = try JSONSerialization.data(withJSONObject: ["sourceId": source.sourceId.uuidString.lowercased(), "selectedAlbumIDs": selectedAlbumIDs, "selectedAssetIDs": selectedAssets.map(\.stableIdentity)])
         let syncPhase = IOSImportDiagnostics.start("albums/sync")
         let syncResponse: DAVResponse
-        do { syncResponse = try await transport.send(sync, file: nil); IOSImportDiagnostics.finish("albums/sync", started: syncPhase, detail: "status=\(syncResponse.status)") }
+        do { syncResponse = try await transport.send(sync, file: nil); IOSImportDiagnostics.response(step: "albums/sync", response: syncResponse); IOSImportDiagnostics.finish("albums/sync", started: syncPhase, detail: "status=\(syncResponse.status)") }
         catch { IOSImportDiagnostics.failure("albums/sync", started: syncPhase, error: error); throw error }
         guard (200..<300).contains(syncResponse.status) else { throw UploadError.http(syncResponse.status) }
     }
@@ -915,6 +1151,7 @@ struct IOSAssetJobScheduler {
         let index: Int
         let result: Result?
         let errorDescription: String?
+        let isTransientConnectivity: Bool
     }
 
     static func run<Result: Sendable>(count: Int, maxConcurrent: Int = 2, operation: @escaping @Sendable (Int) async throws -> Result) async throws -> [Result] {
@@ -950,11 +1187,14 @@ struct IOSAssetJobScheduler {
             func launch(_ index: Int) {
                 group.addTask {
                     do {
-                        return CollectedResult(index: index, result: try await operation(index), errorDescription: nil)
+                        return CollectedResult(index: index, result: try await operation(index), errorDescription: nil, isTransientConnectivity: false)
                     } catch is CancellationError {
                         throw CancellationError()
                     } catch {
-                        return CollectedResult(index: index, result: nil, errorDescription: String(describing: error))
+                        let isTransient: Bool
+                        if let uploadError = error as? UploadError, case .networkUnavailable = uploadError { isTransient = true }
+                        else { isTransient = false }
+                        return CollectedResult(index: index, result: nil, errorDescription: String(describing: error), isTransientConnectivity: isTransient)
                     }
                 }
                 running += 1
@@ -976,7 +1216,7 @@ struct IOSAssetJobScheduler {
 /// iOS target while reusing the shared WebDAV uploader and content identity.
 @MainActor
 final class IOSForegroundImportCoordinator: ObservableObject {
-    enum Phase: Equatable { case idle, inventory, exporting, hashing, preparing, uploading, completing, finished, failed, cancelled }
+    enum Phase: Equatable { case idle, inventory, exporting, hashing, preparing, uploading, completing, interrupted, cancelling, finished, failed, cancelled }
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var currentFilename: String?
     @Published private(set) var completed = 0
@@ -993,15 +1233,45 @@ final class IOSForegroundImportCoordinator: ObservableObject {
     private let queueStore: ImportQueueStore
     private let backgroundTransfer: BackgroundTransferCoordinator
     private var activeRunID: UUID?
+    private var gateWaitingForWiFi = false
+    private var backgroundWaitingForConnectivity = false
+    private var stateGeneration = 0
+    private let instanceID = String(UUID().uuidString.prefix(8))
+    private let policyPathMonitor = NWPathMonitor()
+    private let policyPathQueue = DispatchQueue(label: "de.applephotosconnector.import-policy-path")
+    nonisolated(unsafe) private var policyPathObserver: NSObjectProtocol?
+    private var currentWiFiAvailable: Bool?
     private var transferProgress = IOSImportProgressAggregation()
     private var pendingCompletion = Set<Int>()
     init(queueStore: ImportQueueStore? = nil) {
         let store = queueStore ?? ImportQueueStore()
         self.queueStore = store
         self.backgroundTransfer = queueStore == nil ? BackgroundTransferCoordinator.shared : BackgroundTransferCoordinator(queueStore: store)
-        self.backgroundTransfer.setConnectivityWaitingHandler { [weak self] waiting in
-            Task { @MainActor in self?.isWaitingForWiFi = waiting && !IOSTransferNetworkPreferences.useCellularAccess() }
+        isWaitingForWiFi = !IOSTransferNetworkPreferences.useCellularAccess()
+        policyPathMonitor.pathUpdateHandler = { [weak self] path in
+            let wifiAvailable = path.status == .satisfied && path.usesInterfaceType(.wifi)
+            Task { @MainActor in self?.updatePolicyPath(wifiAvailable: wifiAvailable) }
         }
+        policyPathMonitor.start(queue: policyPathQueue)
+        policyPathObserver = NotificationCenter.default.addObserver(forName: IOSTransferNetworkPreferences.didChangeNotification, object: nil, queue: nil) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.recomputeWaitingState()
+            }
+        }
+        self.backgroundTransfer.setConnectivityWaitingHandler { [weak self] waiting in
+            Task { @MainActor in
+                guard let self else { return }
+                IOSImportDiagnostics.state("BACKGROUND_CALLBACK", values: self.diagnosticValues(extra: "waiting=\(waiting)"))
+                self.updateBackgroundWaiting(waiting)
+            }
+        }
+        IOSImportDiagnostics.log("APC DIAGNOSTIC BUILD \(IOSImportDiagnostics.diagnosticBuildID)")
+        IOSImportDiagnostics.state("COORDINATOR_INIT", values: diagnosticValues())
+    }
+    deinit {
+        policyPathMonitor.cancel()
+        if let policyPathObserver { NotificationCenter.default.removeObserver(policyPathObserver) }
     }
     nonisolated static func completedAssetCount(in run: PersistedImportRun) -> Int {
         run.assets.reduce(into: 0) { count, asset in
@@ -1017,7 +1287,8 @@ final class IOSForegroundImportCoordinator: ObservableObject {
         if completed >= total { return 1 }
         return min(0.999, (Double(completed + pendingCompletion.count) + transferProgress.activeFraction) / Double(total))
     }
-    var isRunning: Bool { hasActiveBackgroundTransfer || ![.idle, .finished, .failed, .cancelled].contains(phase) }
+    var isCancelling: Bool { phase == .cancelling }
+    var isRunning: Bool { hasActiveBackgroundTransfer || ![.idle, .interrupted, .finished, .failed, .cancelled].contains(phase) }
     var activeTransfers: [(job: Int, sent: Int64, total: Int64)] { transferProgress.activeEntries }
     /// The server-side verification is only the visible phase when no other
     /// asset is still sending PUT bytes.
@@ -1036,28 +1307,69 @@ final class IOSForegroundImportCoordinator: ObservableObject {
     }
 
     func cancel() {
+        guard !isCancelling else { return }
         IOSImportDiagnostics.memory(phase: "import-cancel-requested")
         IOSImportDiagnostics.log("cancel requested")
-        phase = .cancelled
+        phase = .cancelling
+        stateGeneration &+= 1
+        gateWaitingForWiFi = false
+        backgroundWaitingForConnectivity = false
+        let runID = activeRunID
         task?.cancel()
-        if let runID = activeRunID {
-            backgroundTransfer.cancelAllForRun(runID)
+        task = nil
+        guard let runID else {
             hasActiveBackgroundTransfer = false
             isWaitingForWiFi = false
-            activeRunID = nil
-            IOSImportDiagnostics.log("cancel queue-state=cancelled")
-            Task { try? await queueStore.markRun(runID: runID, state: .cancelled, albumSyncPending: false) }
+            phase = .cancelled
+            IOSImportDiagnostics.log("cancel completed without active run")
+            return
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            await self.backgroundTransfer.cancelAllForRunAndRemoveBindings(runID)
+            try? await self.queueStore.markRun(runID: runID, state: .cancelled, albumSyncPending: false)
+            self.hasActiveBackgroundTransfer = false
+            self.isWaitingForWiFi = false
+            self.activeRunID = nil
+            self.phase = .cancelled
+            IOSImportDiagnostics.log("cancel completed queue-state=cancelled")
         }
         IOSImportDiagnostics.log("cancel swift-task")
     }
 
     func recoverableRuns() async -> [PersistedImportRun] { await queueStore.recoverableRuns() }
     func reconcileBackgroundTasks() async {
+        guard !isCancelling else { return }
+        IOSImportDiagnostics.state("RECONCILE", values: diagnosticValues())
         let result = await backgroundTransfer.reconcileTasks(queueStore: queueStore)
         let active = await backgroundTransfer.activeBindings(queueStore: queueStore)
+        if let binding = active.first,
+           let run = await queueStore.run(localRunID: binding.localRunID) {
+            activeRunID = run.localRunID
+            restoreMetrics(from: run)
+            if phase == .idle || phase == .cancelled || phase == .failed {
+                phase = run.state == .assetsComplete || run.state == .albumSyncPending ? .completing : .uploading
+            }
+        }
+        recomputeWaitingState()
         hasActiveBackgroundTransfer = !active.isEmpty
         if !active.isEmpty { IOSImportDiagnostics.log("run exposed as active count=\(active.count)") }
         else if !result.isEmpty { IOSImportDiagnostics.log("run exposed as recoverable") }
+    }
+
+    func restoreRecoverableRun(_ run: PersistedImportRun) {
+        guard !isRunning, !isCancelling else { return }
+        total = run.assets.count
+        restoreMetrics(from: run)
+        currentFilename = nil
+        transferProgress = IOSImportProgressAggregation()
+        transferSentBytes = 0
+        transferTotalBytes = 0
+        pendingCompletion.removeAll()
+        if phase == .idle || phase == .failed || phase == .cancelled {
+            phase = .interrupted
+        }
+        IOSImportDiagnostics.state("RECOVERABLE_RUN_RESTORED", values: diagnosticValues(extra: "completed=\(completed) total=\(total)"))
     }
 
     func start(selection: [GalleryAsset], library: PhotoLibraryModel, connection: ConnectorConnection, source: PhotoSource, targetRoot: String, transport: (any DAVTransport)? = nil, resumeRun: PersistedImportRun? = nil) {
@@ -1066,10 +1378,15 @@ final class IOSForegroundImportCoordinator: ObservableObject {
         // The gate applies the current import policy before each request. The
         // underlying session remains able to use cellular data so AUS → EIN
         // can release a waiting import without recreating its task/session.
+        stateGeneration &+= 1
+        let generation = stateGeneration
+        IOSImportDiagnostics.state("IMPORT_START", values: diagnosticValues(extra: "generation=\(generation)"))
         let importTransport = IOSImportTransportFactory.make(base: transport) { [weak self] waiting in
-            Task { @MainActor in self?.isWaitingForWiFi = waiting && !IOSTransferNetworkPreferences.useCellularAccess() }
+            Task { @MainActor in self?.updateGateWaiting(waiting, generation: generation) }
         }
-        cancel(); if resumeRun != nil { IOSImportDiagnostics.memory(phase: "resume-after-old-task-cancel") }; isWaitingForWiFi = false; phase = .inventory; failure = nil; completed = resumeRun.map { Self.completedAssetCount(in: $0) } ?? 0; uploaded = 0; alreadyPresent = 0; reconciled = 0; transferProgress = IOSImportProgressAggregation(); pendingCompletion = []; transferSentBytes = 0; transferTotalBytes = 0; total = selection.count
+        if task != nil || activeRunID != nil || hasActiveBackgroundTransfer { cancel() }
+        if isCancelling { return }
+        if resumeRun != nil { IOSImportDiagnostics.memory(phase: "resume-after-old-task-cancel") }; gateWaitingForWiFi = false; backgroundWaitingForConnectivity = false; isWaitingForWiFi = false; phase = .inventory; failure = nil; completed = resumeRun.map { Self.completedAssetCount(in: $0) } ?? 0; uploaded = 0; alreadyPresent = 0; reconciled = 0; transferProgress = IOSImportProgressAggregation(); pendingCompletion = []; transferSentBytes = 0; transferTotalBytes = 0; total = selection.count
         let targetRootSnapshot = IOSTargetDirectoryPreferences.normalize(targetRoot)
         task = Task { [weak self] in
             guard let self else { return }
@@ -1121,6 +1438,27 @@ final class IOSForegroundImportCoordinator: ObservableObject {
                 try await IOSAlbumSyncClient.inventoryAndSync(connection: connection, source: source, albums: albums, selectedAssets: assets, transport: importTransport)
                 try await queueStore.markRun(runID: runID, state: .completed, albumSyncPending: false)
                 self.finish()
+            } catch UploadError.networkUnavailable {
+                self.failure = nil
+                self.gateWaitingForWiFi = !IOSTransferNetworkPreferences.useCellularAccess()
+                self.recomputeWaitingState()
+                if let runID = self.activeRunID {
+                    let savedRun = await self.queueStore.run(localRunID: runID)
+                    let allAssetsComplete = savedRun?.assets.allSatisfy { $0.state == .completed } == true
+                    try? await self.queueStore.markRun(runID: runID, state: allAssetsComplete ? .assetsComplete : .assetProcessing, albumSyncPending: allAssetsComplete)
+                    if let refreshedRun = await self.queueStore.run(localRunID: runID) {
+                        self.total = max(self.total, refreshedRun.assets.count)
+                        self.restoreMetrics(from: refreshedRun)
+                    }
+                }
+                self.transferProgress = IOSImportProgressAggregation()
+                self.transferSentBytes = 0
+                self.transferTotalBytes = 0
+                self.pendingCompletion.removeAll()
+                self.currentFilename = nil
+                await self.reconcileBackgroundTasks()
+                self.phase = .interrupted
+                IOSImportDiagnostics.log("import connectivity lost; queue retained for recovery")
             } catch is CancellationError { IOSImportDiagnostics.memory(phase: "import-task-cancelled"); self.cancelled() }
             catch { self.failed(error.localizedDescription) }
         }
@@ -1156,9 +1494,21 @@ final class IOSForegroundImportCoordinator: ObservableObject {
                 self.apply(result.1, job: outcome.index, filename: assets[outcome.index].filename ?? selection[outcome.index].asset.localIdentifier)
             } else {
                 let message = outcome.errorDescription ?? "Asset-Import fehlgeschlagen."
-                failures.append(message)
-                try await queueStore.markAsset(runID: runID, assetID: persistedAssets[outcome.index].queueAssetID, state: .failed, lastConfirmedStep: "asset-failed")
+                if outcome.isTransientConnectivity {
+                    try await queueStore.markAsset(runID: runID, assetID: persistedAssets[outcome.index].queueAssetID, state: .needsReconcile, lastConfirmedStep: "connectivity-lost")
+                } else {
+                    failures.append(message)
+                    try await queueStore.markAsset(runID: runID, assetID: persistedAssets[outcome.index].queueAssetID, state: .failed, lastConfirmedStep: "asset-failed")
+                }
             }
+        }
+        await reconcileBackgroundTasks()
+        if let savedRun = await queueStore.run(localRunID: runID) {
+            total = max(total, savedRun.assets.count)
+            restoreMetrics(from: savedRun)
+        }
+        if outcomes.contains(where: { $0.isTransientConnectivity }) {
+            throw UploadError.networkUnavailable
         }
         if let firstFailure = failures.first {
             throw UploadError.diagnostic(firstFailure)
@@ -1251,20 +1601,71 @@ final class IOSForegroundImportCoordinator: ObservableObject {
     }
 
     private func updateTransferProgress(job: Int, sent: Int64, total: Int64) {
+        guard !isCancelling, phase != .cancelled else { return }
         transferProgress.update(job: job, sent: sent, total: total)
         transferSentBytes = transferProgress.sentBytes
         transferTotalBytes = transferProgress.totalBytes
     }
 
+    private func updateGateWaiting(_ waiting: Bool, generation: Int) {
+        IOSImportDiagnostics.state("GATE_CALLBACK", values: diagnosticValues(extra: "waiting=\(waiting) callbackGeneration=\(generation)"))
+        guard ImportConnectivityPolicy.acceptsCallback(callbackGeneration: generation, currentGeneration: stateGeneration, cancelling: isCancelling) else { return }
+        gateWaitingForWiFi = waiting
+        recomputeWaitingState()
+    }
+
+    private func updateBackgroundWaiting(_ waiting: Bool) {
+        guard !isCancelling else { return }
+        backgroundWaitingForConnectivity = waiting
+        recomputeWaitingState()
+    }
+
+    private func recomputeWaitingState() {
+        guard !isCancelling else { return }
+        // The gate is the authoritative policy-aware source. Background
+        // activity is retained separately for UI/reconciliation diagnostics;
+        // it must not clear a policy wait merely because a URLSession task is
+        // technically still bound or reports waiting=false.
+        isWaitingForWiFi = ImportConnectivityPolicy.shouldShowWiFiWait(
+            allowsCellular: IOSTransferNetworkPreferences.useCellularAccess(),
+            wifiAvailable: currentWiFiAvailable,
+            gateWaiting: gateWaitingForWiFi,
+            cancelling: isCancelling
+        )
+        IOSImportDiagnostics.state("RECOMPUTE_WAITING", values: diagnosticValues())
+    }
+
+    private func updatePolicyPath(wifiAvailable: Bool) {
+        guard !isCancelling else { return }
+        currentWiFiAvailable = wifiAvailable
+        gateWaitingForWiFi = !IOSTransferNetworkPreferences.useCellularAccess() && !wifiAvailable
+        recomputeWaitingState()
+    }
+
+    func diagnosticValues(extra: String = "") -> String {
+        let run = activeRunID.map { String($0.uuidString.prefix(8)) } ?? "<none>"
+        let suffix = extra.isEmpty ? "" : " \(extra)"
+        return "coordinator=\(instanceID) run=\(run) generation=\(stateGeneration) useCellular=\(IOSTransferNetworkPreferences.useCellularAccess()) gateWaiting=\(gateWaitingForWiFi) backgroundWaiting=\(backgroundWaitingForConnectivity) isWaiting=\(isWaitingForWiFi) activeBackground=\(hasActiveBackgroundTransfer) running=\(isRunning) phase=\(phase)\(suffix)"
+    }
+
+    func restoreMetrics(from run: PersistedImportRun) {
+        guard !run.assets.isEmpty else { return }
+        total = run.assets.count
+        completed = Self.completedAssetCount(in: run)
+        alreadyPresent = run.assets.filter { $0.state == .completed && ($0.lastConfirmedStep.contains("known") || $0.lastConfirmedStep.contains("reconciled")) }.count
+        reconciled = run.assets.filter { $0.state == .completed && $0.lastConfirmedStep.contains("reconciled") }.count
+        uploaded = max(0, completed - alreadyPresent)
+    }
+
     private func setCurrent(_ asset: PHAsset, filename: String?) { currentFilename = filename ?? asset.localIdentifier }
     private func setProgress(_ _: Double) {}
-    private func setPhase(_ value: Phase) { phase = value }
+    private func setPhase(_ value: Phase) { guard !isCancelling else { return }; phase = value }
     private func markAlready() { alreadyPresent += 1; completed += 1 }
     private func markUploaded() { uploaded += 1; completed += 1 }
     private func markReconciled() { reconciled += 1; alreadyPresent += 1; completed += 1 }
-    private func finish() { phase = .finished }
-    private func cancelled() { phase = .cancelled; if let runID = activeRunID { Task { try? await queueStore.markRun(runID: runID, state: .cancelled, albumSyncPending: false) } } }
-    private func failed(_ message: String) { failure = message; phase = .failed; if let runID = activeRunID { Task { try? await queueStore.markRun(runID: runID, state: .failed) } } }
+    private func finish() { guard !isCancelling else { return }; hasActiveBackgroundTransfer = false; phase = .finished }
+    private func cancelled() { guard !isCancelling else { return }; phase = .cancelled; if let runID = activeRunID { Task { try? await queueStore.markRun(runID: runID, state: .cancelled, albumSyncPending: false) } } }
+    private func failed(_ message: String) { guard !isCancelling else { return }; failure = message; phase = .failed; if let runID = activeRunID { Task { try? await queueStore.markRun(runID: runID, state: .failed) } } }
 }
 
 private struct IOSUploadTargets: UploadTargetProvider {
@@ -1283,10 +1684,11 @@ private enum IOSUploadHTTP {
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let phase = IOSImportDiagnostics.start(endpoint)
         let response: DAVResponse
-        do { response = try await transport.send(request, file: nil); IOSImportDiagnostics.finish(endpoint, started: phase, detail: "status=\(response.status)") }
+        do { response = try await transport.send(request, file: nil); IOSImportDiagnostics.response(step: endpoint, response: response, expected: "UploadTarget"); IOSImportDiagnostics.finish(endpoint, started: phase, detail: "status=\(response.status)") }
         catch { IOSImportDiagnostics.failure(endpoint, started: phase, error: error); throw error }
         guard (200..<300).contains(response.status) else { throw UploadError.http(response.status) }
-        return try JSONDecoder().decode(UploadTarget.self, from: response.data)
+        do { return try JSONDecoder().decode(UploadTarget.self, from: response.data) }
+        catch { IOSImportDiagnostics.response(step: endpoint, response: response, expected: "UploadTarget", decodeError: error); throw error }
     }
     static func complete(connection: ConnectorConnection, transport: any DAVTransport, source: String, runId: String, uploadId: String, path: String, queueAssetID: UUID? = nil, uploadAttemptID: UUID? = nil) async throws {
         var request = connection.request(path: ["index.php", "apps", "apple_photos_connector", "api", "v1", "uploads", "complete"], method: "POST")
@@ -1295,7 +1697,7 @@ private enum IOSUploadHTTP {
         let correlation = [queueAssetID.map { "queueAssetID=\($0.uuidString.prefix(8))" }, uploadAttemptID.map { "uploadAttemptID=\($0.uuidString)" }].compactMap { $0 }.joined(separator: " ")
         let phase = IOSImportDiagnostics.start("uploads/complete \(correlation)")
         let response: DAVResponse
-        do { response = try await transport.send(request, file: nil, kind: .longRunningVerification, progress: nil); IOSImportDiagnostics.finish("uploads/complete", started: phase, detail: "status=\(response.status)") }
+        do { response = try await transport.send(request, file: nil, kind: .longRunningVerification, progress: nil); IOSImportDiagnostics.response(step: "uploads/complete", response: response); IOSImportDiagnostics.finish("uploads/complete", started: phase, detail: "status=\(response.status)") }
         catch { IOSImportDiagnostics.failure("uploads/complete", started: phase, error: error); throw error }
         guard (200..<300).contains(response.status) else { throw UploadError.http(response.status) }
     }

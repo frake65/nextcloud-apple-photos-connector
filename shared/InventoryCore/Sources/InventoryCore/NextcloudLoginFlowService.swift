@@ -19,6 +19,16 @@ public struct LoginFlowCredentials: Decodable, Sendable {
 
 public enum LoginFlowError: Error, Sendable, Equatable {
     case invalidServer, invalidResponse, invalidReturnedURL, timeout, cancelled, http(Int), network
+
+    public var diagnosticCategory: String {
+        switch self {
+        case .invalidServer, .invalidResponse, .invalidReturnedURL: return "invalidLoginFlowResponse"
+        case .timeout: return "timeout"
+        case .cancelled: return "cancelled"
+        case .http: return "httpError"
+        case .network: return "networkUnavailable"
+        }
+    }
 }
 
 /// Nextcloud Login Flow v2 client. Tokens and returned passwords exist only in memory.
@@ -26,9 +36,10 @@ public struct NextcloudLoginFlowService: Sendable {
     public let transport: any DAVTransport
     public let pollInterval: Duration
     public let timeout: Duration
+    public let diagnostic: (@Sendable (Int) -> Void)?
 
-    public init(transport: any DAVTransport = NetworkTransport(), pollInterval: Duration = .seconds(1), timeout: Duration = .seconds(1200)) {
-        self.transport = transport; self.pollInterval = pollInterval; self.timeout = timeout
+    public init(transport: any DAVTransport = NetworkTransport(), pollInterval: Duration = .seconds(1), timeout: Duration = .seconds(1200), diagnostic: (@Sendable (Int) -> Void)? = nil) {
+        self.transport = transport; self.pollInterval = pollInterval; self.timeout = timeout; self.diagnostic = diagnostic
     }
 
     public func initiate(server: String) async throws -> LoginFlowStartResponse {
@@ -55,6 +66,7 @@ public struct NextcloudLoginFlowService: Sendable {
             request.httpBody = "token=\(Self.formEncode(start.poll.token))".data(using: .utf8)
             do {
                 let response = try await transport.send(request, file: nil)
+                diagnostic?(response.status)
                 if response.status == 404 { try await Task.sleep(for: pollInterval); continue }
                 guard (200..<300).contains(response.status) else { throw LoginFlowError.http(response.status) }
                 guard let credentials = try? JSONDecoder().decode(LoginFlowCredentials.self, from: response.data), !credentials.loginName.isEmpty, !credentials.appPassword.isEmpty, Self.isSecure(credentials.server) else { throw LoginFlowError.invalidResponse }

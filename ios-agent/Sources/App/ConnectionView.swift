@@ -4,6 +4,7 @@ struct ConnectionView: View {
     @ObservedObject var model: IOSConnectionModel
     private enum Field: Hashable { case server, username, password, targetDirectory }
     @FocusState private var focusedField: Field?
+    @State private var isShowingDisconnectConfirmation = false
     #if DEBUG
     @State private var diagnosticsEnabled = IOSImportDiagnostics.enabled
     #endif
@@ -25,7 +26,12 @@ struct ConnectionView: View {
                 } else if case .connected = model.loginFlowState {
                     Text("Verbunden als \(model.username)")
                 } else if model.loginFlowState == .failed {
-                    Text("Die Anmeldung konnte nicht abgeschlossen werden.").font(.footnote).foregroundStyle(.red)
+                    Text(model.loginFailureMessage ?? "Die Anmeldung konnte nicht abgeschlossen werden.").font(.footnote).foregroundStyle(.red)
+                }
+                if model.hasStoredCredentials {
+                    Button("Verbindung trennen", role: .destructive) {
+                        isShowingDisconnectConfirmation = true
+                    }
                 }
             }
 
@@ -46,6 +52,15 @@ struct ConnectionView: View {
                 }
                 Button("Verbindung testen") { Task { await model.testConnection() } }
                     .disabled(model.state == .checking || model.server.isEmpty || model.username.isEmpty || model.password.isEmpty)
+            }
+
+            Section("Netzwerk") {
+                Toggle("Mobilfunkverbindungen erlauben", isOn: Binding(
+                    get: { model.useCellularForTransfers },
+                    set: { model.setUseCellularForTransfers($0) }
+                ))
+                Text("Wenn deaktiviert, werden Foto- und Videoübertragungen ausschließlich über WLAN ausgeführt. Die Anmeldung und Verbindungsprüfung darf weiterhin über Mobilfunk erfolgen.")
+                    .font(.footnote).foregroundStyle(.secondary)
             }
 
             Section("Quellen-ID") {
@@ -100,6 +115,15 @@ struct ConnectionView: View {
             Button("OK", role: .cancel) { }
         } message: {
             Text("Prüfe Serveradresse, Benutzername und App-Passwort.")
+        }
+        .confirmationDialog("Verbindung zu Nextcloud trennen?", isPresented: $isShowingDisconnectConfirmation, titleVisibility: .visible) {
+            Button("Verbindung trennen", role: .destructive) {
+                do { try model.disconnect() }
+                catch { model.showSaveError() }
+            }
+            Button("Abbrechen", role: .cancel) { }
+        } message: {
+            Text("Bereits übertragene Fotos und Videos bleiben in Nextcloud erhalten.")
         }
     }
 }

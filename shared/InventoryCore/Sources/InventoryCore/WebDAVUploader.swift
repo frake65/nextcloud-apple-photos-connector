@@ -16,7 +16,11 @@ public struct DAVResponse: Sendable {
     public let status: Int
     public let data: Data
     public let headers: [String: String]
-    public init(status: Int, data: Data = Data(), headers: [String: String] = [:]) { self.status = status; self.data = data; self.headers = headers }
+    public let requestMethod: String?
+    public let requestPath: String?
+    public init(status: Int, data: Data = Data(), headers: [String: String] = [:], requestMethod: String? = nil, requestPath: String? = nil) {
+        self.status = status; self.data = data; self.headers = headers; self.requestMethod = requestMethod; self.requestPath = requestPath
+    }
 }
 
 public enum DAVRequestKind: Sendable {
@@ -137,9 +141,9 @@ public final class NetworkTransport: NSObject, DAVTransport, URLSessionTaskDeleg
         // with 405. The caller explicitly treats that as successful/idempotent.
         // Preserve all other HTTP errors for normal error handling.
         let expectedExistingDirectory = request.httpMethod == "MKCOL" && response.statusCode == 405
-        let davResponse = DAVResponse(status: response.statusCode, data: result.0, headers: headers)
+        let davResponse = DAVResponse(status: response.statusCode, data: result.0, headers: headers, requestMethod: request.httpMethod, requestPath: request.url?.path)
+        responseDiagnostics?(davResponse)
         if response.statusCode >= 400 && !expectedExistingDirectory {
-            responseDiagnostics?(davResponse)
             throw UploadError.http(response.statusCode)
         }
         return davResponse
@@ -182,12 +186,13 @@ public struct ServerErrorInfo: Codable, Sendable, Equatable {
 }
 
 public enum UploadError: LocalizedError {
-    case invalidConfiguration, invalidFilename, invalidResponse, http(Int), server(ServerErrorInfo), diagnostic(String), collisions
+    case invalidConfiguration, invalidFilename, invalidResponse, networkUnavailable, http(Int), server(ServerErrorInfo), diagnostic(String), collisions
     public var errorDescription: String? {
         switch self {
         case .invalidConfiguration: "Gültige HTTPS-Serveradresse und Zugangsdaten erforderlich."
         case .invalidFilename: "Originaldateiname fehlt oder ist für den Upload nicht zulässig."
         case .invalidResponse: "Unerwartete Serverantwort."
+        case .networkUnavailable: "Upload wartet auf WLAN."
         case .http(let code): "Serveranfrage fehlgeschlagen (HTTP \(code))."
         case .server(let error): error.message ?? "Serveranfrage fehlgeschlagen (HTTP \(error.status))."
         case .diagnostic(let detail): detail
