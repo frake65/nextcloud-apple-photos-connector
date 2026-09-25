@@ -978,7 +978,7 @@ private struct InventoryReviewScreen: View {
                     Button("Import abbrechen") { importer.cancel() }
                 }
                 if ImportPresentationPhase.showsIdleHelp(phase: presentation, isRunning: importer.isRunning, hasActiveBackgroundTransfer: importer.hasActiveBackgroundTransfer, waitingForWiFi: importer.isWaitingForWiFi, hasRecoverableRun: interruptedRun != nil) {
-                    Text("Die Übertragung läuft im Vordergrund. Danach werden die betroffenen Alben abgeglichen.")
+                    Text("Die App bereitet Fotos und Videos für den Upload vor. iOS kann Dateiübertragungen im Hintergrund fortsetzen; danach werden die betroffenen Alben abgeglichen.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }

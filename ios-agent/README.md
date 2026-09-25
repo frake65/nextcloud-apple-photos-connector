@@ -1,20 +1,17 @@
 # Photos Connector for iOS
 
-This Xcode project configures an APC connection, selects accessible PhotoKit
-assets, and posts their metadata to the existing APC `/inventory` endpoint. It
-does not export originals, perform WebDAV PUTs, synchronize albums, or run
-background uploads. New assets may receive server-side upload tickets as part
-of the existing inventory response; this client ignores those tickets and has
-no UI or code path that transfers files. It uses the shared local Swift
-package at `../shared/InventoryCore`.
+This Xcode project connects to an APC-enabled Nextcloud server and imports
+user-selected PhotoKit assets, including original file uploads and albums. It
+uses the shared local Swift package at `../shared/InventoryCore`.
 
-The iOS 17 target provides a foreground PhotoKit import path: inventory,
-original export, SHA-256/byte-size calculation, upload prepare, WebDAV PUT
-when required, upload completion, content reconciliation, and album
-inventory/synchronization. It also contains the gallery and album UI with a
+The iOS 17 target provides a PhotoKit import path: inventory, original export,
+SHA-256/byte-size calculation, upload prepare, WebDAV PUT when required,
+upload completion, content reconciliation, and album inventory/synchronization.
+Large file PUTs use background URLSession tasks with a persistent transfer
+queue and recovery/reconciliation after interruptions. Small API requests run
+in the foreground. The app also contains the gallery and album UI with a
 3/4/5/6-column grid, shared selection markers, long-press drag selection, and
-edge auto-scroll. Background URLSession uploads and interruption recovery are
-not implemented; imports run in the foreground.
+edge auto-scroll.
 
 ## Source ID and Mac import history
 
@@ -92,12 +89,14 @@ falls back to `local:<localIdentifier>`.
 Album cloud-identifier resolution is batched to avoid a per-member fetch. Some
 public PhotoKit fetches remain synchronous on the MainActor because the current
 UI model is MainActor-bound; no private PhotoKit APIs are used. Large-library
-performance, background uploads, and resume after interruption remain backlog
-items.
+performance and real-device network-transition behavior still require release
+validation.
 
 ## Verification
 
-The current tree is covered by 15 iOS tests, 24 shared-core tests, 125 macOS
-tests, and the standalone PHP/SQLite server suite. Debug and Release builds
-include the APC icon copied from the macOS artwork and the Photos usage
-description.
+Run the iOS test scheme from Xcode or with `xcodebuild test` on a supported
+Mac. Before a public release, also verify a Release archive and exercise
+PhotoKit permissions, login, upload completion/cancellation, Wi-Fi/cellular
+policy transitions, background recovery, and album synchronization on physical
+devices. Simulator tests do not validate real radio changes or iOS background
+transfer scheduling.
