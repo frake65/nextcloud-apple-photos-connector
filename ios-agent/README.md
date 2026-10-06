@@ -1,17 +1,21 @@
 # Photos Connector for iOS
 
 This Xcode project configures an APC connection, selects accessible PhotoKit
-assets, and posts their metadata to the existing APC `/inventory` endpoint. It
-does not export originals, perform WebDAV PUTs, synchronize albums, or run
-background uploads. New assets may receive server-side upload tickets as part
-of the existing inventory response; this client ignores those tickets and has
-no UI or code path that transfers files. It uses the shared local Swift
-package at `../shared/InventoryCore`.
+assets, and imports them through the APC inventory, upload, WebDAV, and album
+endpoints. Uploads run in the foreground; client-side resume between import
+starts is not supported. A later import starts unfinished files again from
+byte 0, while the server inventory marks already known assets so their bytes
+are skipped. It uses the shared local Swift package at
+`../shared/InventoryCore`.
+
+The current iOS release configuration is marketing version `1.0`, build `2`.
 
 The iOS 17 target provides a foreground PhotoKit import path: inventory,
 original export, SHA-256/byte-size calculation, upload prepare, WebDAV PUT
 when required, upload completion, content reconciliation, and album
-inventory/synchronization. It also contains the gallery and album UI with a
+inventory/synchronization. Inventory requests are processed in bounded
+100-asset batches, with album synchronization only after all batches succeed.
+It also contains the gallery and album UI with a
 3/4/5/6-column grid, shared selection markers, long-press drag selection, and
 edge auto-scroll. Background URLSession uploads and interruption recovery are
 not implemented; imports run in the foreground.
