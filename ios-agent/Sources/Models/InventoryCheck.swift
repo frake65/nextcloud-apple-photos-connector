@@ -14,6 +14,7 @@ enum IOSImportDiagnostics {
     static let defaultsKey = "apc.debug.importDiagnostics"
 #if DEBUG
     nonisolated(unsafe) static var testLogHandler: ((String) -> Void)?
+    nonisolated(unsafe) private static var didAnnounceBuild = false
 #endif
     static var enabled: Bool {
         #if DEBUG
@@ -38,6 +39,10 @@ enum IOSImportDiagnostics {
     }
     static func announceIfEnabled() {
         #if DEBUG
+        if !didAnnounceBuild {
+            didAnnounceBuild = true
+            print("iOS build source: commit=6c11b8d inventoryBatchFastPath=true diagnosticRevision=inventory-fast-path-1")
+        }
         if enabled { print("APC IMPORT DIAGNOSTICS ENABLED") }
         #endif
     }
@@ -54,6 +59,7 @@ enum IOSImportDiagnostics {
         guard let started, enabled else { return }
         let category: String
         if let urlError = error as? URLError { category = "urlError=\(urlError.code.rawValue)" }
+        else if let failure = error as? IOSUploadFailure { category = "step=\(failure.step.germanName) httpStatus=\(failure.status)" }
         else if case let UploadError.http(status) = error { category = "httpStatus=\(status)" }
         else { category = "error=\(String(describing: type(of: error)))" }
         log("\(phase) ERROR elapsed=\(started.duration(to: .now)) \(category)")
@@ -106,14 +112,27 @@ struct InventoryCheckResult {
 }
 
 struct IOSImportProgressAggregation: Sendable {
-    private var jobs: [Int: (sent: Int64, total: Int64)] = [:]
+    private var jobs: [Int: (slot: Int, filename: String?, sent: Int64, total: Int64)] = [:]
     var sentBytes: Int64 { jobs.values.reduce(0) { $0 + $1.sent } }
     var totalBytes: Int64 { jobs.values.reduce(0) { $0 + $1.total } }
     var fraction: Double { totalBytes > 0 ? Double(sentBytes) / Double(totalBytes) : 0 }
-    mutating func update(job: Int, sent: Int64, total: Int64) { jobs[job] = (max(0, sent), max(0, total)) }
+    mutating func register(job: Int, filename: String?) {
+        guard jobs[job] == nil else { return }
+        let occupiedSlots = Set(jobs.values.map(\.slot))
+        let slot = (0..<2).first { !occupiedSlots.contains($0) } ?? jobs.count
+        jobs[job] = (slot, filename, 0, 0)
+    }
+    mutating func update(job: Int, filename: String? = nil, sent: Int64, total: Int64) {
+        register(job: job, filename: filename)
+        guard let existing = jobs[job] else { return }
+        jobs[job] = (existing.slot, filename ?? existing.filename, max(0, sent), max(0, total))
+    }
     mutating func remove(job: Int) { jobs.removeValue(forKey: job) }
     var activeFraction: Double { jobs.values.reduce(0) { $0 + ($1.total > 0 ? min(1, Double($1.sent) / Double($1.total)) : 0) } }
-    var activeEntries: [(job: Int, sent: Int64, total: Int64)] { jobs.keys.sorted().compactMap { key in guard let value = jobs[key] else { return nil }; return (key, value.sent, value.total) } }
+    var activeEntries: [(slot: Int, job: Int, filename: String?, sent: Int64, total: Int64)] {
+        jobs.map { (slot: $0.value.slot, job: $0.key, filename: $0.value.filename, sent: $0.value.sent, total: $0.value.total) }
+            .sorted { $0.slot < $1.slot }
+    }
 }
 
 enum InventoryCheckError: LocalizedError {
@@ -160,12 +179,12 @@ struct ImportAccountReference: Codable, Equatable, Sendable {
 
 struct PersistedImportAsset: Codable, Equatable, Sendable, Identifiable {
     let queueAssetID: UUID
-    let stableIdentity: String
+    var stableIdentity: String
     let localIdentifier: String
-    let cloudIdentifier: String?
-    let mediaType: String
-    let filenameHint: String?
-    let captureDate: Date?
+    var cloudIdentifier: String?
+    var mediaType: String
+    var filenameHint: String?
+    var captureDate: Date?
     var state: ImportAssetState
     var serverAssetID: String?
     var uploadID: String?
@@ -235,6 +254,15 @@ actor ImportQueueStore {
             .filter { seen.insert("\($0.account.serverBaseURL)|\($0.account.username)|\($0.sourceID.uuidString)").inserted }
     }
     func save(_ run: PersistedImportRun) throws { upsert(run); try persist() }
+    func updateInventory(runID: UUID, assets: [PersistedImportAsset]) throws {
+        guard let runIndex = document.runs.firstIndex(where: { $0.localRunID == runID }) else { return }
+        var run = document.runs[runIndex]
+        let updates = Dictionary(uniqueKeysWithValues: assets.map { ($0.queueAssetID, $0) })
+        run.assets = run.assets.map { updates[$0.queueAssetID] ?? $0 }
+        run.updatedAt = Date()
+        upsert(run)
+        try persist()
+    }
     func markAsset(runID: UUID, assetID: UUID, state: ImportAssetState, lastConfirmedStep: String, serverAssetID: String? = nil, uploadID: String? = nil, targetPath: String? = nil) throws {
         guard let runIndex = document.runs.firstIndex(where: { $0.localRunID == runID }), let assetIndex = document.runs[runIndex].assets.firstIndex(where: { $0.queueAssetID == assetID }) else { return }
         var run = document.runs[runIndex]; var asset = run.assets[assetIndex]
@@ -794,13 +822,147 @@ enum ImportRecoveryCoordinator {
     }
 }
 
+struct IOSInventoryBatchPlan: Sendable, Equatable {
+    let indices: [Int]
+}
+
+struct IOSInventoryBatchClassification: Equatable, Sendable {
+    let knownIndices: [Int]
+    let newIndices: [Int]
+
+    init(reply: InventoryReply) {
+        knownIndices = reply.assets.indices.filter { reply.assets[$0].state == .known }
+        newIndices = reply.assets.indices.filter { reply.assets[$0].state == .new }
+    }
+}
+
+struct IOSImportProgressCounts: Equatable, Sendable {
+    var completed = 0
+    var uploaded = 0
+    var alreadyPresent = 0
+    var reconciled = 0
+
+    mutating func markInventoryKnown(_ count: Int) {
+        guard count > 0 else { return }
+        alreadyPresent += count
+        completed += count
+    }
+
+    mutating func markUploaded() {
+        uploaded += 1
+        completed += 1
+    }
+
+    mutating func markReconciled(_ count: Int) {
+        guard count > 0 else { return }
+        reconciled += count
+        completed += count
+    }
+}
+
+@MainActor
+enum IOSInventoryBatchFastPath {
+    static func process(
+        classification: IOSInventoryBatchClassification,
+        markKnown: (Int) -> Void,
+        scheduleNew: ([Int]) async throws -> Void
+    ) async throws {
+        markKnown(classification.knownIndices.count)
+        try await scheduleNew(classification.newIndices)
+    }
+}
+
+enum IOSInventoryBatching {
+    static let maximumAssetCount = 100
+
+    static func plan(count: Int, maximum: Int = maximumAssetCount) -> [IOSInventoryBatchPlan] {
+        guard count > 0, maximum > 0 else { return [] }
+        return stride(from: 0, to: count, by: maximum).map { start in
+            IOSInventoryBatchPlan(indices: Array(start..<min(start + maximum, count)))
+        }
+    }
+
+    static func uploadIndices(for replies: [InventoryReply]) -> [[Int]] {
+        replies.map { IOSInventoryBatchClassification(reply: $0).newIndices }
+    }
+}
+
+enum IOSPersistedInventory {
+    static func placeholder(for asset: GalleryAsset) -> PersistedImportAsset {
+        let mediaType = asset.isVideo ? "video" : "image"
+        return PersistedImportAsset(
+            queueAssetID: UUID(),
+            stableIdentity: "local:\(asset.id)",
+            localIdentifier: asset.id,
+            cloudIdentifier: nil,
+            mediaType: mediaType,
+            filenameHint: nil,
+            captureDate: asset.asset.creationDate,
+            state: .queued,
+            serverAssetID: nil,
+            uploadID: nil,
+            targetPath: nil,
+            expectedBytes: nil,
+            expectedSHA256: nil,
+            lastConfirmedStep: "selected",
+            retryCount: 0,
+            lastErrorCode: nil)
+    }
+
+    static func merging(_ persisted: PersistedImportAsset, inventory: AssetInventory) -> PersistedImportAsset {
+        var result = persisted
+        result.stableIdentity = inventory.stableIdentity
+        result.cloudIdentifier = inventory.cloudIdentifier
+        result.mediaType = inventory.mediaType
+        result.filenameHint = inventory.filename
+        result.captureDate = inventory.creationDate
+        return result
+    }
+}
+
+enum IOSUploadStep: Sendable, Equatable {
+    case prepare
+    case webDAVPut
+    case complete
+
+    var germanName: String {
+        switch self {
+        case .prepare: "Upload-Vorbereitung"
+        case .webDAVPut: "WebDAV-Übertragung"
+        case .complete: "Upload-Abschluss"
+        }
+    }
+}
+
+struct IOSUploadFailure: LocalizedError, Sendable {
+    let step: IOSUploadStep
+    let status: Int
+
+    var errorDescription: String? {
+        "\(step.germanName) fehlgeschlagen (HTTP \(status))."
+    }
+
+    static func preserving(step: IOSUploadStep, from error: Error) -> Error {
+        if case let UploadError.http(status) = error {
+            return IOSUploadFailure(step: step, status: status)
+        }
+        if case let UploadError.server(serverError) = error {
+            return IOSUploadFailure(step: step, status: serverError.status)
+        }
+        return error
+    }
+}
+
 enum InventoryCheckClient {
-    static func check(connection: ConnectorConnection, source: PhotoSource, assets: [AssetInventory], transport: (any DAVTransport)? = nil) async throws -> InventoryReply {
+    static func check(connection: ConnectorConnection, source: PhotoSource, assets: [AssetInventory], batchNumber: Int? = nil, transport: (any DAVTransport)? = nil) async throws -> InventoryReply {
         guard !assets.isEmpty else { throw InventoryCheckError.invalidResponse }
+        let payloadBuildStarted = ContinuousClock.now
         let json = try InventoryJSON.encode(assets, source: source)
+        let payloadBuildDuration = payloadBuildStarted.duration(to: .now)
         var request = connection.request(path: ["index.php", "apps", "apple_photos_connector", "api", "v1", "inventory"], method: "POST")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = Data(json.utf8)
+        let requestStarted = ContinuousClock.now
         let phase = IOSImportDiagnostics.start("asset-inventory")
         let requestTransport = transport ?? NetworkTransport(allowsCellularAccess: true, waitsForConnectivity: false, responseDiagnostics: { response in
             Self.logInventoryResponse(response)
@@ -831,6 +993,8 @@ enum InventoryCheckClient {
         }
         let responseNew = decoded.assets.filter { $0.state == .new }.count
         let responseKnown = decoded.assets.filter { $0.state == .known }.count
+        let batchLabel = batchNumber.map { String($0) } ?? "unknown"
+        IOSImportDiagnostics.log("inventory.response-metrics batchNumber=\(batchLabel) requestAssetCount=\(assets.count) responseAssetCount=\(decoded.assets.count) responseKnownCount=\(responseKnown) responseNewCount=\(responseNew) payloadBuildDuration=\(payloadBuildDuration) inventoryRequestDuration=\(requestStarted.duration(to: .now))")
         IOSImportDiagnostics.log("Inventory response assets=\(decoded.assets.count) summary.seen=\(decoded.summary.seen) summary.new=\(decoded.summary.new) summary.known=\(decoded.summary.known) calculated.new=\(responseNew) calculated.known=\(responseKnown) requestAssets=\(assets.count)")
         guard decoded.assets.count == assets.count else {
             IOSImportDiagnostics.log("Inventory validation failed reason=asset-count request=\(assets.count) response=\(decoded.assets.count)")
@@ -925,6 +1089,7 @@ struct IOSAssetJobScheduler {
         let index: Int
         let result: Result?
         let errorDescription: String?
+        let isFatalServerError: Bool
     }
 
     static func run<Result: Sendable>(count: Int, maxConcurrent: Int = 2, operation: @escaping @Sendable (Int) async throws -> Result) async throws -> [Result] {
@@ -960,22 +1125,32 @@ struct IOSAssetJobScheduler {
             func launch(_ index: Int) {
                 group.addTask {
                     do {
-                        return CollectedResult(index: index, result: try await operation(index), errorDescription: nil)
+                        return CollectedResult(index: index, result: try await operation(index), errorDescription: nil, isFatalServerError: false)
                     } catch is CancellationError {
                         throw CancellationError()
                     } catch {
-                        return CollectedResult(index: index, result: nil, errorDescription: String(describing: error))
+                        let isFatalServerError: Bool
+                        if let failure = error as? IOSUploadFailure {
+                            isFatalServerError = failure.status >= 500
+                        } else if case let UploadError.http(status) = error {
+                            isFatalServerError = status >= 500
+                        } else {
+                            isFatalServerError = false
+                        }
+                        return CollectedResult(index: index, result: nil, errorDescription: error.localizedDescription, isFatalServerError: isFatalServerError)
                     }
                 }
                 running += 1
             }
+            var stopLaunching = false
             while next < count && running < maxConcurrent { launch(next); next += 1 }
             while running > 0 {
                 try Task.checkCancellation()
                 guard let result = try await group.next() else { break }
                 results.append(result)
                 running -= 1
-                if next < count { launch(next); next += 1 }
+                if result.isFatalServerError { stopLaunching = true }
+                if !stopLaunching, next < count { launch(next); next += 1 }
             }
             return results.sorted { $0.index < $1.index }
         }
@@ -989,11 +1164,12 @@ final class IOSForegroundImportCoordinator: ObservableObject {
     enum Phase: Equatable { case idle, inventory, exporting, hashing, preparing, uploading, completing, finished, failed, cancelled }
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var currentFilename: String?
-    @Published private(set) var completed = 0
+    @Published private(set) var progressCounts = IOSImportProgressCounts()
+    var completed: Int { progressCounts.completed }
     @Published private(set) var total = 0
-    @Published private(set) var uploaded = 0
-    @Published private(set) var alreadyPresent = 0
-    @Published private(set) var reconciled = 0
+    var uploaded: Int { progressCounts.uploaded }
+    var alreadyPresent: Int { progressCounts.alreadyPresent }
+    var reconciled: Int { progressCounts.reconciled }
     @Published private(set) var transferSentBytes: Int64 = 0
     @Published private(set) var transferTotalBytes: Int64 = 0
     @Published private(set) var failure: String?
@@ -1028,7 +1204,7 @@ final class IOSForegroundImportCoordinator: ObservableObject {
         return min(0.999, (Double(completed + pendingCompletion.count) + transferProgress.activeFraction) / Double(total))
     }
     var isRunning: Bool { hasActiveBackgroundTransfer || ![.idle, .finished, .failed, .cancelled].contains(phase) }
-    var activeTransfers: [(job: Int, sent: Int64, total: Int64)] { transferProgress.activeEntries }
+    var activeTransfers: [(slot: Int, job: Int, filename: String?, sent: Int64, total: Int64)] { transferProgress.activeEntries }
     /// The server-side verification is only the visible phase when no other
     /// asset is still sending PUT bytes.
     var isVerifyingCompletedUpload: Bool {
@@ -1079,22 +1255,14 @@ final class IOSForegroundImportCoordinator: ObservableObject {
         let importTransport = IOSImportTransportFactory.make(base: transport) { [weak self] waiting in
             Task { @MainActor in self?.isWaitingForWiFi = waiting && !IOSTransferNetworkPreferences.useCellularAccess() }
         }
-        cancel(); if resumeRun != nil { IOSImportDiagnostics.memory(phase: "resume-after-old-task-cancel") }; isWaitingForWiFi = false; phase = .inventory; failure = nil; completed = resumeRun.map { Self.completedAssetCount(in: $0) } ?? 0; uploaded = 0; alreadyPresent = 0; reconciled = 0; transferProgress = IOSImportProgressAggregation(); pendingCompletion = []; transferSentBytes = 0; transferTotalBytes = 0; total = selection.count
+        cancel(); if resumeRun != nil { IOSImportDiagnostics.memory(phase: "resume-after-old-task-cancel") }; isWaitingForWiFi = false; phase = .inventory; failure = nil; progressCounts = IOSImportProgressCounts(completed: resumeRun.map { Self.completedAssetCount(in: $0) } ?? 0); transferProgress = IOSImportProgressAggregation(); pendingCompletion = []; transferSentBytes = 0; transferTotalBytes = 0; total = selection.count
         let targetRootSnapshot = IOSTargetDirectoryPreferences.normalize(targetRoot)
         task = Task { [weak self] in
             guard let self else { return }
             do {
                 let folderCoordinator = WebDAVFolderCoordinator()
-                let inventoryPhase = IOSImportDiagnostics.start("asset-inventory-build")
-                let assets: [AssetInventory]
-                do { assets = try library.inventory(for: selection); IOSImportDiagnostics.finish("asset-inventory-build", started: inventoryPhase, detail: "assets=\(assets.count)") }
-                catch { IOSImportDiagnostics.failure("asset-inventory-build", started: inventoryPhase, error: error); throw error }
                 let runID = resumeRun?.localRunID ?? UUID()
-                let persistedAssets = resumeRun?.assets ?? zip(selection, assets).map { selected, asset in
-                    PersistedImportAsset(queueAssetID: UUID(), stableIdentity: asset.stableIdentity, localIdentifier: selected.id, cloudIdentifier: asset.cloudIdentifier,
-                        mediaType: asset.mediaType, filenameHint: asset.filename, captureDate: asset.creationDate, state: .queued, serverAssetID: nil, uploadID: nil,
-                        targetPath: nil, expectedBytes: nil, expectedSHA256: nil, lastConfirmedStep: "selected", retryCount: 0, lastErrorCode: nil)
-                }
+                var persistedAssets = resumeRun?.assets ?? selection.map(IOSPersistedInventory.placeholder)
                 let persistedRun = PersistedImportRun(schemaVersion: PersistedImportRun.currentSchemaVersion, localRunID: runID,
                     account: ImportAccountReference(serverBaseURL: connection.base.absoluteString, username: connection.user), sourceID: source.sourceId,
                     createdAt: Date(), updatedAt: Date(), state: .assetProcessing, serverRunID: nil, assetOrder: persistedAssets.map(\.queueAssetID),
@@ -1102,7 +1270,73 @@ final class IOSForegroundImportCoordinator: ObservableObject {
                 if resumeRun == nil { try await queueStore.save(persistedRun) }
                 else { try await queueStore.markRun(runID: runID, state: .assetProcessing, albumSyncPending: false) }
                 activeRunID = runID
-                if let resumeRun, (resumeRun.state == .assetsComplete || resumeRun.state == .albumSyncPending) {
+                let onlySyncAlbums = resumeRun.map { $0.state == .assetsComplete || $0.state == .albumSyncPending } ?? false
+                let inventoryBatches = IOSInventoryBatching.plan(count: selection.count)
+                let batchSelections = inventoryBatches.map { batch in batch.indices.map { selection[$0] } }
+                var inventoriedAssets = Array<AssetInventory?>(repeating: nil, count: selection.count)
+                var inventoryReplies = Array<InventoryReply?>(repeating: nil, count: inventoryBatches.count)
+                var inventoryTask = batchSelections.first.map { batchSelection in
+                    Task { try await library.inventoryInBackground(for: batchSelection) }
+                }
+                defer { inventoryTask?.cancel() }
+                for (batchNumber, batch) in inventoryBatches.enumerated() {
+                    try Task.checkCancellation()
+                    self.setPhase(.inventory)
+                    let batchSelection = batchSelections[batchNumber]
+                    let inventoryPhase = IOSImportDiagnostics.start("asset-inventory-build[\(batchNumber + 1)]")
+                    let batchAssets: [AssetInventory]
+                    do {
+                        guard let currentInventoryTask = inventoryTask else { throw InventoryCheckError.unavailableAsset }
+                        batchAssets = try await currentInventoryTask.value
+                        IOSImportDiagnostics.finish("asset-inventory-build[\(batchNumber + 1)]", started: inventoryPhase, detail: "assets=\(batchAssets.count)")
+                    } catch {
+                        IOSImportDiagnostics.failure("asset-inventory-build[\(batchNumber + 1)]", started: inventoryPhase, error: error)
+                        throw error
+                    }
+                    let nextBatchNumber = batchNumber + 1
+                    inventoryTask = batchSelections.indices.contains(nextBatchNumber) ? Task {
+                        try await library.inventoryInBackground(for: batchSelections[nextBatchNumber])
+                    } : nil
+                    for (batchIndex, globalIndex) in batch.indices.enumerated() {
+                        inventoriedAssets[globalIndex] = batchAssets[batchIndex]
+                        persistedAssets[globalIndex] = IOSPersistedInventory.merging(persistedAssets[globalIndex], inventory: batchAssets[batchIndex])
+                    }
+                    var batchPersistedAssets = batch.indices.map { persistedAssets[$0] }
+                    let inventoryPersistStarted = IOSImportDiagnostics.start("queue.persist.before-inventory batchNumber=\(batchNumber + 1)")
+                    try await queueStore.updateInventory(runID: runID, assets: batchPersistedAssets)
+                    IOSImportDiagnostics.finish("queue.persist.before-inventory batchNumber=\(batchNumber + 1)", started: inventoryPersistStarted)
+                    IOSImportDiagnostics.log("inventory-batch index=\(batchNumber + 1)/\(inventoryBatches.count) assets=\(batchAssets.count)")
+
+                    if onlySyncAlbums { continue }
+                    let reply = try await InventoryCheckClient.check(connection: connection, source: source, assets: batchAssets, batchNumber: batchNumber + 1, transport: importTransport)
+                    let runPersistStarted = IOSImportDiagnostics.start("queue.persist.inventory-response batchNumber=\(batchNumber + 1)")
+                    try await queueStore.markRun(runID: runID, state: .assetProcessing, serverRunID: reply.runId)
+                    IOSImportDiagnostics.finish("queue.persist.inventory-response batchNumber=\(batchNumber + 1)", started: runPersistStarted)
+                    for (batchIndex, entry) in reply.assets.enumerated() where batchPersistedAssets.indices.contains(batchIndex) {
+                        guard let state = Self.resumeInventoryState(localState: batchPersistedAssets[batchIndex].state, serverState: entry.state) else { continue }
+                        batchPersistedAssets[batchIndex].state = state
+                        batchPersistedAssets[batchIndex].lastConfirmedStep = entry.state == .known ? "inventory-known" : "inventory-ticket"
+                        batchPersistedAssets[batchIndex].serverAssetID = entry.upload?.assetId ?? batchPersistedAssets[batchIndex].serverAssetID
+                        batchPersistedAssets[batchIndex].uploadID = entry.upload?.uploadId ?? batchPersistedAssets[batchIndex].uploadID
+                    }
+                    for (batchIndex, globalIndex) in batch.indices.enumerated() {
+                        persistedAssets[globalIndex] = batchPersistedAssets[batchIndex]
+                    }
+                    // Persist the complete server reply once. Writing the full JSON queue for
+                    // every known asset made large already-imported batches advance one by one.
+                    let knownPersistStarted = IOSImportDiagnostics.start("queue.persist.known-states batchNumber=\(batchNumber + 1)")
+                    try await queueStore.updateInventory(runID: runID, assets: batchPersistedAssets)
+                    IOSImportDiagnostics.finish("queue.persist.known-states batchNumber=\(batchNumber + 1)", started: knownPersistStarted, detail: "persistenceWriteCount=1")
+                    let classification = IOSInventoryBatchClassification(reply: reply)
+                    inventoryReplies[batchNumber] = reply
+                    IOSImportDiagnostics.log("inventory-classification batchNumber=\(batchNumber + 1) batchCount=\(inventoryBatches.count) requestAssetCount=\(batchAssets.count) responseKnownCount=\(classification.knownIndices.count) responseNewCount=\(classification.newIndices.count) schedulerAssetCount=\(classification.newIndices.count) bulkUpdateCallCount=1 persistenceWriteCount=1")
+                    let started = IOSImportDiagnostics.start("known.bulkUpdate batchNumber=\(batchNumber + 1)")
+                    self.markAlready(count: classification.knownIndices.count, source: "inventory-bulk")
+                    IOSImportDiagnostics.finish("known.bulkUpdate batchNumber=\(batchNumber + 1)", started: started, detail: "knownCount=\(classification.knownIndices.count) bulkUpdateCallCount=1 progressPublishCount=\(classification.knownIndices.isEmpty ? 0 : 1)")
+                }
+                let assets = inventoriedAssets.compactMap { $0 }
+                guard assets.count == selection.count else { throw InventoryCheckError.unavailableAsset }
+                if onlySyncAlbums {
                     try await queueStore.markRun(runID: runID, state: .albumSyncPending, albumSyncPending: true)
                     self.setPhase(.completing)
                     let albums = try library.albumInventory()
@@ -1111,17 +1345,42 @@ final class IOSForegroundImportCoordinator: ObservableObject {
                     self.finish()
                     return
                 }
-                let reply = try await InventoryCheckClient.check(connection: connection, source: source, assets: assets, transport: importTransport)
-                try await queueStore.markRun(runID: runID, state: .assetProcessing, serverRunID: reply.runId)
-                for (index, entry) in reply.assets.enumerated() where persistedAssets.indices.contains(index) {
-                    guard let state = Self.resumeInventoryState(localState: persistedAssets[index].state, serverState: entry.state) else { continue }
-                    try await queueStore.markAsset(runID: runID, assetID: persistedAssets[index].queueAssetID,
-                        state: state,
-                        lastConfirmedStep: entry.state == .known ? "inventory-known" : "inventory-ticket",
-                        serverAssetID: entry.upload?.assetId, uploadID: entry.upload?.uploadId)
+
+                // Complete server-side classification for every batch before starting
+                // any PhotoKit export or WebDAV transfer. This keeps known batches on
+                // the inventory fast path and guarantees that only new entries are
+                // handed to the upload scheduler.
+                let completedInventoryReplies = try inventoryReplies.map { reply in
+                    guard let reply else { throw InventoryCheckError.invalidResponse }
+                    return reply
                 }
+                let uploadIndicesByBatch = IOSInventoryBatching.uploadIndices(for: completedInventoryReplies)
                 self.setPhase(.uploading)
-                try await self.runAssetJobs(selection: selection, assets: assets, reply: reply, library: library, connection: connection, source: source, targetRoot: targetRootSnapshot, transport: importTransport, folderCoordinator: folderCoordinator, runID: runID, persistedAssets: persistedAssets)
+                for (batchNumber, batch) in inventoryBatches.enumerated() {
+                    try Task.checkCancellation()
+                    let reply = completedInventoryReplies[batchNumber]
+                    let batchSelection = batchSelections[batchNumber]
+                    let batchAssets = try batch.indices.map { globalIndex in
+                        guard let asset = inventoriedAssets[globalIndex] else {
+                            throw InventoryCheckError.unavailableAsset
+                        }
+                        return asset
+                    }
+                    let batchPersistedAssets = batch.indices.map { persistedAssets[$0] }
+                    try await runAssetJobs(
+                        selection: batchSelection,
+                        assets: batchAssets,
+                        reply: reply,
+                        newIndices: uploadIndicesByBatch[batchNumber],
+                        library: library,
+                        connection: connection,
+                        source: source,
+                        targetRoot: targetRootSnapshot,
+                        transport: importTransport,
+                        folderCoordinator: folderCoordinator,
+                        runID: runID,
+                        persistedAssets: batchPersistedAssets)
+                }
                 try await queueStore.markRun(runID: runID, state: .assetsComplete, albumSyncPending: true)
                 self.setPhase(.completing)
                 let albumBuild = IOSImportDiagnostics.start("album-inventory-build")
@@ -1137,14 +1396,19 @@ final class IOSForegroundImportCoordinator: ObservableObject {
         if resumeRun != nil { IOSImportDiagnostics.memory(phase: "resume-new-task-created") }
     }
 
-    private func runAssetJobs(selection: [GalleryAsset], assets: [AssetInventory], reply: InventoryReply, library: PhotoLibraryModel, connection: ConnectorConnection, source: PhotoSource, targetRoot: String, transport: any DAVTransport, folderCoordinator: WebDAVFolderCoordinator, runID: UUID, persistedAssets: [PersistedImportAsset]) async throws {
-        let outcomes = try await IOSAssetJobScheduler.runCollectingFailures(count: selection.count, maxConcurrent: 2) { [weak self] index in
+    private func runAssetJobs(selection: [GalleryAsset], assets: [AssetInventory], reply: InventoryReply, newIndices: [Int], library: PhotoLibraryModel, connection: ConnectorConnection, source: PhotoSource, targetRoot: String, transport: any DAVTransport, folderCoordinator: WebDAVFolderCoordinator, runID: UUID, persistedAssets: [PersistedImportAsset]) async throws {
+        guard newIndices.allSatisfy(selection.indices.contains) else { throw InventoryCheckError.invalidResponse }
+        let jobIndices = newIndices.filter { persistedAssets[$0].state != .completed }
+        IOSImportDiagnostics.log("asset-scheduler START jobs=\(jobIndices.count) new=\(newIndices.count)")
+        let outcomes = try await IOSAssetJobScheduler.runCollectingFailures(count: jobIndices.count, maxConcurrent: 2) { [weak self] jobIndex in
             guard let self else { throw CancellationError() }
-        let selected = selection[index]
+            let index = jobIndices[jobIndex]
+            let selected = selection[index]
             let asset = assets[index]
             let entry = reply.assets[index]
+            await self.beginTransfer(job: index, asset: selected.asset, filename: asset.filename)
             IOSImportDiagnostics.log("asset-job[\(index + 1)] START")
-        let started = ContinuousClock.now
+            let started = ContinuousClock.now
             IOSImportDiagnostics.memory(phase: "asset-job-start", asset: persistedAssets[index].queueAssetID.uuidString, job: index + 1)
             do {
                 let outcome = try await self.runAssetJob(index: index, selected: selected, asset: asset, entry: entry, reply: reply, library: library, connection: connection, source: source, targetRoot: targetRoot, transport: transport, folderCoordinator: folderCoordinator, runID: runID, queueAsset: persistedAssets[index])
@@ -1161,18 +1425,26 @@ final class IOSForegroundImportCoordinator: ObservableObject {
             }
         }
         var failures: [String] = []
+        var reconciledCount = 0
         for outcome in outcomes {
             if let result = outcome.result {
-                self.apply(result.1, job: outcome.index, filename: assets[outcome.index].filename ?? selection[outcome.index].asset.localIdentifier)
+                self.apply(result.1, job: result.0)
+                if case .reconciled = result.1 { reconciledCount += 1 }
             } else {
-                let message = outcome.errorDescription ?? "Asset-Import fehlgeschlagen."
+                let assetIndex = jobIndices[outcome.index]
+                var message = outcome.errorDescription ?? "Asset-Import fehlgeschlagen."
+                if outcome.isFatalServerError {
+                    message += " Andere bereits laufende Übertragungen werden noch beendet; der Import wird anschließend angehalten."
+                }
                 failures.append(message)
-                try await queueStore.markAsset(runID: runID, assetID: persistedAssets[outcome.index].queueAssetID, state: .failed, lastConfirmedStep: "asset-failed")
+                try await queueStore.markAsset(runID: runID, assetID: persistedAssets[assetIndex].queueAssetID, state: .failed, lastConfirmedStep: "asset-failed")
             }
         }
+        self.markReconciled(count: reconciledCount)
         if let firstFailure = failures.first {
             throw UploadError.diagnostic(firstFailure)
         }
+        IOSImportDiagnostics.log("asset-scheduler END jobs=\(jobIndices.count) completed=\(outcomes.count)")
     }
 
     private func runAssetJob(index: Int, selected: GalleryAsset, asset: AssetInventory, entry: InventoryAssetReply, reply: InventoryReply, library: PhotoLibraryModel, connection: ConnectorConnection, source: PhotoSource, targetRoot: String, transport: any DAVTransport, folderCoordinator: WebDAVFolderCoordinator, runID: UUID, queueAsset: PersistedImportAsset) async throws -> AssetJobOutcome {
@@ -1180,8 +1452,9 @@ final class IOSForegroundImportCoordinator: ObservableObject {
         guard reply.assets.indices.contains(index) else { throw InventoryCheckError.invalidResponse }
         if queueAsset.state == .completed { return .completed }
         let queueAssetID = queueAsset.queueAssetID
-        if entry.state == .known { try await queueStore.markAsset(runID: runID, assetID: queueAssetID, state: .completed, lastConfirmedStep: "inventory-known"); self.markAlready(); return .known }
+        if entry.state == .known { throw InventoryCheckError.invalidResponse }
         guard let ticket = entry.upload else { throw InventoryCheckError.invalidResponse }
+        IOSImportDiagnostics.log("asset-job[\(index + 1)] resource-selection START")
         IOSImportDiagnostics.memory(phase: "photo-export-start", asset: queueAssetID.uuidString, job: index + 1)
         let exportPhase = IOSImportDiagnostics.start("asset-job[\(index + 1)] photo-original-export")
         let exported: PhotoLibraryModel.ExportedOriginal
@@ -1211,6 +1484,7 @@ final class IOSForegroundImportCoordinator: ObservableObject {
         guard let uploadPath = IOSUploadPath.folder(base: targetRoot, date: date) else { throw UploadError.invalidConfiguration }
         let folder = uploadPath.folder
         let provider = IOSUploadTargets(connection: connection, transport: transport, source: source.sourceId.uuidString.lowercased(), runId: reply.runId, uploadId: ticket.uploadId, folder: folder)
+        IOSImportDiagnostics.log("asset-job[\(index + 1)] prepare-request START")
         IOSImportDiagnostics.memory(phase: "prepare-start", asset: queueAssetID.uuidString, job: index + 1)
         let putPhase = IOSImportDiagnostics.start("asset-job[\(index + 1)] webdav-transfer")
         try await queueStore.markAsset(runID: runID, assetID: queueAssetID, state: .needsReconcile, lastConfirmedStep: "remote-state-unknown")
@@ -1218,7 +1492,7 @@ final class IOSForegroundImportCoordinator: ObservableObject {
         let backgroundTransport = IOSBackgroundDAVTransport(base: transport, background: backgroundTransfer, queueAssetID: queueAssetID, localRunID: runID)
         let backgroundUploader = WebDAVUploader(connection: connection, transport: backgroundTransport, debug: { message in IOSImportDiagnostics.log(message) }, folderCoordinator: folderCoordinator)
         do { target = try await backgroundUploader.uploadWithTarget(file: exported.url, filename: exported.filename, assetId: ticket.assetId, captureDate: date, targets: provider, targetRoot: uploadPath.root, progress: { [weak self] sent, total in
-            Task { @MainActor in self?.updateTransferProgress(job: index, sent: sent, total: total) }
+            Task { @MainActor in self?.updateTransferProgress(job: index, filename: exported.filename, sent: sent, total: total) }
         }, contentIdentityDiagnostics: { event in
             switch event {
             case .begin: IOSImportDiagnostics.memory(phase: "sha256-read-begin", asset: queueAssetID.uuidString, job: index + 1)
@@ -1226,8 +1500,11 @@ final class IOSForegroundImportCoordinator: ObservableObject {
             case .end: IOSImportDiagnostics.memory(phase: "sha256-read-end", asset: queueAssetID.uuidString, job: index + 1)
             }
         }, contentIdentity: identity); IOSImportDiagnostics.memory(phase: "prepare-end", asset: queueAssetID.uuidString, job: index + 1); IOSImportDiagnostics.finish("asset-job[\(index + 1)] webdav-transfer", started: putPhase, detail: "bytes=\(identity.bytes)") }
-        catch { IOSImportDiagnostics.failure("asset-job[\(index + 1)] webdav-transfer", started: putPhase, error: error); throw error }
-        if target.state == "contentAlreadyPresent" { try await queueStore.markAsset(runID: runID, assetID: queueAssetID, state: .completed, lastConfirmedStep: "content-reconciled", targetPath: target.path); await backgroundTransport.cleanup(deleteFile: true); self.markReconciled(); return .reconciled }
+        catch {
+            IOSImportDiagnostics.failure("asset-job[\(index + 1)] webdav-transfer", started: putPhase, error: error)
+            throw IOSUploadFailure.preserving(step: .webDAVPut, from: error)
+        }
+        if target.state == "contentAlreadyPresent" { try await queueStore.markAsset(runID: runID, assetID: queueAssetID, state: .completed, lastConfirmedStep: "content-reconciled", targetPath: target.path); await backgroundTransport.cleanup(deleteFile: true); return .reconciled }
         pendingCompletion.insert(index)
         transferProgress.remove(job: index)
         transferSentBytes = transferProgress.sentBytes
@@ -1249,8 +1526,7 @@ final class IOSForegroundImportCoordinator: ObservableObject {
         return .uploaded
     }
 
-    private func apply(_ outcome: AssetJobOutcome, job: Int, filename: String) {
-        currentFilename = filename
+    private func apply(_ outcome: AssetJobOutcome, job: Int) {
         pendingCompletion.remove(job)
         transferProgress.remove(job: job)
         transferSentBytes = transferProgress.sentBytes
@@ -1260,18 +1536,30 @@ final class IOSForegroundImportCoordinator: ObservableObject {
         }
     }
 
-    private func updateTransferProgress(job: Int, sent: Int64, total: Int64) {
-        transferProgress.update(job: job, sent: sent, total: total)
+    private func updateTransferProgress(job: Int, filename: String, sent: Int64, total: Int64) {
+        transferProgress.update(job: job, filename: filename, sent: sent, total: total)
         transferSentBytes = transferProgress.sentBytes
         transferTotalBytes = transferProgress.totalBytes
     }
 
     private func setCurrent(_ asset: PHAsset, filename: String?) { currentFilename = filename ?? asset.localIdentifier }
+    private func beginTransfer(job: Int, asset: PHAsset, filename: String?) {
+        setCurrent(asset, filename: filename)
+        transferProgress.register(job: job, filename: filename ?? asset.localIdentifier)
+    }
     private func setProgress(_ _: Double) {}
     private func setPhase(_ value: Phase) { phase = value }
-    private func markAlready() { alreadyPresent += 1; completed += 1 }
-    private func markUploaded() { uploaded += 1; completed += 1 }
-    private func markReconciled() { reconciled += 1; alreadyPresent += 1; completed += 1 }
+    private func markAlready(count: Int, source: String) {
+        guard count > 0 else { return }
+        progressCounts.markInventoryKnown(count)
+        IOSImportDiagnostics.log("progress.already-present source=\(source) increment=\(count) alreadyPresent=\(alreadyPresent) completed=\(completed) progressPublishCount=1")
+    }
+    private func markUploaded() { progressCounts.markUploaded() }
+    private func markReconciled(count: Int) {
+        guard count > 0 else { return }
+        progressCounts.markReconciled(count)
+        IOSImportDiagnostics.log("progress.reconciled-bulk increment=\(count) reconciled=\(reconciled) completed=\(completed) progressPublishCount=1")
+    }
     private func finish() { phase = .finished }
     private func cancelled() { phase = .cancelled; if let runID = activeRunID { Task { try? await queueStore.markRun(runID: runID, state: .cancelled, albumSyncPending: false) } } }
     private func failed(_ message: String) { failure = message; phase = .failed; if let runID = activeRunID { Task { try? await queueStore.markRun(runID: runID, state: .failed) } } }
@@ -1294,8 +1582,11 @@ private enum IOSUploadHTTP {
         let phase = IOSImportDiagnostics.start(endpoint)
         let response: DAVResponse
         do { response = try await transport.send(request, file: nil); IOSImportDiagnostics.finish(endpoint, started: phase, detail: "status=\(response.status)") }
-        catch { IOSImportDiagnostics.failure(endpoint, started: phase, error: error); throw error }
-        guard (200..<300).contains(response.status) else { throw UploadError.http(response.status) }
+        catch {
+            IOSImportDiagnostics.failure(endpoint, started: phase, error: error)
+            throw IOSUploadFailure.preserving(step: .prepare, from: error)
+        }
+        guard (200..<300).contains(response.status) else { throw IOSUploadFailure(step: .prepare, status: response.status) }
         return try JSONDecoder().decode(UploadTarget.self, from: response.data)
     }
     static func complete(connection: ConnectorConnection, transport: any DAVTransport, source: String, runId: String, uploadId: String, path: String, queueAssetID: UUID? = nil, uploadAttemptID: UUID? = nil) async throws {
@@ -1306,7 +1597,10 @@ private enum IOSUploadHTTP {
         let phase = IOSImportDiagnostics.start("uploads/complete \(correlation)")
         let response: DAVResponse
         do { response = try await transport.send(request, file: nil, kind: .longRunningVerification, progress: nil); IOSImportDiagnostics.finish("uploads/complete", started: phase, detail: "status=\(response.status)") }
-        catch { IOSImportDiagnostics.failure("uploads/complete", started: phase, error: error); throw error }
-        guard (200..<300).contains(response.status) else { throw UploadError.http(response.status) }
+        catch {
+            IOSImportDiagnostics.failure("uploads/complete", started: phase, error: error)
+            throw IOSUploadFailure.preserving(step: .complete, from: error)
+        }
+        guard (200..<300).contains(response.status) else { throw IOSUploadFailure(step: .complete, status: response.status) }
     }
 }

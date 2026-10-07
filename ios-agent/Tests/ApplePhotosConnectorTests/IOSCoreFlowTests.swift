@@ -4,6 +4,100 @@ import XCTest
 import InventoryCore
 
 final class IOSCoreFlowTests: XCTestCase {
+    func testInventoryBatchesNeverExceed100AndCover201AssetsExactlyOnce() {
+        let plan = IOSInventoryBatching.plan(count: 201)
+
+        XCTAssertEqual(plan.map { $0.indices.count }, [100, 100, 1])
+        XCTAssertEqual(plan.flatMap(\.indices), Array(0..<201))
+        XCTAssertEqual(Set(plan.flatMap(\.indices)).count, 201)
+    }
+
+    func testInventoryBatchingHandlesEmptyAndCustomLimits() {
+        XCTAssertTrue(IOSInventoryBatching.plan(count: 0).isEmpty)
+        XCTAssertTrue(IOSInventoryBatching.plan(count: 10, maximum: 0).isEmpty)
+        XCTAssertEqual(IOSInventoryBatching.plan(count: 5, maximum: 2).map { $0.indices.count }, [2, 2, 1])
+    }
+
+    func testUploadPlanningWaitsForClassificationAndSkipsSevenKnownBatches() {
+        let knownBatch = InventoryReply(
+            runId: "run",
+            summary: .init(seen: 100, new: 0, known: 100),
+            assets: (0..<100).map { index in
+                InventoryAssetReply(cloudIdentifier: "known-\(index)", state: .known, upload: nil)
+            })
+        let newBatch = InventoryReply(
+            runId: "run",
+            summary: .init(seen: 2, new: 2, known: 0),
+            assets: (0..<2).map { index in
+                InventoryAssetReply(
+                    cloudIdentifier: "new-\(index)",
+                    state: .new,
+                    upload: .init(uploadId: "upload-\(index)", assetId: "asset-\(index)"))
+            })
+
+        let uploadIndices = IOSInventoryBatching.uploadIndices(
+            for: Array(repeating: knownBatch, count: 7) + [newBatch])
+
+        XCTAssertEqual(Array(uploadIndices.prefix(7)), Array(repeating: [], count: 7))
+        XCTAssertEqual(uploadIndices.last, [0, 1])
+    }
+
+    func testBatchInventoryPromotesCloudIdentityWithoutResettingRecoveryState() {
+        let queueID = UUID()
+        let persisted = PersistedImportAsset(
+            queueAssetID: queueID,
+            stableIdentity: "local:device-local",
+            localIdentifier: "device-local",
+            cloudIdentifier: nil,
+            mediaType: "image",
+            filenameHint: nil,
+            captureDate: nil,
+            state: .needsReconcile,
+            serverAssetID: "server-asset",
+            uploadID: "upload",
+            targetPath: "Photos/photo.heic",
+            expectedBytes: 42,
+            expectedSHA256: "hash",
+            lastConfirmedStep: "remote-state-unknown",
+            retryCount: 1,
+            lastErrorCode: nil)
+        let inventory = AssetInventory(
+            localIdentifier: "device-local",
+            cloudIdentifier: "icloud-asset",
+            mediaType: "image",
+            creationDate: Date(timeIntervalSince1970: 10),
+            filename: "photo.heic")
+
+        let merged = IOSPersistedInventory.merging(persisted, inventory: inventory)
+
+        XCTAssertEqual(merged.queueAssetID, queueID)
+        XCTAssertEqual(merged.stableIdentity, "cloud:icloud-asset")
+        XCTAssertEqual(merged.cloudIdentifier, "icloud-asset")
+        XCTAssertEqual(merged.filenameHint, "photo.heic")
+        XCTAssertEqual(merged.state, .needsReconcile)
+        XCTAssertEqual(merged.serverAssetID, "server-asset")
+        XCTAssertEqual(merged.uploadID, "upload")
+        XCTAssertEqual(merged.lastConfirmedStep, "remote-state-unknown")
+    }
+
+    func testHTTP500UsesReadableUploadPhaseMessages() {
+        XCTAssertEqual(UploadError.http(500).localizedDescription, "Serveranfrage fehlgeschlagen (HTTP 500).")
+        XCTAssertEqual(IOSUploadFailure(step: .prepare, status: 500).localizedDescription, "Upload-Vorbereitung fehlgeschlagen (HTTP 500).")
+        XCTAssertEqual(IOSUploadFailure(step: .webDAVPut, status: 500).localizedDescription, "WebDAV-Übertragung fehlgeschlagen (HTTP 500).")
+        XCTAssertEqual(IOSUploadFailure(step: .complete, status: 500).localizedDescription, "Upload-Abschluss fehlgeschlagen (HTTP 500).")
+    }
+
+    func testUploadFailurePreservesOriginatingHTTPPhase() {
+        XCTAssertEqual(
+            IOSUploadFailure.preserving(step: .prepare, from: UploadError.http(500)).localizedDescription,
+            "Upload-Vorbereitung fehlgeschlagen (HTTP 500)."
+        )
+        XCTAssertEqual(
+            IOSUploadFailure.preserving(step: .complete, from: UploadError.server(ServerErrorInfo(status: 500))).localizedDescription,
+            "Upload-Abschluss fehlgeschlagen (HTTP 500)."
+        )
+    }
+
     func testImportPresentationSeparatesTransferAlbumSyncAndCompletion() {
         XCTAssertEqual(ImportPresentationPhase.resolve(phase: .idle, completed: 0, total: 3, isVerifyingCompletedUpload: false), .idle)
         XCTAssertEqual(ImportPresentationPhase.resolve(phase: .uploading, completed: 1, total: 3, isVerifyingCompletedUpload: false), .transferring)
@@ -15,6 +109,25 @@ final class IOSCoreFlowTests: XCTestCase {
     func testImportPresentationDoesNotTreatFailureOrCancellationAsCompleted() {
         XCTAssertEqual(ImportPresentationPhase.resolve(phase: .failed, completed: 3, total: 3, isVerifyingCompletedUpload: false), .stopped)
         XCTAssertEqual(ImportPresentationPhase.resolve(phase: .cancelled, completed: 3, total: 3, isVerifyingCompletedUpload: false), .stopped)
+    }
+
+    func testImportTransferRowsHideIndividualProgressDuringInventory() {
+        XCTAssertEqual(ImportTransferRowPresentation.resolve(phase: .inventory, totalBytes: 0), .hidden)
+        XCTAssertEqual(ImportTransferRowPresentation.resolve(phase: .inventory, totalBytes: 1024), .hidden)
+    }
+
+    func testImportTransferRowsUsePreparationStateWithoutZeroByteLabel() {
+        XCTAssertEqual(ImportTransferRowPresentation.resolve(phase: .preparing, totalBytes: 0), .preparing)
+        XCTAssertEqual(ImportTransferRowPresentation.resolve(phase: .uploading, totalBytes: 0), .indeterminate)
+    }
+
+    func testImportTransferRowsUseDeterminateProgressForKnownUploadSize() {
+        XCTAssertEqual(ImportTransferRowPresentation.resolve(phase: .uploading, totalBytes: 4096), .determinate)
+    }
+
+    func testWaitingForWiFiKeepsOverallTransferProgressVisibleAndIndividualSizeIndeterminate() {
+        XCTAssertEqual(ImportTransferRowPresentation.resolve(phase: .uploading, totalBytes: 0), .indeterminate)
+        XCTAssertEqual(ImportPresentationPhase.resolve(phase: .uploading, completed: 12, total: 18, isVerifyingCompletedUpload: false), .transferring)
     }
 
     func testUploadAreaAllowsNavigationWithoutSelectionButNotNewImport() {
@@ -52,7 +165,8 @@ final class IOSCoreFlowTests: XCTestCase {
         XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: queueURL.path)[.protectionKey] as? FileProtectionType, .completeUntilFirstUserAuthentication)
         try FileManager.default.setAttributes([.protectionKey: FileProtectionType.complete], ofItemAtPath: queueURL.path)
         let migratedQueue = ImportQueueStore(directoryURL: directory)
-        XCTAssertEqual(await migratedQueue.allRuns(), [run])
+        let migratedRuns = await migratedQueue.allRuns()
+        XCTAssertEqual(migratedRuns, [run])
         try await migratedQueue.save(run)
         XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: queueURL.path)[.protectionKey] as? FileProtectionType, .completeUntilFirstUserAuthentication)
         let bindings = BackgroundTaskBindingStore(directoryURL: directory)
@@ -124,6 +238,27 @@ final class IOSCoreFlowTests: XCTestCase {
         let text = String(decoding: serialized, as: UTF8.self)
         XCTAssertFalse(text.contains("password")); XCTAssertFalse(text.contains("Authorization"))
         XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("import-queue-v1.json").path))
+    }
+
+    func testImportQueuePersistsInventoryForOneBatchWithoutReplacingOtherAssets() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ImportQueueStore(directoryURL: directory)
+        var run = queueRun()
+        let untouched = PersistedImportAsset(queueAssetID: UUID(), stableIdentity: "local:other", localIdentifier: "other", cloudIdentifier: nil, mediaType: "image", filenameHint: nil, captureDate: nil, state: .queued, serverAssetID: nil, uploadID: nil, targetPath: nil, expectedBytes: nil, expectedSHA256: nil, lastConfirmedStep: "selected", retryCount: 0, lastErrorCode: nil)
+        run.assets.append(untouched)
+        try await store.save(run)
+        var updated = run.assets[0]
+        updated.stableIdentity = "cloud:new-cloud-id"
+        updated.cloudIdentifier = "new-cloud-id"
+        updated.filenameHint = "updated.mov"
+
+        try await store.updateInventory(runID: run.localRunID, assets: [updated])
+
+        let storedRun = await store.run(localRunID: run.localRunID)
+        let loaded = try XCTUnwrap(storedRun)
+        XCTAssertEqual(loaded.assets[0], updated)
+        XCTAssertEqual(loaded.assets[1], untouched)
     }
 
     func testImportQueueCorruptFileLoadsEmptyWithoutCrash() async throws {
@@ -205,6 +340,25 @@ final class IOSCoreFlowTests: XCTestCase {
         XCTAssertEqual(progress.activeFraction, 0.5, accuracy: 0.0001)
     }
 
+    func testImportProgressKeepsFilenameForEachParallelTransfer() {
+        var progress = IOSImportProgressAggregation()
+        progress.update(job: 0, filename: "IMG_0001.HEIC", sent: 30, total: 100)
+        progress.update(job: 1, filename: "IMG_0002.MOV", sent: 200, total: 1000)
+        progress.update(job: 0, sent: 60, total: 100)
+
+        XCTAssertEqual(progress.activeEntries.map(\.filename), ["IMG_0001.HEIC", "IMG_0002.MOV"])
+    }
+
+    func testImportProgressKeepsRemainingTransferInItsVisualSlot() {
+        var progress = IOSImportProgressAggregation()
+        progress.register(job: 10, filename: "first.heic")
+        progress.register(job: 11, filename: "second.mov")
+        progress.remove(job: 10)
+
+        XCTAssertEqual(progress.activeEntries.first?.slot, 1)
+        XCTAssertEqual(progress.activeEntries.first?.filename, "second.mov")
+    }
+
     @MainActor
     func testCompleteVerificationStatusDoesNotHideParallelPut() {
         XCTAssertTrue(IOSForegroundImportCoordinator.isVerifyingCompletedUpload(pendingCompletionCount: 1, activeTransferCount: 0))
@@ -266,6 +420,21 @@ final class IOSCoreFlowTests: XCTestCase {
         await fulfillment(of: [siblingFinished], timeout: 1)
         XCTAssertEqual(results.compactMap(\.result), [1])
         XCTAssertEqual(results.compactMap(\.errorDescription).count, 1)
+    }
+
+    func testFatalHTTP500StopsLaunchingNewJobsButKeepsRunningSibling() async throws {
+        let started = StartedJobRecorder()
+        let results = try await IOSAssetJobScheduler.runCollectingFailures(count: 4, maxConcurrent: 2) { index in
+            await started.record(index)
+            if index == 0 { throw IOSUploadFailure(step: .prepare, status: 500) }
+            try await Task.sleep(for: .milliseconds(30))
+            return index
+        }
+
+        let startedJobs = await started.values
+        XCTAssertEqual(startedJobs.sorted(), [0, 1])
+        XCTAssertEqual(results.compactMap(\.result), [1])
+        XCTAssertTrue(results.contains { $0.isFatalServerError })
     }
 
     func testAssetJobSchedulerFailureDoesNotInvokeSiblingCancellationHandler() async throws {
@@ -711,6 +880,140 @@ final class IOSCoreFlowTests: XCTestCase {
         XCTAssertTrue(output.contains("Server error: TEST_ERROR"), output)
     }
 
+    func testInventoryBatchClassificationSkipsAllKnownAssetsAsOneGroup() {
+        let known = (0..<100).map { _ in InventoryAssetReply(cloudIdentifier: "known", state: .known, upload: nil) }
+        let reply = InventoryReply(runId: "run", summary: .init(seen: 100, new: 0, known: 100), assets: known)
+        let classification = IOSInventoryBatchClassification(reply: reply)
+        XCTAssertEqual(classification.knownIndices, Array(0..<100))
+        XCTAssertTrue(classification.newIndices.isEmpty)
+    }
+
+    func testInventoryBatchClassificationSchedulesOnlyNewAssetsAfterKnownJump() {
+        let assets = (0..<100).map { index in
+            InventoryAssetReply(cloudIdentifier: "asset-\(index)", state: index < 90 ? .known : .new, upload: index < 90 ? nil : .init(uploadId: "upload-\(index)", assetId: "server-\(index)"))
+        }
+        let reply = InventoryReply(runId: "run", summary: .init(seen: 100, new: 10, known: 90), assets: assets)
+        let classification = IOSInventoryBatchClassification(reply: reply)
+        XCTAssertEqual(classification.knownIndices.count, 90)
+        XCTAssertEqual(classification.newIndices, Array(90..<100))
+    }
+
+    func testInventoryBatchClassificationPreservesNonContiguousOriginalIndices() {
+        let assets = (0..<20).map { index in
+            InventoryAssetReply(cloudIdentifier: "asset-\(index)", state: [9, 19].contains(index) ? .new : .known, upload: [9, 19].contains(index) ? .init(uploadId: "upload-\(index)", assetId: "server-\(index)") : nil)
+        }
+        let reply = InventoryReply(runId: "run", summary: .init(seen: 20, new: 2, known: 18), assets: assets)
+        let classification = IOSInventoryBatchClassification(reply: reply)
+        XCTAssertEqual(classification.newIndices, [9, 19])
+        XCTAssertEqual(classification.knownIndices, Array(0..<9) + Array(10..<19))
+    }
+
+    @MainActor
+    func testInventoryKnownFastPathPublishes100OnceAndSchedulesNoAssetWork() async throws {
+        let entries = (0..<100).map { _ in InventoryAssetReply(cloudIdentifier: "known", state: .known, upload: nil) }
+        let reply = InventoryReply(runId: "run", summary: .init(seen: 100, new: 0, known: 100), assets: entries)
+        var progress = IOSImportProgressCounts()
+        var progressPublications: [Int] = []
+        var bulkUpdateCalls = 0
+        var scheduledIndices: [Int] = []
+        var photoKitRequests = 0
+        var prepareRequests = 0
+
+        let classification = IOSInventoryBatchClassification(reply: reply)
+        try await IOSInventoryBatchFastPath.process(classification: classification, markKnown: { count in
+            bulkUpdateCalls += 1
+            progress.markInventoryKnown(count)
+            progressPublications.append(progress.completed)
+        }, scheduleNew: { indices in
+            scheduledIndices = indices
+            photoKitRequests += indices.count
+            prepareRequests += indices.count
+        })
+
+        XCTAssertEqual(bulkUpdateCalls, 1)
+        XCTAssertEqual(progressPublications, [100])
+        XCTAssertEqual(progress.alreadyPresent, 100)
+        XCTAssertEqual(scheduledIndices, [])
+        XCTAssertEqual(photoKitRequests, 0)
+        XCTAssertEqual(prepareRequests, 0)
+    }
+
+    @MainActor
+    func testInventoryKnownFastPathPublishes97OnceAndSchedulesOnlyThreeNewAssets() async throws {
+        let entries = (0..<100).map { index in
+            InventoryAssetReply(cloudIdentifier: "asset-\(index)", state: index < 97 ? .known : .new,
+                                upload: index < 97 ? nil : .init(uploadId: "upload-\(index)", assetId: "server-\(index)"))
+        }
+        let reply = InventoryReply(runId: "run", summary: .init(seen: 100, new: 3, known: 97), assets: entries)
+        var progress = IOSImportProgressCounts()
+        var progressPublications: [Int] = []
+        var bulkUpdateCalls = 0
+        var scheduledIndices: [Int] = []
+        var assetJobs = 0
+
+        let classification = IOSInventoryBatchClassification(reply: reply)
+        try await IOSInventoryBatchFastPath.process(classification: classification, markKnown: { count in
+            bulkUpdateCalls += 1
+            progress.markInventoryKnown(count)
+            progressPublications.append(progress.completed)
+        }, scheduleNew: { indices in
+            scheduledIndices = indices
+            assetJobs += indices.count
+        })
+
+        XCTAssertEqual(bulkUpdateCalls, 1)
+        XCTAssertEqual(progressPublications, [97])
+        XCTAssertEqual(progress.alreadyPresent, 97)
+        XCTAssertEqual(scheduledIndices, [97, 98, 99])
+        XCTAssertEqual(assetJobs, 3)
+    }
+
+    func testContentAlreadyPresentIsCountedSeparatelyFromInventoryKnown() {
+        var progress = IOSImportProgressCounts()
+        progress.markInventoryKnown(97)
+        let knownProgressAfterInventory = progress.alreadyPresent
+
+        progress.markReconciled(3)
+
+        XCTAssertEqual(knownProgressAfterInventory, 97)
+        XCTAssertEqual(progress.alreadyPresent, 97)
+        XCTAssertEqual(progress.reconciled, 3)
+        XCTAssertEqual(progress.completed, 100)
+    }
+
+    func testGermanPluralResourcesResolveFromBuiltAppBundle() {
+        let testBundle = Bundle(for: IOSCoreFlowTests.self)
+        let appURL = testBundle.bundleURL.deletingLastPathComponent().deletingLastPathComponent()
+        guard let appBundle = Bundle(url: appURL), let germanPath = appBundle.path(forResource: "de", ofType: "lproj"), let germanBundle = Bundle(path: germanPath) else {
+            XCTFail("Built app bundle or German localization is missing")
+            return
+        }
+        func resolve(_ key: String, _ count: Int) -> String {
+            let format = germanBundle.localizedString(forKey: key, value: nil, table: "Localizable")
+            return String.localizedStringWithFormat(format, count)
+        }
+        func resolveChecked(_ completed: Int, _ total: Int) -> String {
+            let format = germanBundle.localizedString(forKey: "ios.files.checked", value: nil, table: "Localizable")
+            return String.localizedStringWithFormat(format, completed, total)
+        }
+        XCTAssertEqual(resolve("ios.files.selected", 1), "1 ausgewählt")
+        XCTAssertEqual(resolve("ios.files.selected", 2), "2 ausgewählt")
+        XCTAssertEqual(resolveChecked(1, 1), "1 von 1 Datei geprüft")
+        XCTAssertEqual(resolveChecked(1, 2), "1 von 2 Dateien geprüft")
+        XCTAssertEqual(resolve("ios.files.already_present", 1), "Zuvor bereits in der Nextcloud vorhanden: 1 Datei")
+        XCTAssertEqual(resolve("ios.files.already_present", 2), "Zuvor bereits in der Nextcloud vorhanden: 2 Dateien")
+        let reconciledFormat = germanBundle.localizedString(forKey: "ios.files.reconciled", value: nil, table: "ImportStatus")
+        XCTAssertEqual(String.localizedStringWithFormat(reconciledFormat, 1), "Nach Prüfung wiederverwendet: 1 Datei")
+        XCTAssertEqual(String.localizedStringWithFormat(reconciledFormat, 2), "Nach Prüfung wiederverwendet: 2 Dateien")
+    }
+
+    func testInventoryBatchClassificationAcrossBatchesCoversEachAssetExactlyOnce() {
+        let plans = IOSInventoryBatching.plan(count: 201)
+        let allIndices = plans.flatMap(\.indices)
+        XCTAssertEqual(allIndices, Array(0..<201))
+        XCTAssertEqual(Set(allIndices).count, 201)
+    }
+
     func testAlbumInventoryPreservesMembershipAndStableIdentities() throws {
         let source = PhotoSource(sourceId: UUID(), name: "Apple Photos")
         let cloud = AssetInventory(localIdentifier: "phone-local", cloudIdentifier: "shared-cloud", mediaType: "image", creationDate: nil, filename: "a.heic")
@@ -759,6 +1062,7 @@ final class IOSCoreFlowTests: XCTestCase {
         XCTAssertEqual(requests.count, 4)
         XCTAssertTrue(requests.allSatisfy { !$0.file })
     }
+
 }
 
 private actor SchedulerProbe {
@@ -767,6 +1071,14 @@ private actor SchedulerProbe {
     private(set) var maximum = 0
     func enter() { active += 1; started += 1; maximum = max(maximum, active) }
     func leave() { active -= 1 }
+}
+
+private actor StartedJobRecorder {
+    private(set) var values: [Int] = []
+
+    func record(_ value: Int) {
+        values.append(value)
+    }
 }
 
 private actor CancellationProbe {
