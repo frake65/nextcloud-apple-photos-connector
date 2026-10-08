@@ -18,30 +18,6 @@ final class IOSCoreFlowTests: XCTestCase {
         XCTAssertEqual(IOSInventoryBatching.plan(count: 5, maximum: 2).map { $0.indices.count }, [2, 2, 1])
     }
 
-    func testUploadPlanningWaitsForClassificationAndSkipsSevenKnownBatches() {
-        let knownBatch = InventoryReply(
-            runId: "run",
-            summary: .init(seen: 100, new: 0, known: 100),
-            assets: (0..<100).map { index in
-                InventoryAssetReply(cloudIdentifier: "known-\(index)", state: .known, upload: nil)
-            })
-        let newBatch = InventoryReply(
-            runId: "run",
-            summary: .init(seen: 2, new: 2, known: 0),
-            assets: (0..<2).map { index in
-                InventoryAssetReply(
-                    cloudIdentifier: "new-\(index)",
-                    state: .new,
-                    upload: .init(uploadId: "upload-\(index)", assetId: "asset-\(index)"))
-            })
-
-        let uploadIndices = IOSInventoryBatching.uploadIndices(
-            for: Array(repeating: knownBatch, count: 7) + [newBatch])
-
-        XCTAssertEqual(Array(uploadIndices.prefix(7)), Array(repeating: [], count: 7))
-        XCTAssertEqual(uploadIndices.last, [0, 1])
-    }
-
     func testBatchInventoryPromotesCloudIdentityWithoutResettingRecoveryState() {
         let queueID = UUID()
         let persisted = PersistedImportAsset(
@@ -642,6 +618,54 @@ final class IOSCoreFlowTests: XCTestCase {
         XCTAssertNil(IOSForegroundImportCoordinator.resumeInventoryState(localState: .completed, serverState: .new))
         XCTAssertEqual(IOSForegroundImportCoordinator.resumeInventoryState(localState: .needsPrepare, serverState: .new), .needsPrepare)
         XCTAssertEqual(IOSForegroundImportCoordinator.resumeInventoryState(localState: .needsPrepare, serverState: .known), .completed)
+    }
+
+    @MainActor
+    func testRestoredProgressCountsRecoverKnownUploadedAndReconciledFiles() {
+        func asset(step: String, state: ImportAssetState = .completed) -> PersistedImportAsset {
+            PersistedImportAsset(
+                queueAssetID: UUID(),
+                stableIdentity: UUID().uuidString,
+                localIdentifier: UUID().uuidString,
+                cloudIdentifier: nil,
+                mediaType: "image",
+                filenameHint: "photo.heic",
+                captureDate: nil,
+                state: state,
+                serverAssetID: nil,
+                uploadID: nil,
+                targetPath: nil,
+                expectedBytes: nil,
+                expectedSHA256: nil,
+                lastConfirmedStep: step,
+                retryCount: 0,
+                lastErrorCode: nil)
+        }
+        let assets = [
+            asset(step: "inventory-known"),
+            asset(step: "complete-confirmed"),
+            asset(step: "content-reconciled"),
+            asset(step: "inventory-ticket", state: .needsPrepare)
+        ]
+        let run = PersistedImportRun(
+            schemaVersion: PersistedImportRun.currentSchemaVersion,
+            localRunID: UUID(),
+            account: ImportAccountReference(serverBaseURL: "https://example.test", username: "user"),
+            sourceID: UUID(),
+            createdAt: Date(),
+            updatedAt: Date(),
+            state: .assetProcessing,
+            serverRunID: nil,
+            assetOrder: assets.map(\.queueAssetID),
+            albumSyncPending: false,
+            assets: assets)
+
+        let counts = IOSForegroundImportCoordinator.restoredProgressCounts(in: run)
+
+        XCTAssertEqual(counts.completed, 3)
+        XCTAssertEqual(counts.alreadyPresent, 1)
+        XCTAssertEqual(counts.uploaded, 1)
+        XCTAssertEqual(counts.reconciled, 1)
     }
 
     func testActiveImportRemainsCancellableWhileBlockingStart() {

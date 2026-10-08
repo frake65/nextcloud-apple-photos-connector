@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		013ACD8A30768FD0008B5EB4 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 013ACD8930768FD0008B5EB4 /* LaunchScreen.storyboard */; };
+		013ACD8E30768FDB008B5EB4 /* InfoPlist.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 013ACD8C30768FDB008B5EB4 /* InfoPlist.xcstrings */; };
+		013ACD8F30768FDB008B5EB4 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 013ACD8D30768FDB008B5EB4 /* Localizable.xcstrings */; };
 		A10000000000000000000024 /* ApplePhotosConnectorApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000029 /* ApplePhotosConnectorApp.swift */; };
 		A10000000000000000000025 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000002A /* ContentView.swift */; };
 		A10000000000000000000026 /* GalleryModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000002B /* GalleryModels.swift */; };
@@ -18,9 +21,12 @@
 		A10000000000000000000041 /* IOSCoreFlowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000040 /* IOSCoreFlowTests.swift */; };
 		A10000000000000000000042 /* InventoryCore in Frameworks */ = {isa = PBXBuildFile; productRef = A1000000000000000000004F /* InventoryCore */; };
 		A10000000000000000000050 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000051 /* Assets.xcassets */; };
-		A10000000000000000000052 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000053 /* LaunchScreen.storyboard */; };
 		A10000000000000000000054 /* de.lproj in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000055 /* de.lproj */; };
 		A10000000000000000000056 /* en.lproj in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000057 /* en.lproj */; };
+		A10000000000000000000058 /* nl.lproj in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000059 /* nl.lproj */; };
+		A1000000000000000000005A /* es.lproj in Resources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000005B /* es.lproj */; };
+		A1000000000000000000005C /* pt.lproj in Resources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000005D /* pt.lproj */; };
+		A1000000000000000000005E /* fr.lproj in Resources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000005F /* fr.lproj */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -34,12 +40,12 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		013ACD8830768FD0008B5EB4 /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
+		013ACD8B30768FDB008B5EB4 /* mul */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; name = mul; path = mul.lproj/LaunchScreen.xcstrings; sourceTree = "<group>"; };
+		013ACD8C30768FDB008B5EB4 /* InfoPlist.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = InfoPlist.xcstrings; sourceTree = "<group>"; };
+		013ACD8D30768FDB008B5EB4 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
 		A10000000000000000000008 /* ApplePhotosConnector.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ApplePhotosConnector.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000000000000000000023 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		A10000000000000000000051 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		A10000000000000000000053 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
-		A10000000000000000000055 /* de.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = de.lproj; sourceTree = "<group>"; };
-		A10000000000000000000057 /* en.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = en.lproj; sourceTree = "<group>"; };
 		A10000000000000000000029 /* ApplePhotosConnectorApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplePhotosConnectorApp.swift; sourceTree = "<group>"; };
 		A1000000000000000000002A /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A1000000000000000000002B /* GalleryModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryModels.swift; sourceTree = "<group>"; };
@@ -49,6 +55,13 @@
 		A10000000000000000000037 /* InventoryCheck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InventoryCheck.swift; sourceTree = "<group>"; };
 		A10000000000000000000040 /* IOSCoreFlowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSCoreFlowTests.swift; sourceTree = "<group>"; };
 		A10000000000000000000043 /* ApplePhotosConnectorTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ApplePhotosConnectorTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000000000000000000051 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A10000000000000000000055 /* de.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = de.lproj; sourceTree = "<group>"; };
+		A10000000000000000000057 /* en.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = en.lproj; sourceTree = "<group>"; };
+		A10000000000000000000059 /* nl.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = nl.lproj; sourceTree = "<group>"; };
+		A1000000000000000000005B /* es.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = es.lproj; sourceTree = "<group>"; };
+		A1000000000000000000005D /* pt.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = pt.lproj; sourceTree = "<group>"; };
+		A1000000000000000000005F /* fr.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = fr.lproj; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -111,11 +124,17 @@
 		A10000000000000000000007 /* Resources */ = {
 			isa = PBXGroup;
 			children = (
+				013ACD8C30768FDB008B5EB4 /* InfoPlist.xcstrings */,
+				013ACD8D30768FDB008B5EB4 /* Localizable.xcstrings */,
 				A10000000000000000000023 /* Info.plist */,
 				A10000000000000000000051 /* Assets.xcassets */,
-				A10000000000000000000053 /* LaunchScreen.storyboard */,
+				013ACD8930768FD0008B5EB4 /* LaunchScreen.storyboard */,
 				A10000000000000000000055 /* de.lproj */,
 				A10000000000000000000057 /* en.lproj */,
+				A10000000000000000000059 /* nl.lproj */,
+				A1000000000000000000005B /* es.lproj */,
+				A1000000000000000000005D /* pt.lproj */,
+				A1000000000000000000005F /* fr.lproj */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -216,12 +235,16 @@
 			};
 			buildConfigurationList = A10000000000000000000011 /* Build configuration list for PBXProject "ApplePhotosConnector" */;
 			compatibilityVersion = "Xcode 14.0";
-			developmentRegion = en;
+			developmentRegion = de;
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				en,
 				Base,
 				de,
+				es,
+				nl,
+				fr,
+				pt,
 			);
 			mainGroup = A10000000000000000000002;
 			packageReferences = (
@@ -242,10 +265,16 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				013ACD8E30768FDB008B5EB4 /* InfoPlist.xcstrings in Resources */,
+				013ACD8F30768FDB008B5EB4 /* Localizable.xcstrings in Resources */,
 				A10000000000000000000050 /* Assets.xcassets in Resources */,
-				A10000000000000000000052 /* LaunchScreen.storyboard in Resources */,
+				013ACD8A30768FD0008B5EB4 /* LaunchScreen.storyboard in Resources */,
 				A10000000000000000000054 /* de.lproj in Resources */,
 				A10000000000000000000056 /* en.lproj in Resources */,
+				A10000000000000000000058 /* nl.lproj in Resources */,
+				A1000000000000000000005A /* es.lproj in Resources */,
+				A1000000000000000000005C /* pt.lproj in Resources */,
+				A1000000000000000000005E /* fr.lproj in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -291,6 +320,18 @@
 		};
 /* End PBXTargetDependency section */
 
+/* Begin PBXVariantGroup section */
+		013ACD8930768FD0008B5EB4 /* LaunchScreen.storyboard */ = {
+			isa = PBXVariantGroup;
+			children = (
+				013ACD8830768FD0008B5EB4 /* Base */,
+				013ACD8B30768FDB008B5EB4 /* mul */,
+			);
+			name = LaunchScreen.storyboard;
+			sourceTree = "<group>";
+		};
+/* End PBXVariantGroup section */
+
 /* Begin XCBuildConfiguration section */
 		A10000000000000000000019 /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -310,16 +351,24 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 5;
 				DEVELOPMENT_TEAM = Q3PGXQ5B45;
 				ENABLE_TESTABILITY = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Resources/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Photos Connector";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Photos Connector benötigt Zugriff auf deine Fotomediathek, damit du Fotos, Videos und Alben aus Apple Fotos in Nextcloud übernehmen kannst.";
+				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				PRODUCT_BUNDLE_IDENTIFIER = de.applephotosconnector.iosagent;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = de.kettenbeil.photosconnector;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
@@ -333,15 +382,23 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 5;
 				DEVELOPMENT_TEAM = Q3PGXQ5B45;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Resources/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Photos Connector";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Photos Connector benötigt Zugriff auf deine Fotomediathek, damit du Fotos, Videos und Alben aus Apple Fotos in Nextcloud übernehmen kannst.";
+				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				PRODUCT_BUNDLE_IDENTIFIER = de.applephotosconnector.iosagent;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = de.kettenbeil.photosconnector;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -354,6 +411,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
+				DEVELOPMENT_TEAM = Q3PGXQ5B45;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				PRODUCT_BUNDLE_IDENTIFIER = de.applephotosconnector.iosagent.tests;
@@ -369,6 +427,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
+				DEVELOPMENT_TEAM = Q3PGXQ5B45;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				PRODUCT_BUNDLE_IDENTIFIER = de.applephotosconnector.iosagent.tests;

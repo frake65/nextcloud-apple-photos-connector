@@ -79,6 +79,15 @@ final class AssetSelectionModel: ObservableObject {
 
     func clear() { identifiers.removeAll(); selected.removeAll() }
 
+    func deselect(_ asset: GalleryAsset) {
+        deselect(identifier: asset.id)
+    }
+
+    func deselect(identifier: String) {
+        identifiers.remove(identifier)
+        selected.removeValue(forKey: identifier)
+    }
+
     func allSelected(in context: [GalleryAsset]) -> Bool {
         identifiers.allSelected(in: context.map(\.id))
     }

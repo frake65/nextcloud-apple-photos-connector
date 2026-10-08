@@ -95,6 +95,17 @@ final class PhotoLibraryModel: ObservableObject {
 
     func inventory(for selection: [GalleryAsset]) throws -> [AssetInventory] {
         let localIDs = selection.map(\.id)
+        return try Self.inventory(localIdentifiers: localIDs)
+    }
+
+    func inventoryInBackground(for selection: [GalleryAsset]) async throws -> [AssetInventory] {
+        let localIDs = selection.map(\.id)
+        return try await Task.detached(priority: .userInitiated) {
+            try Self.inventory(localIdentifiers: localIDs)
+        }.value
+    }
+
+    nonisolated private static func inventory(localIdentifiers localIDs: [String]) throws -> [AssetInventory] {
         guard Set(localIDs).count == localIDs.count else { throw InventoryCheckError.invalidResponse }
         let fetched = PHAsset.fetchAssets(withLocalIdentifiers: localIDs, options: nil)
         var available: [String: PHAsset] = [:]
@@ -163,13 +174,24 @@ final class PhotoLibraryModel: ObservableObject {
     /// the macOS PhotoOriginalExporter. The caller owns the temporary file
     /// and must remove its containing directory when finished.
     func exportOriginal(for galleryAsset: GalleryAsset, progress: (@Sendable (Double) -> Void)? = nil, diagnosticAssetID: String? = nil, diagnosticJob: Int? = nil) async throws -> ExportedOriginal {
+        let exportPhase = IOSImportDiagnostics.start("asset-job[\(diagnosticJob ?? 0)] export-fetch")
         let fetched = PHAsset.fetchAssets(withLocalIdentifiers: [galleryAsset.id], options: nil)
-        guard let asset = fetched.firstObject else { throw InventoryCheckError.unavailableAsset }
+        guard let asset = fetched.firstObject else {
+            IOSImportDiagnostics.failure("asset-job[\(diagnosticJob ?? 0)] export-fetch", started: exportPhase, error: InventoryCheckError.unavailableAsset)
+            throw InventoryCheckError.unavailableAsset
+        }
+        IOSImportDiagnostics.finish("asset-job[\(diagnosticJob ?? 0)] export-fetch", started: exportPhase, detail: "asset-found")
         let type: PHAssetResourceType = asset.mediaType == .video ? .video : .photo
-        guard let resource = PHAssetResource.assetResources(for: asset).first(where: { $0.type == type }) else { throw UploadError.invalidResponse }
+        let resourcePhase = IOSImportDiagnostics.start("asset-job[\(diagnosticJob ?? 0)] export-resource")
+        guard let resource = PHAssetResource.assetResources(for: asset).first(where: { $0.type == type }) else {
+            IOSImportDiagnostics.failure("asset-job[\(diagnosticJob ?? 0)] export-resource", started: resourcePhase, error: UploadError.invalidResponse)
+            throw UploadError.invalidResponse
+        }
+        IOSImportDiagnostics.finish("asset-job[\(diagnosticJob ?? 0)] export-resource", started: resourcePhase, detail: "type=\(type)")
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         let url = directory.appendingPathComponent("original")
+        IOSImportDiagnostics.log("asset-job[\(diagnosticJob ?? 0)] export-temp-file created")
         let options = PHAssetResourceRequestOptions()
         options.isNetworkAccessAllowed = true
         options.progressHandler = { value in progress?(value) }
@@ -183,6 +205,8 @@ final class PhotoLibraryModel: ObservableObject {
                     }
                 }
             } onCancel: { }
+            let byteCount = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0
+            IOSImportDiagnostics.log("asset-job[\(diagnosticJob ?? 0)] export-file-size bytes=\(byteCount)")
             return ExportedOriginal(url: url, filename: IOSFilenamePolicy.resolved(originalFilename: resource.originalFilename, localIdentifier: galleryAsset.id, mediaType: type == .video ? "video" : "image"), resourceType: type)
         } catch {
             try? FileManager.default.removeItem(at: directory)

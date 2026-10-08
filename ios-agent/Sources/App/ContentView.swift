@@ -1,5 +1,24 @@
 import SwiftUI
 import Photos
+
+enum IOSQuantityLocalization {
+    static func selected(_ count: Int) -> String { format("ios.files.selected", count) }
+    static func media(_ count: Int) -> String { format("ios.media", count) }
+    static func albums(_ count: Int) -> String { format("ios.albums", count) }
+    static func columns(_ count: Int) -> String { format("ios.columns", count) }
+    static func checked(_ completed: Int, total: Int) -> String {
+        String.localizedStringWithFormat(NSLocalizedString("ios.files.checked", comment: "Inventory progress"), completed, total)
+    }
+    static func transferred(_ count: Int) -> String { format("ios.files.transferred", count) }
+    static func alreadyPresent(_ count: Int) -> String { format("ios.files.already_present", count) }
+    static func reconciled(_ count: Int) -> String {
+        String.localizedStringWithFormat(NSLocalizedString("ios.files.reconciled", tableName: "ImportStatus", comment: "Content reused after upload preparation"), count)
+    }
+
+    private static func format(_ key: String, _ count: Int) -> String {
+        String.localizedStringWithFormat(NSLocalizedString(key, comment: "Quantity-dependent message"), count)
+    }
+}
 import UIKit
 import InventoryCore
 
@@ -73,7 +92,7 @@ struct ContentView: View {
         VStack(spacing: 20) {
             Image(systemName: "photo.stack").font(.system(size: 48)).foregroundStyle(.tint)
             Text("Zugriff auf deine Fotos").font(.title2.bold())
-            Text("Photos Connector benötigt Zugriff auf deine Fotomediathek, damit du Fotos, Videos und Alben aus Apple Fotos in Nextcloud ansehen kannst.")
+            Text("Photos Connector benötigt Zugriff auf deine Fotomediathek, damit du Fotos, Videos und Alben aus Apple Fotos zur Nextcloud hochladen kannst.")
                 .multilineTextAlignment(.center).foregroundStyle(.secondary)
             switch library.authorization {
             case .notDetermined:
@@ -154,10 +173,17 @@ private struct AlbumsScreen: View {
             NavigationLink {
                 GalleryScreen(library: library, selection: selection, assets: library.assets(in: album), title: album.title, canImport: canImport, onCheck: onCheck)
             } label: {
-                HStack(spacing: 14) {
-                    if let cover = album.cover { ThumbnailView(asset: cover, library: library, dimension: 60) }
-                    else { Image(systemName: "rectangle.stack").frame(width: 60, height: 60).background(.quaternary, in: RoundedRectangle(cornerRadius: 8)) }
-                    VStack(alignment: .leading) { Text(album.title).font(.headline); Text("\(album.count) Medien").font(.subheadline).foregroundStyle(.secondary) }
+                HStack(spacing: 10) {
+                    if let cover = album.cover {
+                        ThumbnailView(asset: cover, library: library, dimension: 44)
+                            .frame(width: 44, height: 44)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                    } else {
+                        Image(systemName: "rectangle.stack")
+                            .frame(width: 44, height: 44)
+                            .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+                    }
+                    VStack(alignment: .leading) { Text(album.title).font(.headline); Text(IOSQuantityLocalization.media(album.count)).font(.subheadline).foregroundStyle(.secondary) }
                 }
             }
         }
@@ -211,17 +237,22 @@ private struct GalleryScreen: View {
                 LazyVGrid(columns: columns, spacing: 2) {
                     ForEach(assets) { item in
                         Button { selection.toggle(item) } label: {
-                            ZStack(alignment: .bottomTrailing) {
-                                ThumbnailView(asset: item.asset, library: library, dimension: 160)
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                    .clipped()
-                                    .overlay(alignment: .topTrailing) { selectionIndicator(for: item) }
-                                if item.isVideo { Label(item.durationLabel, systemImage: "play.fill").font(.caption2.bold()).padding(5).background(.black.opacity(0.65), in: Capsule()).foregroundStyle(.white).padding(6).frame(maxWidth: .infinity, alignment: .leading) }
+                            GeometryReader { proxy in
+                                let side = proxy.size.width
+                                ZStack(alignment: .bottomTrailing) {
+                                    ThumbnailView(asset: item.asset, library: library, dimension: 160)
+                                        .frame(width: side, height: side)
+                                        .clipped()
+                                        .overlay(alignment: .topTrailing) { selectionIndicator(for: item) }
+                                    if item.isVideo { Label(item.durationLabel, systemImage: "play.fill").font(.caption2.bold()).padding(5).background(.black.opacity(0.65), in: Capsule()).foregroundStyle(.white).padding(6).frame(maxWidth: .infinity, alignment: .leading) }
+                                }
+                                .frame(width: side, height: side)
+                                .clipped()
                             }
-                            .frame(maxWidth: .infinity)
                             .aspectRatio(1, contentMode: .fit)
                         }
                         .buttonStyle(.plain)
+                        .frame(maxWidth: .infinity)
                         .contentShape(Rectangle())
                         .background(GeometryReader { proxy in
                             Color.clear.preference(key: CellFramesKey.self, value: [item.id: proxy.frame(in: .global)])
@@ -268,7 +299,7 @@ private struct GalleryScreen: View {
                     Text("Darstellung")
                     ForEach([3, 4, 5, 6], id: \.self) { count in
                         Button { columnCount = count } label: {
-                            Label("\(count) Spalten", systemImage: columnCount == count ? "checkmark" : "circle")
+                            Label(IOSQuantityLocalization.columns(count), systemImage: columnCount == count ? "checkmark" : "circle")
                         }
                     }
                 } label: {
@@ -290,7 +321,7 @@ private struct GalleryScreen: View {
 
     private var importAction: some View {
         HStack(spacing: 12) {
-            Text("\(selection.count) ausgewählt")
+            Text(IOSQuantityLocalization.selected(selection.count))
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(selection.count == 0 ? .secondary : .primary)
             Spacer()
@@ -369,7 +400,9 @@ private struct GalleryScreen: View {
         guard let point = dragLocation, selection.dragIsActive, let scrollView = galleryScrollView else { stopAutoScroll(); return }
         let zone: CGFloat = 70
         let height = scrollView.bounds.height
-        guard let velocity = GalleryAutoScroll.velocity(fingerY: point.y, viewportHeight: height, zone: zone) else {
+        let pointInScrollView = scrollView.convert(point, from: nil)
+        let viewportY = pointInScrollView.y - scrollView.bounds.minY
+        guard let velocity = GalleryAutoScroll.velocity(fingerY: viewportY, viewportHeight: height, zone: zone) else {
             stopAutoScroll()
             debugLog("SELECT AUTOSCROLL STOP")
             return
@@ -452,7 +485,7 @@ private struct SelectionLongPressBridge: UIViewRepresentable {
             self.action = action
             pan = scrollView.panGestureRecognizer
             let longPress = SelectionGestureRecognizer(target: self, action: #selector(handle(_:)))
-            longPress.minimumDuration = 0.3
+            longPress.minimumDuration = 0.15
             longPress.movementThreshold = 20
             longPress.cancelsTouchesInView = true
             longPress.delaysTouchesBegan = false
@@ -466,7 +499,7 @@ private struct SelectionLongPressBridge: UIViewRepresentable {
             recognizer = longPress
             pan?.addTarget(self, action: #selector(handlePan(_:)))
             #if DEBUG
-            print("SELECT SELECTION GESTURE INSTALLED view=\(String(describing: longPress.view)) scrollView=\(scrollView) minimumDuration=0.3 movementThreshold=20")
+            print("SELECT SELECTION GESTURE INSTALLED view=\(String(describing: longPress.view)) scrollView=\(scrollView) minimumDuration=\(longPress.minimumDuration) movementThreshold=20")
             print("SELECT GESTURE RECOGNIZERS " + (scrollView.gestureRecognizers ?? []).map { String(describing: type(of: $0)) }.joined(separator: ","))
             #endif
             // No failure relationship is required: movement beyond
@@ -478,14 +511,12 @@ private struct SelectionLongPressBridge: UIViewRepresentable {
         @objc private func handle(_ recognizer: SelectionGestureRecognizer) {
             guard let view = recognizer.view else { return }
             #if DEBUG
-            let location = recognizer.location(in: view)
             print("SELECT GESTURE \(stateName(recognizer.state)) duration=\(recognizer.duration) distance=\(recognizer.distance)")
             #endif
-            let localLocation = recognizer.location(in: view)
-            // SwiftUI frame(in: .global) is in the global screen coordinate
-            // space. Convert the recognizer location to that same space.
-            let globalLocation = view.convert(localLocation, to: nil)
-            action?(recognizer.state, globalLocation)
+            // SwiftUI frame(in: .global) uses window coordinates.
+            // Read the gesture directly in that same coordinate space.
+            let windowLocation = recognizer.location(in: view.window)
+            action?(recognizer.state, windowLocation)
         }
 
         @objc private func handlePan(_ recognizer: UIPanGestureRecognizer) {
@@ -535,7 +566,7 @@ private struct SelectionLongPressBridge: UIViewRepresentable {
     }
 
     private final class SelectionGestureRecognizer: UIGestureRecognizer {
-        var minimumDuration: TimeInterval = 0.3
+        var minimumDuration: TimeInterval = 0.15
         var movementThreshold: CGFloat = 20
         private var timer: DispatchWorkItem?
         private var startTime: CFTimeInterval = 0
@@ -592,7 +623,7 @@ private struct SelectionLongPressBridge: UIViewRepresentable {
             }
             timer = work
             #if DEBUG
-            print("SELECT TIMER SCHEDULED id=\(timerID) delay=0.3 state=possible")
+            print("SELECT TIMER SCHEDULED id=\(timerID) delay=\(minimumDuration) state=possible")
             #endif
             DispatchQueue.main.asyncAfter(deadline: .now() + minimumDuration, execute: work)
         }
@@ -601,7 +632,7 @@ private struct SelectionLongPressBridge: UIViewRepresentable {
             guard let touch = touches.first, let view else { return }
             currentLocation = touch.location(in: view)
             guard state == .possible else {
-                if state == .began {
+                if state == .began || state == .changed {
                     transition(to: .changed, reason: "touches-moved")
                 }
                 return
@@ -650,6 +681,7 @@ private struct SelectionLongPressBridge: UIViewRepresentable {
     }
 }
 
+@MainActor
 private final class ContinuousScrollDriver: NSObject {
     private var displayLink: CADisplayLink?
     private weak var scrollView: UIScrollView?
@@ -810,6 +842,67 @@ enum ImportPresentationPhase: Equatable {
     }
 }
 
+enum ImportTransferRowPresentation: Equatable {
+    case hidden
+    case preparing
+    case indeterminate
+    case determinate
+
+    static func resolve(phase: IOSForegroundImportCoordinator.Phase, totalBytes: Int64) -> Self {
+        if phase == .inventory { return .hidden }
+        if totalBytes > 0 { return .determinate }
+        switch phase {
+        case .exporting, .hashing, .preparing: return .preparing
+        case .uploading, .completing: return .indeterminate
+        default: return .hidden
+        }
+    }
+}
+
+private struct ImportTransferProgressRow: View {
+    let presentation: ImportTransferRowPresentation
+    let filename: String?
+    let sentBytes: Int64
+    let totalBytes: Int64
+    let isOccupied: Bool
+
+    private var isVisible: Bool {
+        isOccupied && presentation != .hidden
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(filename ?? "Datei")
+                .lineLimit(1)
+
+            ZStack(alignment: .leading) {
+                ProgressView(value: totalBytes > 0 ? Double(sentBytes) / Double(totalBytes) : 0)
+                    .opacity(presentation == .determinate ? 1 : 0)
+                ProgressView()
+                    .opacity(presentation == .preparing || presentation == .indeterminate ? 1 : 0)
+            }
+
+            Group {
+                switch presentation {
+                case .determinate:
+                    Text("\(ByteCountFormatter.string(fromByteCount: sentBytes, countStyle: .file)) von \(ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file))")
+                case .preparing:
+                    Text("Datei wird vorbereitet …")
+                case .indeterminate:
+                    Text("Upload wird vorbereitet oder im Hintergrund fortgesetzt …")
+                case .hidden:
+                    Text("Datei")
+                }
+            }
+            .font(.body)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
+        .opacity(isVisible ? 1 : 0)
+        .accessibilityHidden(!isVisible)
+    }
+}
+
 private struct InventoryReviewScreen: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
@@ -833,7 +926,7 @@ private struct InventoryReviewScreen: View {
     var body: some View {
         List {
             Section("Auswahl") {
-                Text("\(selection.count) ausgewählt")
+                Text(IOSQuantityLocalization.selected(selection.count))
                 if let result {
                     LabeledContent("Bereits in Nextcloud", value: "\(result.known)")
                     LabeledContent("Neu", value: "\(result.new)")
@@ -844,8 +937,8 @@ private struct InventoryReviewScreen: View {
                     get: { connection.useCellularForTransfers },
                     set: { connection.setUseCellularForTransfers($0) }
                 ))
-                Text("Wenn deaktiviert, werden Fotos und Videos nur über WLAN übertragen.")
-                    .font(.footnote).foregroundStyle(.secondary)
+                Text("Wenn deaktiviert, werden Fotos und Videos ausschließlich über WLAN übertragen.")
+                    .font(.body).foregroundStyle(.secondary)
             }
             #if DEBUG
             if IOSImportDiagnostics.enabled, let result {
@@ -855,11 +948,11 @@ private struct InventoryReviewScreen: View {
                             VStack(alignment: .leading) {
                                 Text(asset.filename ?? "Unbenanntes Medium").lineLimit(1)
                                 Text(asset.stableIdentity.hasPrefix("cloud:") ? "iCloud-Fotomediathek-ID" : "Nur lokale PhotoKit-ID")
-                                    .font(.caption).foregroundStyle(.secondary)
+                                    .font(.body).foregroundStyle(.secondary)
                             }
                             Spacer()
                             Text(result.states[index] == .known ? "Bereits in Nextcloud" : "Neu")
-                                .font(.caption.bold()).foregroundStyle(result.states[index] == .known ? .green : .orange)
+                                .font(.body.bold()).foregroundStyle(result.states[index] == .known ? .green : .orange)
                         }
                     }
                 }
@@ -888,7 +981,7 @@ private struct InventoryReviewScreen: View {
                         } else {
                             Text("Serverresultat: noch nicht geprüft")
                         }
-                    }.font(.caption.monospaced())
+                    }.font(.body.monospaced())
                 }
                 Text("sourceId: \(connection.parsedSourceId?.uuidString.lowercased() ?? "ungültig")").textSelection(.enabled)
             } }
@@ -910,9 +1003,9 @@ private struct InventoryReviewScreen: View {
                         Text("originalFilename: \(originalHashResult.filename)").textSelection(.enabled)
                         Text("byteSize: \(originalHashResult.byteSize)")
                         Text("SHA-256: \(originalHashResult.sha256)").textSelection(.enabled)
-                    }.font(.caption.monospaced())
+                    }.font(.body.monospaced())
                 }
-                if selection.count != 1 { Text("Genau ein Foto oder Video auswählen.").font(.footnote).foregroundStyle(.secondary) }
+                if selection.count != 1 { Text("Genau ein Foto oder Video auswählen.").font(.body).foregroundStyle(.secondary) }
             } }
             #endif
             if let error { Section { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red) } }
@@ -920,53 +1013,48 @@ private struct InventoryReviewScreen: View {
                 if let interruptedRun {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Unterbrochene Übertragung")
-                        Text("Die Übertragung wurde unterbrochen und kann fortgesetzt werden.").font(.caption).foregroundStyle(.secondary)
+                        Text("Die Übertragung wurde unterbrochen und kann fortgesetzt werden.").font(.body).foregroundStyle(.secondary)
                         Button("Fortsetzen") { resumeImport(interruptedRun) }
                             .disabled(importer.isRunning)
                     }
                 }
                 let presentation = ImportPresentationPhase.resolve(phase: importer.phase, completed: importer.completed, total: importer.total, isVerifyingCompletedUpload: importer.isVerifyingCompletedUpload)
                 if importer.isWaitingForWiFi {
-                    Text("Warten auf WLAN …").font(.caption).foregroundStyle(.secondary)
-                    Text("Die Übertragung wird fortgesetzt, sobald WLAN bereitsteht.").font(.caption).foregroundStyle(.secondary)
-                } else if importer.hasActiveBackgroundTransfer {
-                    Text("Übertragung läuft …").font(.caption).foregroundStyle(.secondary)
-                    Text("Die Übertragung läuft weiter.").font(.caption).foregroundStyle(.secondary)
+                    ProgressView(value: importer.overallProgress) {
+                        Text(IOSQuantityLocalization.checked(importer.completed, total: importer.total))
+                    }
+                        .accessibilityLabel("Gesamtfortschritt")
+                    Text("Warten auf WLAN …").font(.body).foregroundStyle(.secondary)
+                    Text("Die Übertragung wird fortgesetzt, sobald WLAN bereitsteht.").font(.body).foregroundStyle(.secondary)
+                    transferProgressRows
                 } else if presentation == .albumSync {
                     Text("Übertragung abgeschlossen")
                     ProgressView()
-                    Text("Alben werden abgeglichen …").font(.caption).foregroundStyle(.secondary)
+                    Text("Alben werden abgeglichen …").font(.body).foregroundStyle(.secondary)
                 } else if presentation == .completed {
                     Text("Übertragung abgeschlossen")
-                } else if presentation != .idle {
-                    if presentation != .serverVerification, let filename = importer.currentFilename {
-                        Text(filename)
-                        ProgressView(value: importer.overallProgress)
-                        if !importer.activeTransfers.isEmpty {
-                            ForEach(importer.activeTransfers, id: \.job) { transfer in
-                                Text("\(ByteCountFormatter.string(fromByteCount: transfer.sent, countStyle: .file)) von \(ByteCountFormatter.string(fromByteCount: transfer.total, countStyle: .file))")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
+                } else if presentation != .idle || importer.hasActiveBackgroundTransfer {
+                    ProgressView(value: importer.overallProgress) {
+                        Text(IOSQuantityLocalization.checked(importer.completed, total: importer.total))
                     }
-                    Text("\(importer.completed) von \(importer.total) übertragen").font(.caption).foregroundStyle(.secondary)
+                        .accessibilityLabel("Gesamtfortschritt")
+                    if presentation != .serverVerification {
+                        transferProgressRows
+                    }
                     if presentation == .serverVerification {
                         Text("Übertragung abgeschlossen")
-                        Text("Datei wird in Nextcloud überprüft …").font(.caption).foregroundStyle(.secondary)
-                        Text("Bei großen Videos kann dies etwas dauern.").font(.caption).foregroundStyle(.secondary)
-                    } else {
-                        Text(importerStatusText).font(.caption).foregroundStyle(.secondary)
+                        Text("Datei wird in Nextcloud überprüft …").font(.body).foregroundStyle(.secondary)
+                        Text("Bei großen Videos kann dies etwas dauern.").font(.body).foregroundStyle(.secondary)
                     }
-                    if importer.uploaded > 0 { Text("Übertragen: \(importer.uploaded)") }
-                    if importer.alreadyPresent > 0 { Text("Bereits vorhanden: \(importer.alreadyPresent)") }
-                    #if DEBUG
-                    if IOSImportDiagnostics.enabled, importer.reconciled > 0 { Text("Überprüft: \(importer.reconciled)") }
-                    #endif
+                    if importer.uploaded > 0 { Text(IOSQuantityLocalization.transferred(importer.uploaded)) }
+                    if importer.alreadyPresent > 0 { Text(IOSQuantityLocalization.alreadyPresent(importer.alreadyPresent)) }
+                    if importer.reconciled > 0 { Text(IOSQuantityLocalization.reconciled(importer.reconciled)) }
                     if let failure = importer.failure { Text(failure).foregroundStyle(.red) }
                 }
                 if presentation == .albumSync || presentation == .completed {
-                    if importer.uploaded > 0 { Text("Übertragen: \(importer.uploaded)") }
-                    if importer.alreadyPresent > 0 { Text("Bereits vorhanden: \(importer.alreadyPresent)") }
+                    if importer.uploaded > 0 { Text(IOSQuantityLocalization.transferred(importer.uploaded)) }
+                    if importer.alreadyPresent > 0 { Text(IOSQuantityLocalization.alreadyPresent(importer.alreadyPresent)) }
+                    if importer.reconciled > 0 { Text(IOSQuantityLocalization.reconciled(importer.reconciled)) }
                 }
                 if ImportPresentationPhase.allowsStart(phase: presentation, isRunning: importer.isRunning, hasActiveBackgroundTransfer: importer.hasActiveBackgroundTransfer, waitingForWiFi: importer.isWaitingForWiFi, hasRecoverableRun: interruptedRun != nil) {
                     Button { startImport() } label: {
@@ -979,7 +1067,7 @@ private struct InventoryReviewScreen: View {
                 }
                 if ImportPresentationPhase.showsIdleHelp(phase: presentation, isRunning: importer.isRunning, hasActiveBackgroundTransfer: importer.hasActiveBackgroundTransfer, waitingForWiFi: importer.isWaitingForWiFi, hasRecoverableRun: interruptedRun != nil) {
                     Text("Die Übertragung läuft im Vordergrund. Danach werden die betroffenen Alben abgeglichen.")
-                        .font(.footnote).foregroundStyle(.secondary)
+                        .font(.body).foregroundStyle(.secondary)
                 }
             }
             #if DEBUG
@@ -992,7 +1080,7 @@ private struct InventoryReviewScreen: View {
                 }
                 .disabled(isChecking || selection.count == 0)
                 Text("Es werden nur Inventarmetadaten an Nextcloud gesendet. Diese Aktion überträgt keine Dateien.")
-                    .font(.footnote).foregroundStyle(.secondary)
+                    .font(.body).foregroundStyle(.secondary)
             } }
             #endif
         }
@@ -1005,13 +1093,30 @@ private struct InventoryReviewScreen: View {
         }
     }
 
+    @ViewBuilder
+    private var transferProgressRows: some View {
+        let transfers = importer.activeTransfers
+        ForEach(0..<2, id: \.self) { slot in
+            let transfer = transfers.first(where: { $0.slot == slot })
+            let totalBytes = transfer?.total ?? 0
+            ImportTransferProgressRow(
+                presentation: ImportTransferRowPresentation.resolve(
+                    phase: importer.phase,
+                    totalBytes: totalBytes),
+                filename: transfer?.filename,
+                sentBytes: transfer?.sent ?? 0,
+                totalBytes: totalBytes,
+                isOccupied: transfer != nil)
+        }
+    }
+
     @MainActor
     private func checkSelection() async {
         isChecking = true; error = nil; result = nil
         defer { isChecking = false }
         guard connection.parsedSourceId != nil else { error = InventoryCheckError.invalidSourceIdentifier.localizedDescription; return }
         do {
-            let assets = try library.inventory(for: selection.assets)
+            let assets = try await library.inventoryInBackground(for: selection.assets)
             let reply = try await InventoryCheckClient.check(
                 connection: connection.makeConnection(),
                 source: PhotoSource(sourceId: connection.parsedSourceId!, name: "Apple Photos"),
@@ -1038,7 +1143,9 @@ private struct InventoryReviewScreen: View {
         guard let sourceID = connection.parsedSourceId else { error = InventoryCheckError.invalidSourceIdentifier.localizedDescription; return }
         guard let serverConnection = try? connection.makeConnection() else { error = InventoryCheckError.noServerConfiguration.localizedDescription; return }
         interruptedRun = nil
-            importer.start(selection: selection.assets, library: library, connection: serverConnection, source: PhotoSource(sourceId: sourceID, name: "Apple Photos"), targetRoot: connection.targetDirectory)
+            importer.start(selection: selection.assets, library: library, connection: serverConnection, source: PhotoSource(sourceId: sourceID, name: "Apple Photos"), targetRoot: connection.targetDirectory) { identifier in
+                selection.deselect(identifier: identifier)
+            }
     }
 
     @MainActor
@@ -1062,21 +1169,12 @@ private struct InventoryReviewScreen: View {
         guard assets.count == run.assets.count else { return }
         interruptedRun = nil
         IOSImportDiagnostics.memory(phase: "resume-start")
-            importer.start(selection: assets, library: library, connection: serverConnection, source: PhotoSource(sourceId: sourceID, name: "Apple Photos"), targetRoot: connection.targetDirectory, resumeRun: run)
+            importer.start(selection: assets, library: library, connection: serverConnection, source: PhotoSource(sourceId: sourceID, name: "Apple Photos"), targetRoot: connection.targetDirectory, resumeRun: run) { identifier in
+                selection.deselect(identifier: identifier)
+            }
     }
 
     private var connectionHasConfiguration: Bool { connection.parsedSourceId != nil }
-    private var importerStatusText: String {
-        switch importer.phase {
-        case .inventory: "Übertragung wird vorbereitet …"
-        case .exporting, .hashing, .preparing: "Dateien werden vorbereitet …"
-        case .uploading: "Übertragung läuft …"
-        case .completing: "Übertragung wird geprüft …"
-        case .finished: "Alben werden abgeglichen …"
-        default: ""
-        }
-    }
-
     #if DEBUG
     @MainActor
     private func calculateOriginalHash() async {

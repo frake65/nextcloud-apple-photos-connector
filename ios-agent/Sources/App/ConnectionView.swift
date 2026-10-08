@@ -15,8 +15,12 @@ struct ConnectionView: View {
                     .textInputAutocapitalization(.never).keyboardType(.URL).autocorrectionDisabled()
                     .textContentType(.URL)
                     .focused($focusedField, equals: .server)
-                Button("Mit Nextcloud anmelden") { model.startBrowserLogin() }
-                    .disabled(model.server.isEmpty || model.loginFlowState == .starting || model.loginFlowState == .waiting)
+                if model.hasConfiguredConnection {
+                    Button("Verbindung trennen", role: .destructive) { model.disconnect() }
+                } else {
+                    Button("Mit Nextcloud anmelden") { model.startBrowserLogin() }
+                        .disabled(model.server.isEmpty || model.loginFlowState == .starting || model.loginFlowState == .waiting)
+                }
                 if model.loginFlowState == .starting {
                     ProgressView("Anmeldung im Browser …")
                 } else if model.loginFlowState == .waiting {
@@ -67,11 +71,6 @@ struct ConnectionView: View {
             Section {
                 Text("Das App-Passwort wird im iOS-Schlüsselbund gespeichert. Serveradresse, Benutzername und Source-ID liegen in den App-Einstellungen.")
                     .font(.footnote).foregroundStyle(.secondary)
-                Button("Einstellungen speichern") {
-                    do { try model.save(); model.saved() }
-                    catch { model.showSaveError() }
-                }
-                .disabled(model.password.isEmpty || model.username.isEmpty || model.parsedSourceId == nil)
             }
 
             #if DEBUG

@@ -11,6 +11,32 @@ private final class LoginFlowTransport: DAVTransport, @unchecked Sendable {
     }
 }
 
+private enum LoginPollResponse: @unchecked Sendable {
+    case response(DAVResponse)
+    case error(Error)
+}
+
+private final class ScriptedLoginPollTransport: DAVTransport, @unchecked Sendable {
+    private let lock = NSLock()
+    var script: [LoginPollResponse]
+    var requests: [URLRequest] = []
+    init(_ script: [LoginPollResponse]) { self.script = script }
+    private func next() -> LoginPollResponse {
+        lock.lock(); defer { lock.unlock() }
+        return script.removeFirst()
+    }
+    private func record(_ request: URLRequest) {
+        lock.lock(); requests.append(request); lock.unlock()
+    }
+    func send(_ request: URLRequest, file: URL?) async throws -> DAVResponse {
+        record(request)
+        switch next() {
+        case .response(let response): return response
+        case .error(let error): throw error
+        }
+    }
+}
+
 final class LoginFlowTests: XCTestCase {
     func testStartResponseUsesServerProvidedLoginAndPollEndpoint() async throws {
         let transport = LoginFlowTransport([DAVResponse(status: 200, data: Data(#"{"poll":{"token":"temporary","endpoint":"https://cloud.example/login/v2/poll"},"login":"https://cloud.example/login/v2/flow/abc"}"#.utf8))])
@@ -64,6 +90,66 @@ private actor PendingLoginTransport: DAVTransport {
 }
 
 extension LoginFlowTests {
+    private var pollStart: LoginFlowStartResponse {
+        LoginFlowStartResponse(poll: .init(token: "same-token", endpoint: URL(string: "https://cloud.example/login/v2/poll")!), login: URL(string: "https://cloud.example/login/v2/flow")!)
+    }
+
+    private var credentialsResponse: DAVResponse {
+        DAVResponse(status: 200, data: Data(#"{"server":"https://cloud.example","loginName":"new","appPassword":"new-password"}"#.utf8))
+    }
+
+    func testPoll404ThenConnectionLostThen404ThenSuccessKeepsToken() async throws {
+        let transport = ScriptedLoginPollTransport([
+            .response(DAVResponse(status: 404)),
+            .error(URLError(.networkConnectionLost)),
+            .response(DAVResponse(status: 404)),
+            .response(credentialsResponse)
+        ])
+        let credentials = try await NextcloudLoginFlowService(transport: transport, pollInterval: .milliseconds(1), timeout: .seconds(3)).poll(pollStart)
+        XCTAssertEqual(credentials.loginName, "new")
+        XCTAssertEqual(transport.requests.count, 4)
+        XCTAssertEqual(Set(transport.requests.compactMap { String(data: $0.httpBody ?? Data(), encoding: .utf8) }), ["token=same-token"])
+    }
+
+    func testRepeatedConnectionLossUsesBoundedBackoffAndRetries() async throws {
+        let transport = ScriptedLoginPollTransport([
+            .error(URLError(.networkConnectionLost)),
+            .error(URLError(.networkConnectionLost)),
+            .error(URLError(.networkConnectionLost)),
+            .response(credentialsResponse)
+        ])
+        let start = Date()
+        _ = try await NextcloudLoginFlowService(transport: transport, pollInterval: .milliseconds(1), timeout: .seconds(10)).poll(pollStart)
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(start), 1.5)
+        XCTAssertEqual(transport.requests.count, 4)
+    }
+
+    func testSuccessfulHTTPPollResetsConnectionLossBackoff() async throws {
+        let transport = ScriptedLoginPollTransport([
+            .error(URLError(.networkConnectionLost)), .response(credentialsResponse)
+        ])
+        _ = try await NextcloudLoginFlowService(transport: transport, pollInterval: .milliseconds(1), timeout: .seconds(10)).poll(pollStart)
+        XCTAssertEqual(transport.requests.count, 2)
+    }
+
+    func testCancellationDuringConnectionLossBackoffStopsImmediately() async {
+        let transport = ScriptedLoginPollTransport([.error(URLError(.networkConnectionLost))])
+        let start = pollStart
+        let task = Task { try await NextcloudLoginFlowService(transport: transport, pollInterval: .milliseconds(1), timeout: .seconds(10)).poll(start) }
+        while transport.requests.isEmpty { await Task.yield() }
+        task.cancel()
+        do { _ = try await task.value; XCTFail("expected cancellation") }
+        catch LoginFlowError.cancelled { }
+        catch { XCTFail("unexpected error: \(error)") }
+    }
+
+    func testTLSFailureDoesNotRetry() async {
+        let transport = ScriptedLoginPollTransport([.error(URLError(.secureConnectionFailed))])
+        do { _ = try await NextcloudLoginFlowService(transport: transport, pollInterval: .milliseconds(1), timeout: .seconds(1)).poll(pollStart); XCTFail("expected network error") }
+        catch LoginFlowError.network { XCTAssertEqual(transport.requests.count, 1) }
+        catch { XCTFail("unexpected error: \(error)") }
+    }
+
     func testRealTransportStyle404ContinuesPolling() async throws {
         let service = NextcloudLoginFlowService(transport: PendingLoginTransport(), pollInterval: .milliseconds(1), timeout: .seconds(1))
         let start = LoginFlowStartResponse(poll: .init(token: "test", endpoint: URL(string: "https://b.example/poll")!), login: URL(string: "https://b.example/login")!)

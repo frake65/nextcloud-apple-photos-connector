@@ -9,7 +9,10 @@ struct ApplePhotosConnectorApp: App {
         }
     }
 
-    init() { IOSImportDiagnostics.log("[Startup] process/app init") }
+    init() {
+        IOSImportDiagnostics.announceIfEnabled()
+        IOSImportDiagnostics.log("[Startup] process/app init")
+    }
 }
 
 final class ApplePhotosConnectorAppDelegate: NSObject, UIApplicationDelegate {
