@@ -2,6 +2,26 @@ import XCTest
 @testable import InventoryCore
 
 final class WebDAVTargetRootTests: XCTestCase {
+    final class CancellationProbe: @unchecked Sendable {
+        private let lock = NSLock()
+        private(set) var calls = 0
+        func cancel() { lock.lock(); calls += 1; lock.unlock() }
+        func count() -> Int { lock.lock(); defer { lock.unlock() }; return calls }
+    }
+
+    func testUploadCancellationCancelsRegisteredTaskInBothRaceOrders() {
+        let registeredFirst = URLSessionUploadCancellation()
+        let firstProbe = CancellationProbe()
+        registeredFirst.register { firstProbe.cancel() }
+        registeredFirst.cancel()
+        XCTAssertEqual(firstProbe.count(), 1)
+
+        let cancelledFirst = URLSessionUploadCancellation()
+        let secondProbe = CancellationProbe()
+        cancelledFirst.cancel()
+        cancelledFirst.register { secondProbe.cancel() }
+        XCTAssertEqual(secondProbe.count(), 1)
+    }
     func testNetworkTimeoutClassesKeepNormalAndLongRunningSemantics() {
         XCTAssertEqual(NetworkTransport.timeout(for: .api).request, 20)
         XCTAssertEqual(NetworkTransport.timeout(for: .api).resource, 30)

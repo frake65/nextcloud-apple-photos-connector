@@ -9,7 +9,7 @@ actor MKCOLCounter {
 }
 
 final class UploadFailureProgressTests: XCTestCase {
-    enum Mode: Sendable { case success, put413, timeout, export, complete, known, mixed, inventory, prepare, folder, receipt }
+    enum Mode: Sendable { case success, put413, timeout, export, complete, known, mixed, inventory, prepare, folder }
     struct Exporter: PhotoOriginalExporting {
         let mode: Mode
         func export(localIdentifier: String) async throws -> PhotoOriginalExporter.Export {
@@ -85,14 +85,7 @@ final class UploadFailureProgressTests: XCTestCase {
     private func run(_ mode: Mode, count: Int = 3) async throws -> (UploadCoordinator.RunSummary, Events) {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: dir) }
-        var receiptURL = dir.appendingPathComponent("receipts.json")
-        if mode == .receipt {
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            let blocked = dir.appendingPathComponent("blocked")
-            try Data("not a directory".utf8).write(to: blocked)
-            receiptURL = blocked.appendingPathComponent("receipts.json")
-        }
-        let coordinator = UploadCoordinator(exporter: Exporter(mode: mode), transport: Transport(mode), receiptURL: receiptURL)
+        let coordinator = UploadCoordinator(exporter: Exporter(mode: mode), transport: Transport(mode), legacyReceiptURL: dir.appendingPathComponent("receipts.json"))
         let events = Events()
         let summary = try await coordinator.run(json: payload(count: count), connection: connection(), targetRoot: "Root", progress: { events.receive($0) }, onUploaded: { events.success($0) })
         return (summary, events)
@@ -214,23 +207,17 @@ final class UploadFailureProgressTests: XCTestCase {
         XCTAssertTrue(summary.finalProgress.items.allSatisfy { $0.error?.stage == .folder && $0.error?.httpStatus == 403 })
         let events = Events()
         let receipt = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("receipts.json")
-        let coordinator = UploadCoordinator(exporter: Exporter(mode: .success), transport: Transport(.inventory), receiptURL: receipt)
+        let coordinator = UploadCoordinator(exporter: Exporter(mode: .success), transport: Transport(.inventory), legacyReceiptURL: receipt)
         do { _ = try await coordinator.run(json: payload(), connection: connection(), progress: { events.receive($0) }); XCTFail("Expected timeout") } catch { }
         XCTAssertEqual(events.progress.last?.items.count, 3)
         XCTAssertTrue(events.progress.last!.items.allSatisfy { $0.status == .failed && $0.error?.category == .timeout })
-    }
-    func testLocalReceiptFailureDoesNotLeaveRowsUploading() async throws {
-        let (summary, events) = try await run(.receipt)
-        XCTAssertEqual(summary.failed, 3); XCTAssertTrue(summary.finalProgress.finished)
-        XCTAssertFalse(summary.shouldCloseProgressSheet); XCTAssertTrue(events.uploaded.isEmpty)
-        XCTAssertTrue(summary.finalProgress.items.allSatisfy { $0.status == .failed && $0.error?.stage == .receipt && $0.error?.category == .filesystem })
     }
     func testFailureCategoriesAndLocalizedMessages() {
         for (code, category) in [(401, UploadFailure.Category.authorization), (403, .authorization), (404, .notFound), (413, .tooLarge), (507, .storageFull), (503, .server), (409, .http)] {
             XCTAssertEqual(UploadFailure.capture(UploadError.http(code), stage: .put).category, category)
         }
         XCTAssertEqual(UploadFailure.capture(URLError(.notConnectedToInternet), stage: .put).category, .network)
-        XCTAssertEqual(UploadFailure.capture(NSError(domain: NSCocoaErrorDomain, code: NSFileWriteOutOfSpaceError), stage: .receipt).category, .filesystem)
+        XCTAssertEqual(UploadFailure.capture(NSError(domain: NSCocoaErrorDomain, code: NSFileWriteOutOfSpaceError), stage: .put).category, .filesystem)
         XCTAssertEqual(UploadFailure.capture(UploadError.invalidResponse, stage: .target).category, .response)
         for (key, translations) in L10n.values where key.hasPrefix("uploadFailure") || key.hasPrefix("importRun") || key.hasPrefix("asset") {
             for language in L10n.supportedLanguages where language != "system" {
@@ -244,7 +231,7 @@ extension UploadFailureProgressTests {
     func testNormalImportStartCreatesProgressBeforeInventory() async throws {
         let events = Events()
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let coordinator = UploadCoordinator(exporter: Exporter(mode: .success), transport: Transport(.known), receiptURL: directory.appendingPathComponent("receipts.json"))
+        let coordinator = UploadCoordinator(exporter: Exporter(mode: .success), transport: Transport(.known), legacyReceiptURL: directory.appendingPathComponent("receipts.json"))
         let summary = try await coordinator.run(json: payload(), connection: connection(), progress: { events.receive($0) })
         XCTAssertFalse(events.progress.isEmpty)
         XCTAssertEqual(events.progress.first?.items.count, 3)

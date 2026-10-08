@@ -41,11 +41,11 @@ private enum MockUploadOutcome: Sendable {
 
 private struct MockUploadRun: Sendable {
     let snapshot: MockUploadProbe.Snapshot
-    let successReceipts: [String]
+    let succeeded: [String]
     let failed: [String]
     let fatalAuth: Bool
 
-    var processedCount: Int { successReceipts.count + failed.count }
+    var processedCount: Int { succeeded.count + failed.count }
 }
 
 /// A test-only bounded scheduler. It deliberately mirrors the required
@@ -54,7 +54,7 @@ private actor MockUploadScheduler {
     static let maxConcurrentUploads = 3
 
     private let probe = MockUploadProbe()
-    private var receipts: [String] = []
+    private var succeeded: [String] = []
     private var failed: [String] = []
     private var fatalAuth = false
 
@@ -71,7 +71,7 @@ private actor MockUploadScheduler {
                 let (id, outcome) = result
                 switch outcome {
                 case .success:
-                    receipts.append(id)
+                    succeeded.append(id)
                 case .failed:
                     failed.append(id)
                 case .fatalAuth:
@@ -86,7 +86,7 @@ private actor MockUploadScheduler {
             }
 
             return MockUploadRun(snapshot: await probe.snapshot(),
-                                 successReceipts: receipts,
+                                 succeeded: succeeded,
                                  failed: failed,
                                  fatalAuth: fatalAuth)
         }
@@ -148,7 +148,7 @@ final class UploadConcurrencyTests: XCTestCase {
     func testIndividualFailureDoesNotStopOtherAssets() async {
         let result = await run(5, outcomes: ["asset-1": .failed])
         XCTAssertEqual(result.failed, ["asset-1"])
-        XCTAssertEqual(result.successReceipts.count, 4)
+        XCTAssertEqual(result.succeeded.count, 4)
         XCTAssertEqual(result.processedCount, 5)
     }
 
@@ -159,10 +159,10 @@ final class UploadConcurrencyTests: XCTestCase {
         XCTAssertLessThanOrEqual(result.snapshot.startedAssetIDs.count, 3)
     }
 
-    func testSuccessCreatesExactlyOneReceiptAndFailureCreatesNone() async {
+    func testSuccessAndFailureKeepIndependentTerminalState() async {
         let result = await run(2, outcomes: ["asset-1": .failed])
-        XCTAssertEqual(result.successReceipts, ["asset-0"])
-        XCTAssertFalse(result.successReceipts.contains("asset-1"))
+        XCTAssertEqual(result.succeeded, ["asset-0"])
+        XCTAssertFalse(result.succeeded.contains("asset-1"))
     }
 
     func testProgressEqualsActuallyProcessedTickets() async {

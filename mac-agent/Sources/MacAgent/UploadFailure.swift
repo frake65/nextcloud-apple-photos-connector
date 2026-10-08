@@ -2,7 +2,7 @@ import Foundation
 import InventoryCore
 
 struct UploadFailure: Error, Sendable, Equatable {
-    enum Stage: String, Sendable { case inventory, export, preparation, folder, target, put, completion, receipt }
+    enum Stage: String, Sendable { case inventory, export, preparation, folder, target, put, completion }
     enum Category: String, Sendable { case timeout, network, authorization, notFound, tooLarge, storageFull, server, http, source, filesystem, response, unknown }
     let stage: Stage
     let category: Category
@@ -56,7 +56,7 @@ struct UploadFailure: Error, Sendable, Equatable {
         case .unknown: key = stage == .inventory ? "inventoryFailureUnknown" : "uploadFailureUnknown"
         }
         let message = category == .http ? L10n.format(key, httpStatus ?? 0) : L10n.text(key)
-        if stage == .completion || stage == .receipt {
+        if stage == .completion {
             return L10n.text("uploadFailureConfirmation") + " " + message
         }
         return message

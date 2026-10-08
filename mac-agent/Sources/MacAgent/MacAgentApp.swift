@@ -68,6 +68,7 @@ private final class InventoryModel: ObservableObject {
     var uploadTask: Task<Void, Never>?
     private var uploadLogger: DebugFileLogger?
     private var preferences: ConnectionPreferences!
+    private var activeUploadRunID: UUID?
 
     init() {
         let defaults = ConnectionPreferences.defaults()
@@ -94,6 +95,20 @@ private final class InventoryModel: ObservableObject {
         uploadState = .cancelling
         status = L10n.text("uploadCancelling")
         uploadTask?.cancel()
+    }
+    func beginUploadRun() -> UUID {
+        let runID = UUID()
+        activeUploadRunID = runID
+        return runID
+    }
+    func isCurrentUploadRun(_ runID: UUID) -> Bool {
+        activeUploadRunID == runID
+    }
+    func finishUploadRun(_ runID: UUID) {
+        guard activeUploadRunID == runID else { return }
+        activeUploadRunID = nil
+        scanning = false
+        uploadTask = nil
     }
     func clearRecoveredConnectionError() {
         let transientMessages = [L10n.text("uploadFailureServer"), L10n.text("serverUnavailable")]
@@ -546,7 +561,7 @@ private struct InventoryView: View {
             Button(model.scanning ? "Upload abbrechen" : uploadButtonTitle) {
                 if model.scanning {
                     print("CANCELLED stage=button")
-                    model.uploadTask?.cancel()
+                    model.cancelUpload()
                     return
                 }
                 model.debugLog = []
@@ -567,8 +582,9 @@ private struct InventoryView: View {
                 model.debugLog.append("Import action started · selection=\(selectionSnapshot.count)")
                 model.uploadInProgress = true
                 model.status = L10n.text("uploadRunning")
+                let clientRunID = model.beginUploadRun()
                 model.uploadTask = Task {
-                    defer { model.scanning = false; model.uploadTask = nil }
+                    defer { model.finishUploadRun(clientRunID) }
                     var completedUploadSummary: UploadCoordinator.RunSummary?
                     do {
                         try await SettingsWorkGate.shared.checkpoint()
@@ -599,17 +615,23 @@ private struct InventoryView: View {
                         model.debugLog.append("Progress entries pending")
                         let summary = try await model.uploader.run(json: uploadJSON, connection: connection, targetRoot: targetRoot, progress: { progress in
                             Task { @MainActor in
+                                guard model.isCurrentUploadRun(clientRunID) else { return }
                                 guard model.uploadState == .running || model.uploadState == .cancelling else { return }
                                 model.uploadProgress = progress
                             }
                         }, debug: { message in
                             Task { @MainActor in
+                                guard model.isCurrentUploadRun(clientRunID) else { return }
                                 model.debugLog.append(message)
                                 model.logDebug(message)
                             }
                         }, onUploaded: { identity in
-                            Task { @MainActor in visual.markSuccessfullyUploaded(identity) }
+                            Task { @MainActor in
+                                guard model.isCurrentUploadRun(clientRunID) else { return }
+                                visual.markSuccessfullyUploaded(identity)
+                            }
                         })
+                        guard model.isCurrentUploadRun(clientRunID) else { return }
                         completedUploadSummary = summary
                         model.logDebug("Import completed uploaded=\(summary.uploadedImages + summary.uploadedVideos + summary.uploadedOther) failed=\(summary.failed)")
                         model.uploadProgress = summary.finalProgress
@@ -638,6 +660,7 @@ private struct InventoryView: View {
                             model.uploadInProgress = false
                         }
                     } catch is CancellationError {
+                        guard model.isCurrentUploadRun(clientRunID) else { return }
                         print("CANCELLED stage=task")
                         if let progress = model.uploadProgress {
                             model.uploadProgress = progress.markingCancelled()
@@ -650,6 +673,7 @@ private struct InventoryView: View {
                         // Keep the sheet visible for technical errors so the
                         // per-file failure remains inspectable.
                     } catch let failure as AlbumOperationFailure {
+                        guard model.isCurrentUploadRun(clientRunID) else { return }
                         model.logDebug("Import failed \(failure.technicalDetail)")
                         model.debugLog.append("Album operation failed · \(failure.technicalDetail)")
                         let uploadFailure = (completedUploadSummary?.failed ?? 0) > 0
@@ -657,6 +681,7 @@ private struct InventoryView: View {
                         model.uploadState = ImportRunState.finalState(uploadFailures: completedUploadSummary?.failed ?? 0, albumFailed: true)
                         model.uploadInProgress = true
                     } catch {
+                        guard model.isCurrentUploadRun(clientRunID) else { return }
                         let failure = UploadFailure.capture(error, stage: .inventory)
                         model.logDebug("Import failed \(failure.technicalDetail)")
                         model.debugLog.append("Import failed · \(failure.technicalDetail)")

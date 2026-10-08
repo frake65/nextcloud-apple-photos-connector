@@ -6,6 +6,23 @@ import XCTest
 
 @MainActor
 final class SettingsUploadPauseTests: XCTestCase {
+    actor ThresholdExporter: PhotoOriginalExporting {
+        private(set) var starts = 0
+
+        func export(localIdentifier: String) async throws -> PhotoOriginalExporter.Export {
+            starts += 1
+            if starts >= 18 {
+                try await Task.sleep(for: .seconds(60))
+            }
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+            let url = directory.appendingPathComponent("original")
+            try Data("test".utf8).write(to: url)
+            return .init(url: url, filename: "test.jpg")
+        }
+
+        func count() -> Int { starts }
+    }
     actor Exporter: PhotoOriginalExporting {
         private var pending: [String: CheckedContinuation<Void, Never>] = [:]
         private(set) var starts: [String] = []
@@ -57,7 +74,7 @@ final class SettingsUploadPauseTests: XCTestCase {
             if path.hasSuffix("/uploads/prepare") {
                 let body = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
                 folders.append(body["folder"] as! String)
-                // Fail before PUT/receipts: this test only verifies configuration.
+                // Fail before PUT: this test only verifies configuration.
                 return DAVResponse(status: 500)
             }
             if path.hasSuffix("/uploads/complete") { completions += 1; return DAVResponse(status: 200) }
@@ -154,6 +171,32 @@ final class SettingsUploadPauseTests: XCTestCase {
         _ = try await coordinator.run(json: payload, connection: connection)
         let resumedCount = await transport.inventoryCount()
         XCTAssertEqual(resumedCount, 1)
+    }
+
+    func testCancellationAfterTwentyStartsNoFurtherAssetsAndReleasesRunGuard() async throws {
+        let exporter = ThresholdExporter()
+        let transport = Transport(count: 30)
+        let coordinator = UploadCoordinator(exporter: exporter, transport: transport, gate: SettingsWorkGate())
+        let payload = try json(30)
+        let task = Task { try await coordinator.run(json: payload, connection: try connection()) }
+
+        await eventually { await exporter.count() == 20 }
+        task.cancel()
+        do {
+            _ = try await task.value
+            XCTFail("Expected cancellation")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        for _ in 0..<100 { await Task.yield() }
+        let finalStartCount = await exporter.count()
+        XCTAssertEqual(finalStartCount, 20)
+
+        let knownTransport = Transport(count: 1, known: true)
+        let nextCoordinator = UploadCoordinator(exporter: Exporter(), transport: knownTransport, gate: SettingsWorkGate())
+        _ = try await nextCoordinator.run(json: try json(1), connection: try connection())
+        let nextInventoryCount = await knownTransport.inventoryCount()
+        XCTAssertEqual(nextInventoryCount, 1)
     }
 
     func testUploadSnapshotSurvivesSettingsChangesAndPauseBetweenExportAndUpload() async throws {

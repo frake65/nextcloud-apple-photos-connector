@@ -67,7 +67,7 @@ final class InventoryTransportMockTests: XCTestCase {
     private func connection() throws -> ConnectorConnection { try ConnectorConnection(server: "https://example.invalid", user: "test", password: "x") }
 
     func testH4NewAssetRunsExportPreparePutAndComplete() async throws {
-        let spy = CoordinatorSpy(.new); let c = UploadCoordinator(exporter: FakeExporter(failing: false), transport: spy, receiptURL: receiptURL())
+        let spy = CoordinatorSpy(.new); let c = UploadCoordinator(exporter: FakeExporter(failing: false), transport: spy, legacyReceiptURL: receiptURL())
         let log = Log()
         let s = try await c.run(json: inventoryJSON(), connection: try connection(), debug: { log.add($0) })
         print("H4 checkpoints: \(log.values)")
@@ -77,42 +77,56 @@ final class InventoryTransportMockTests: XCTestCase {
         XCTAssertEqual(mTime, "1700000000")
     }
     func testH5KnownAssetSkipsDownstream() async throws {
-        let spy = CoordinatorSpy(.known); let c = UploadCoordinator(exporter: FakeExporter(failing: false), transport: spy, receiptURL: receiptURL())
+        let spy = CoordinatorSpy(.known); let c = UploadCoordinator(exporter: FakeExporter(failing: false), transport: spy, legacyReceiptURL: receiptURL())
         let s = try await c.run(json: inventoryJSON(), connection: try connection(), debug: nil); let counts = await spy.counts()
         XCTAssertEqual(counts.0, 1); XCTAssertEqual(counts.1, 0); XCTAssertEqual(counts.2, 0); XCTAssertEqual(counts.3, 0); XCTAssertEqual(s.uploadedImages, 0)
         XCTAssertEqual(s.alreadyInCloudImages, 1)
     }
+    func testLegacyReceiptIsDiscardedAndNeverResumedBeforeInventory() async throws {
+        let receipt = receiptURL()
+        try FileManager.default.createDirectory(at: receipt.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("[{\"runId\":\"old-run\",\"uploadId\":\"old-upload\"}]".utf8).write(to: receipt)
+        let spy = CoordinatorSpy(.known)
+        let coordinator = UploadCoordinator(exporter: FakeExporter(failing: false), transport: spy, legacyReceiptURL: receipt)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: receipt.path))
+        let summary = try await coordinator.run(json: inventoryJSON(), connection: try connection())
+        let counts = await spy.counts()
+        XCTAssertEqual(counts.0, 1)
+        XCTAssertEqual(counts.3, 0)
+        XCTAssertEqual(summary.alreadyInCloudImages, 1)
+    }
     func testH6InventoryTransportHTTPAndDecodeErrorsFail() async throws {
         for mode in [CoordinatorSpy.Mode.httpError, .invalid] {
-            let spy = CoordinatorSpy(mode); let c = UploadCoordinator(exporter: FakeExporter(failing: false), transport: spy, receiptURL: receiptURL())
+            let spy = CoordinatorSpy(mode); let c = UploadCoordinator(exporter: FakeExporter(failing: false), transport: spy, legacyReceiptURL: receiptURL())
             do { _ = try await c.run(json: inventoryJSON(), connection: try connection(), debug: nil); XCTFail("expected failure") } catch { }
             let counts = await spy.counts(); XCTAssertEqual(counts.0, 1); XCTAssertEqual(counts.1, 0)
         }
     }
 
     func testEmptyInventoryIsAcceptedAsValidScanResult() async throws {
-        let spy = CoordinatorSpy(.seenZero); let c = UploadCoordinator(exporter: FakeExporter(failing: false), transport: spy, receiptURL: receiptURL())
+        let spy = CoordinatorSpy(.seenZero); let c = UploadCoordinator(exporter: FakeExporter(failing: false), transport: spy, legacyReceiptURL: receiptURL())
         let summary = try await c.run(json: emptyInventoryJSON(), connection: try connection(), debug: nil)
         let x = await spy.counts(); XCTAssertEqual(x.0, 1); XCTAssertEqual(x.1, 0); XCTAssertEqual(x.2, 0); XCTAssertEqual(x.3, 0)
         XCTAssertEqual(summary.finalProgress.total, 0)
     }
     func testH6eExporterFailureStopsDownstream() async throws {
-        let spy = CoordinatorSpy(.new); let c = UploadCoordinator(exporter: FakeExporter(failing: true), transport: spy, receiptURL: receiptURL())
+        let spy = CoordinatorSpy(.new); let c = UploadCoordinator(exporter: FakeExporter(failing: true), transport: spy, legacyReceiptURL: receiptURL())
         let s = try await c.run(json: inventoryJSON(), connection: try connection(), debug: nil); XCTAssertEqual(s.uploadedImages, 0)
         let x = await spy.counts(); XCTAssertEqual(x.0, 1); XCTAssertEqual(x.1, 0); XCTAssertEqual(x.2, 0); XCTAssertEqual(x.3, 1)
     }
     func testH6fPrepareFailureStopsPUT() async throws {
-        let spy = CoordinatorSpy(.prepareError); let c = UploadCoordinator(exporter: FakeExporter(failing: false), transport: spy, receiptURL: receiptURL())
+        let spy = CoordinatorSpy(.prepareError); let c = UploadCoordinator(exporter: FakeExporter(failing: false), transport: spy, legacyReceiptURL: receiptURL())
         let s = try await c.run(json: inventoryJSON(), connection: try connection(), debug: nil); XCTAssertEqual(s.uploadedImages, 0)
         let x = await spy.counts(); XCTAssertEqual(x.0, 1); XCTAssertEqual(x.1, 1); XCTAssertEqual(x.2, 0); XCTAssertEqual(x.3, 1)
     }
     func testH6gPUTFailureStopsComplete() async throws {
-        let spy = CoordinatorSpy(.putError); let c = UploadCoordinator(exporter: FakeExporter(failing: false), transport: spy, receiptURL: receiptURL())
+        let spy = CoordinatorSpy(.putError); let c = UploadCoordinator(exporter: FakeExporter(failing: false), transport: spy, legacyReceiptURL: receiptURL())
         let s = try await c.run(json: inventoryJSON(), connection: try connection(), debug: nil); let x = await spy.counts()
         XCTAssertEqual(x.0, 1); XCTAssertEqual(x.1, 1); XCTAssertEqual(x.2, 1); XCTAssertEqual(x.3, 1); XCTAssertEqual(s.uploadedImages, 0)
     }
     func testH6hCompleteFailureDoesNotReportUpload() async throws {
-        let spy = CoordinatorSpy(.completeError); let c = UploadCoordinator(exporter: FakeExporter(failing: false), transport: spy, receiptURL: receiptURL())
+        let spy = CoordinatorSpy(.completeError); let c = UploadCoordinator(exporter: FakeExporter(failing: false), transport: spy, legacyReceiptURL: receiptURL())
         let s = try await c.run(json: inventoryJSON(), connection: try connection(), debug: nil); let x = await spy.counts()
         XCTAssertEqual(x.0, 1); XCTAssertEqual(x.1, 1); XCTAssertEqual(x.2, 1); XCTAssertEqual(x.3, 1); XCTAssertEqual(s.uploadedImages, 0)
     }

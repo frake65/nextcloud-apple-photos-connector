@@ -12,6 +12,32 @@ private enum DAVDiagnostics {
     }
 }
 
+final class URLSessionUploadCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelAction: (@Sendable () -> Void)?
+    private var cancelled = false
+
+    func register(_ task: URLSessionTask) {
+        register { task.cancel() }
+    }
+
+    func register(_ cancelAction: @escaping @Sendable () -> Void) {
+        lock.lock()
+        self.cancelAction = cancelAction
+        let shouldCancel = cancelled
+        lock.unlock()
+        if shouldCancel { cancelAction() }
+    }
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        let cancelAction = cancelAction
+        lock.unlock()
+        cancelAction?()
+    }
+}
+
 public struct DAVResponse: Sendable {
     public let status: Int
     public let data: Data
@@ -149,23 +175,34 @@ public final class NetworkTransport: NSObject, DAVTransport, URLSessionTaskDeleg
         DAVDiagnostics.log("webdav.put.request-created")
         let fileBytes = (try? FileManager.default.attributesOfItem(atPath: file.path)[.size] as? NSNumber)?.int64Value
         DAVDiagnostics.log("webdav.put.file-open", bytes: fileBytes)
-        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<(Data, URLResponse), any Error>) in
-            let task = session.uploadTask(with: request, fromFile: file) { data, response, error in
-                if let error { DAVDiagnostics.log("webdav.put.complete"); continuation.resume(throwing: error) }
-                else if let response {
-                    DAVDiagnostics.log("webdav.put.response-received")
-                    let responseData = data ?? Data()
-                    DAVDiagnostics.log("webdav.put.response-body-read", bytes: Int64(responseData.count))
-                    DAVDiagnostics.log("webdav.put.complete")
-                    continuation.resume(returning: (responseData, response))
-                } else { DAVDiagnostics.log("webdav.put.complete"); continuation.resume(throwing: UploadError.invalidResponse) }
+        let cancellation = URLSessionUploadCancellation()
+        do {
+            return try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<(Data, URLResponse), any Error>) in
+                    let task = session.uploadTask(with: request, fromFile: file) { data, response, error in
+                        if let error { DAVDiagnostics.log("webdav.put.complete"); continuation.resume(throwing: error) }
+                        else if let response {
+                            DAVDiagnostics.log("webdav.put.response-received")
+                            let responseData = data ?? Data()
+                            DAVDiagnostics.log("webdav.put.response-body-read", bytes: Int64(responseData.count))
+                            DAVDiagnostics.log("webdav.put.complete")
+                            continuation.resume(returning: (responseData, response))
+                        } else { DAVDiagnostics.log("webdav.put.complete"); continuation.resume(throwing: UploadError.invalidResponse) }
+                    }
+                    cancellation.register(task)
+                    DAVDiagnostics.log("webdav.put.uploadtask-created")
+                    if let progress {
+                        progressLock.lock(); progressHandlers[task.taskIdentifier] = progress; progressLock.unlock()
+                    }
+                    task.resume()
+                    DAVDiagnostics.log("webdav.put.uploadtask-resumed")
+                }
+            } onCancel: {
+                cancellation.cancel()
             }
-            DAVDiagnostics.log("webdav.put.uploadtask-created")
-            if let progress {
-                progressLock.lock(); progressHandlers[task.taskIdentifier] = progress; progressLock.unlock()
-            }
-            task.resume()
-            DAVDiagnostics.log("webdav.put.uploadtask-resumed")
+        } catch {
+            if Task.isCancelled { throw CancellationError() }
+            throw error
         }
     }
 }

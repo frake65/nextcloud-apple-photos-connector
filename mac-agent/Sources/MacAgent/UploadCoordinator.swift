@@ -107,28 +107,20 @@ actor UploadCoordinator {
         let runId: String
         let assets: [Entry]
     }
-    struct Receipt: Codable {
-        let server: String
-        let user: String
-        let sourceId: String
-        let runId: String
-        let uploadId: String
-        let path: String
-    }
     enum RunError: Error { case alreadyRunning }
     private var running = false
     private let gate: SettingsWorkGate
     private let exporter: any PhotoOriginalExporting
     private let transport: any DAVTransport
-    private let receiptURL: URL
-
     private func debugLog(_ message: String) { debugSink?(message) }
     private var debugSink: (@Sendable (String) -> Void)?
-    init(exporter: any PhotoOriginalExporting = PhotoOriginalExporter(), transport: any DAVTransport = NetworkTransport(), gate: SettingsWorkGate = .shared, receiptURL: URL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Apple Photos Connector/upload-receipts.json")) {
-        self.receiptURL = receiptURL
+    init(exporter: any PhotoOriginalExporting = PhotoOriginalExporter(), transport: any DAVTransport = NetworkTransport(), gate: SettingsWorkGate = .shared, legacyReceiptURL: URL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Apple Photos Connector/upload-receipts.json")) {
         self.gate = gate
         self.exporter = exporter
         self.transport = transport
+        // Old receipts represented resumable runs. New runs always begin with
+        // inventory, whose content identity check safely recognizes completed PUTs.
+        try? FileManager.default.removeItem(at: legacyReceiptURL)
     }
     private func post(_ body: [String: Any], endpoint: String, connection: ConnectorConnection) async throws -> Data {
         var request = connection.request(path: ["index.php", "apps", "apple_photos_connector", "api", "v1"] + endpoint.split(separator: "/").map(String.init), method: "POST")
@@ -141,6 +133,7 @@ actor UploadCoordinator {
         while true {
         UploadDiagnostics.log("inventory.request.begin", count: (body["assets"] as? [[String: Any]])?.count)
         do {
+            try Task.checkCancellation()
             debugLog("NETWORK_REQUEST_BEGIN kind=\(endpoint) url=/\(endpoint) attempt=\(attempt + 1)")
             response = try await transport.send(request, file: nil)
             UploadDiagnostics.log("inventory.response.received", bytes: Int64(response.data.count), retry: attempt, status: response.status)
@@ -198,14 +191,9 @@ actor UploadCoordinator {
     }
 
     private struct ServerErrorBody: Decodable { let error: String?; let code: String?; let runId: String? }
-    private func save(_ receipts: [Receipt]) throws {
-        try FileManager.default.createDirectory(at: receiptURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try JSONEncoder().encode(receipts).write(to: receiptURL, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: receiptURL.path)
-    }
-    private func confirm(_ receipt: Receipt, connection: ConnectorConnection) async throws {
-        _ = try await post(["sourceId": receipt.sourceId, "runId": receipt.runId, "uploadId": receipt.uploadId,
-                           "status": "uploaded", "path": receipt.path], endpoint: "uploads/complete", connection: connection)
+    private func confirm(sourceId: String, runId: String, uploadId: String, path: String, connection: ConnectorConnection) async throws {
+        _ = try await post(["sourceId": sourceId, "runId": runId, "uploadId": uploadId,
+                           "status": "uploaded", "path": path], endpoint: "uploads/complete", connection: connection)
     }
 
     private func uploadAsset(index: Int, entry: InventoryReply.Entry, assetsData: Data, sourceId: String,
@@ -284,7 +272,7 @@ actor UploadCoordinator {
             return try await performRun(json: json, connection: connection, targetRoot: targetRoot, progress: progress, debug: debug, onUploaded: onUploaded)
             } catch is CancellationError { throw CancellationError() }
         catch {
-            // Inventory/receipt failures happen before per-asset jobs exist.
+            // Inventory failures happen before per-asset jobs exist.
             // Keep every selected medium visible even when that early stage fails.
             if let document = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any],
                let assets = document["assets"] as? [[String: Any]] {
@@ -311,14 +299,6 @@ actor UploadCoordinator {
         UploadDiagnostics.log("inventory.encode.end", bytes: Int64(canonicalJSON.utf8.count))
         debugSink = debug
         debug?("upload.coordinator.entered")
-        var receipts = FileManager.default.fileExists(atPath: receiptURL.path)
-            ? try JSONDecoder().decode([Receipt].self, from: Data(contentsOf: receiptURL)) : []
-        // Reconcile successful PUTs before asking for new work; no second upload after a lost ACK response.
-        for receipt in receipts where receipt.server == connection.base.absoluteString && receipt.user == connection.user {
-            try await confirm(receipt, connection: connection)
-            receipts.removeAll { $0.uploadId == receipt.uploadId }
-            try save(receipts)
-        }
         guard let document = try JSONSerialization.jsonObject(with: Data(canonicalJSON.utf8)) as? [String: Any],
               let source = document["source"] as? [String: Any], let sourceId = source["sourceId"] as? String,
               let assets = document["assets"] as? [[String: Any]] else { throw UploadError.invalidResponse }
@@ -402,7 +382,7 @@ actor UploadCoordinator {
                 }
             }
             while nextJob < jobs.count || active > 0 {
-                // Drain completed jobs (and persist receipts) even while paused.
+                // Drain completed jobs even while paused.
                 // Only an empty group waits for resumption, then refills once.
                 if active == 0 {
                     do { try await gate.checkpoint() }
@@ -435,18 +415,12 @@ actor UploadCoordinator {
                         progress?(await displayState.snapshot(filename: filename))
                         continue
                     }
-                    let receipt = Receipt(server: connection.base.absoluteString, user: connection.user,
-                        sourceId: sourceId.lowercased(), runId: reply.runId, uploadId: ticket.uploadId, path: path)
-                    var completionStage: UploadFailure.Stage = .receipt
+                    let completionStage: UploadFailure.Stage = .completion
                     do {
                         debug?("upload.complete.request.status=success")
-                        receipts.append(receipt)
-                        try save(receipts)
-                        completionStage = .completion
-                        try await confirm(receipt, connection: connection)
-                        completionStage = .receipt
-                        receipts.removeAll { $0.uploadId == ticket.uploadId }
-                        try save(receipts)
+                        try Task.checkCancellation()
+                        try await confirm(sourceId: sourceId.lowercased(), runId: reply.runId,
+                            uploadId: ticket.uploadId, path: path, connection: connection)
                         uploaded += 1
                         if let identity = assets[outcome.job.index]["cloudIdentifier"] as? String {
                             onUploaded?(identity)

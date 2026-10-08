@@ -150,7 +150,7 @@ final class ConnectionSettingsTests: XCTestCase {
         var first = TargetDirectoryPreferences(defaults: defaults)
         first.path = "Photos/Apple Photos Connector"
         first.markConfirmed(true)
-        var second = TargetDirectoryPreferences(defaults: defaults)
+        let second = TargetDirectoryPreferences(defaults: defaults)
         XCTAssertEqual(second.path, "Photos/Apple Photos Connector")
         XCTAssertTrue(defaults.bool(forKey: TargetDirectoryPreferences.confirmedKey))
         second.markConfirmed(false)
