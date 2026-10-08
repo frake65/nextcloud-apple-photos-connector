@@ -173,9 +173,15 @@ final class PhotoLibraryModel: ObservableObject {
     /// Exports the same deterministic .photo/.video resource rule used by
     /// the macOS PhotoOriginalExporter. The caller owns the temporary file
     /// and must remove its containing directory when finished.
-    func exportOriginal(for galleryAsset: GalleryAsset, progress: (@Sendable (Double) -> Void)? = nil, diagnosticAssetID: String? = nil, diagnosticJob: Int? = nil) async throws -> ExportedOriginal {
+    func exportOriginal(for galleryAsset: GalleryAsset, progress: (@Sendable (Double) -> Void)? = nil, diagnosticAssetID: String? = nil, diagnosticJob: Int? = nil, diagnosticPhase: (@Sendable (IOSImportJobPhase) async -> Void)? = nil) async throws -> ExportedOriginal {
+        let localIdentifier = galleryAsset.id
+        return try await Self.exportOriginal(localIdentifier: localIdentifier, progress: progress, diagnosticAssetID: diagnosticAssetID, diagnosticJob: diagnosticJob, diagnosticPhase: diagnosticPhase)
+    }
+
+    nonisolated private static func exportOriginal(localIdentifier: String, progress: (@Sendable (Double) -> Void)?, diagnosticAssetID: String?, diagnosticJob: Int?, diagnosticPhase: (@Sendable (IOSImportJobPhase) async -> Void)?) async throws -> ExportedOriginal {
+        await diagnosticPhase?(.photoKitResource)
         let exportPhase = IOSImportDiagnostics.start("asset-job[\(diagnosticJob ?? 0)] export-fetch")
-        let fetched = PHAsset.fetchAssets(withLocalIdentifiers: [galleryAsset.id], options: nil)
+        let fetched = PHAsset.fetchAssets(withLocalIdentifiers: [localIdentifier], options: nil)
         guard let asset = fetched.firstObject else {
             IOSImportDiagnostics.failure("asset-job[\(diagnosticJob ?? 0)] export-fetch", started: exportPhase, error: InventoryCheckError.unavailableAsset)
             throw InventoryCheckError.unavailableAsset
@@ -188,6 +194,7 @@ final class PhotoLibraryModel: ObservableObject {
             throw UploadError.invalidResponse
         }
         IOSImportDiagnostics.finish("asset-job[\(diagnosticJob ?? 0)] export-resource", started: resourcePhase, detail: "type=\(type)")
+        await diagnosticPhase?(.photoKitExport)
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         let url = directory.appendingPathComponent("original")
@@ -207,7 +214,7 @@ final class PhotoLibraryModel: ObservableObject {
             } onCancel: { }
             let byteCount = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0
             IOSImportDiagnostics.log("asset-job[\(diagnosticJob ?? 0)] export-file-size bytes=\(byteCount)")
-            return ExportedOriginal(url: url, filename: IOSFilenamePolicy.resolved(originalFilename: resource.originalFilename, localIdentifier: galleryAsset.id, mediaType: type == .video ? "video" : "image"), resourceType: type)
+            return ExportedOriginal(url: url, filename: IOSFilenamePolicy.resolved(originalFilename: resource.originalFilename, localIdentifier: localIdentifier, mediaType: type == .video ? "video" : "image"), resourceType: type)
         } catch {
             try? FileManager.default.removeItem(at: directory)
             throw error

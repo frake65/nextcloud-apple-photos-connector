@@ -74,6 +74,19 @@ final class IOSCoreFlowTests: XCTestCase {
         )
     }
 
+    func testUploadFailurePreservesPrepareTimeoutThroughOuterTransferLayer() {
+        let prepareFailure = IOSUploadFailure.preserving(step: .prepare, from: URLError(.timedOut))
+        let outerFailure = IOSUploadFailure.preserving(step: .webDAVPut, from: prepareFailure)
+
+        guard let failure = outerFailure as? IOSUploadFailure else {
+            return XCTFail("Expected a step-aware upload failure")
+        }
+        XCTAssertEqual(failure.step, .prepare)
+        XCTAssertEqual(failure.urlErrorCode, URLError.Code.timedOut.rawValue)
+        XCTAssertEqual(failure.diagnosticCategory, "step=prepare urlError=-1001")
+        XCTAssertTrue(failure.localizedDescription.contains("Upload-Vorbereitung"))
+    }
+
     func testImportPresentationSeparatesTransferAlbumSyncAndCompletion() {
         XCTAssertEqual(ImportPresentationPhase.resolve(phase: .idle, completed: 0, total: 3, isVerifyingCompletedUpload: false), .idle)
         XCTAssertEqual(ImportPresentationPhase.resolve(phase: .uploading, completed: 1, total: 3, isVerifyingCompletedUpload: false), .transferring)
@@ -335,6 +348,18 @@ final class IOSCoreFlowTests: XCTestCase {
         XCTAssertEqual(progress.activeEntries.first?.filename, "second.mov")
     }
 
+    func testImportProgressSlotLookupTracksOnlyActiveRows() {
+        var progress = IOSImportProgressAggregation()
+        progress.register(job: 10, filename: nil)
+        progress.register(job: 11, filename: nil)
+
+        XCTAssertEqual(progress.slot(for: 10), 0)
+        XCTAssertEqual(progress.slot(for: 11), 1)
+        progress.remove(job: 10)
+        XCTAssertNil(progress.slot(for: 10))
+        XCTAssertEqual(progress.activeEntries.count, 1)
+    }
+
     @MainActor
     func testCompleteVerificationStatusDoesNotHideParallelPut() {
         XCTAssertTrue(IOSForegroundImportCoordinator.isVerifyingCompletedUpload(pendingCompletionCount: 1, activeTransferCount: 0))
@@ -457,6 +482,60 @@ final class IOSCoreFlowTests: XCTestCase {
         XCTAssertTrue(state.activePUTTasks.isEmpty)
         XCTAssertTrue(state.waitingTasks.isEmpty)
         XCTAssertTrue(state.activeSendingTasks.isEmpty)
+    }
+
+    func testBackgroundPUTTaskKeysAreUniqueForParallelJobs() {
+        let jobA = BackgroundPUTTaskKey.make(sessionIdentifier: "wifi.v1", taskIdentifier: 7)
+        let jobB = BackgroundPUTTaskKey.make(sessionIdentifier: "wifi.v1", taskIdentifier: 8)
+
+        XCTAssertNotEqual(jobA, jobB)
+    }
+
+    func testBackgroundPUTParallelJobsRetainIndependentState() {
+        let jobA = BackgroundPUTTaskKey.make(sessionIdentifier: "wifi.v1", taskIdentifier: 7)
+        let jobB = BackgroundPUTTaskKey.make(sessionIdentifier: "wifi.v1", taskIdentifier: 8)
+        var state = BackgroundPUTTaskStateAggregation()
+
+        state.started(jobA)
+        state.started(jobB)
+        state.waiting(jobA)
+        state.sending(jobB)
+
+        XCTAssertTrue(state.waitingTasks.contains(jobA))
+        XCTAssertFalse(state.waitingTasks.contains(jobB))
+        XCTAssertTrue(state.activeSendingTasks.contains(jobB))
+        XCTAssertFalse(state.activeSendingTasks.contains(jobA))
+    }
+
+    func testBackgroundPUTCompletingOneJobDoesNotChangeAnother() {
+        let jobA = BackgroundPUTTaskKey.make(sessionIdentifier: "wifi.v1", taskIdentifier: 7)
+        let jobB = BackgroundPUTTaskKey.make(sessionIdentifier: "wifi.v1", taskIdentifier: 8)
+        var state = BackgroundPUTTaskStateAggregation()
+
+        state.started(jobA)
+        state.started(jobB)
+        state.sending(jobA)
+        state.waiting(jobB)
+        state.completed(jobA)
+
+        XCTAssertFalse(state.activePUTTasks.contains(jobA))
+        XCTAssertFalse(state.activeSendingTasks.contains(jobA))
+        XCTAssertTrue(state.activePUTTasks.contains(jobB))
+        XCTAssertTrue(state.waitingTasks.contains(jobB))
+    }
+
+    func testBackgroundPUTAllCallbacksUseStableJobKey() {
+        let callbackKeys = (0..<4).map { _ in
+            BackgroundPUTTaskKey.make(sessionIdentifier: "cellular.v1", taskIdentifier: 42)
+        }
+
+        XCTAssertEqual(Set(callbackKeys), ["cellular.v1:42"])
+    }
+
+    func testBackgroundPUTObservationDistinguishesSendingWaitingAndResponse() {
+        XCTAssertEqual(BackgroundPUTObservation.classify(expectedBytes: 100, sentBytes: 40, responseReceived: false), .sending)
+        XCTAssertEqual(BackgroundPUTObservation.classify(expectedBytes: 100, sentBytes: 100, responseReceived: false), .awaitingResponse)
+        XCTAssertEqual(BackgroundPUTObservation.classify(expectedBytes: 100, sentBytes: 100, responseReceived: true), .responseReceived)
     }
 
     func testAssetJobSchedulerCollectsIndependentFailures() async throws {

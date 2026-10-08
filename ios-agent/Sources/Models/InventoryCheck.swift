@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 #if DEBUG
 import Darwin
 #endif
@@ -11,6 +12,9 @@ import Photos
 
 enum IOSImportDiagnostics {
     private static let processStart = ContinuousClock.now
+    private static let errorLogger = Logger(subsystem: "de.applephotosconnector.ios", category: "ImportFailure")
+    private static let phaseLogger = Logger(subsystem: "de.applephotosconnector.ios", category: "ImportPhase")
+    private static let putLogger = Logger(subsystem: "de.applephotosconnector.ios", category: "WebDAVPUT")
     static let defaultsKey = "apc.debug.importDiagnostics"
 #if DEBUG
     nonisolated(unsafe) static var testLogHandler: ((String) -> Void)?
@@ -41,14 +45,15 @@ enum IOSImportDiagnostics {
         #if DEBUG
         if !didAnnounceBuild {
             didAnnounceBuild = true
-            print("iOS build source: commit=6c11b8d inventoryBatchFastPath=true diagnosticRevision=inventory-fast-path-1")
+            print("iOS build source: base=0ecc975 inventoryBatchFastPath=true diagnosticRevision=webdav-put-device-1")
         }
         if enabled { print("APC IMPORT DIAGNOSTICS ENABLED") }
         #endif
     }
     static func start(_ phase: String) -> ContinuousClock.Instant? {
-        guard enabled else { return nil }
-        let now = ContinuousClock.now; log("\(phase) START"); return now
+        let now = ContinuousClock.now
+        if enabled { log("\(phase) START") }
+        return now
     }
     static func finish(_ phase: String, started: ContinuousClock.Instant?, detail: String = "") {
         guard let started, enabled else { return }
@@ -56,13 +61,48 @@ enum IOSImportDiagnostics {
         log("\(phase) OK elapsed=\(started.duration(to: .now))\(suffix)")
     }
     static func failure(_ phase: String, started: ContinuousClock.Instant?, error: Error) {
-        guard let started, enabled else { return }
+        let elapsed = started.map { durationSeconds($0.duration(to: .now)) } ?? -1
         let category: String
-        if let urlError = error as? URLError { category = "urlError=\(urlError.code.rawValue)" }
-        else if let failure = error as? IOSUploadFailure { category = "step=\(failure.step.germanName) httpStatus=\(failure.status)" }
+        if let failure = error as? IOSUploadFailure { category = failure.diagnosticCategory }
+        else if let urlError = error as? URLError { category = "urlError=\(urlError.code.rawValue)" }
         else if case let UploadError.http(status) = error { category = "httpStatus=\(status)" }
         else { category = "error=\(String(describing: type(of: error)))" }
-        log("\(phase) ERROR elapsed=\(started.duration(to: .now)) \(category)")
+        // Always retain one privacy-safe failure record in Release/TestFlight.
+        // Phase names are fixed protocol steps; no filenames, paths, identities,
+        // hashes, credentials, or response bodies are included.
+        errorLogger.error("phase=\(phase, privacy: .public) elapsedSeconds=\(elapsed, privacy: .public) \(category, privacy: .public)")
+        if enabled { log("\(phase) ERROR elapsedSeconds=\(elapsed) \(category)") }
+    }
+
+    private static func durationSeconds(_ duration: Duration) -> Double {
+        Double(duration.components.seconds) + Double(duration.components.attoseconds) / 1_000_000_000_000_000_000
+    }
+
+    static func jobPhaseStarted(lane: Int, phase: IOSImportJobPhase, activeJobs: Int, visibleRows: Int) {
+        phaseLogger.info("event=start lane=\(lane, privacy: .public) phase=\(phase.rawValue, privacy: .public) activeJobs=\(activeJobs, privacy: .public) visibleRows=\(visibleRows, privacy: .public)")
+    }
+
+    static func jobPhaseFinished(lane: Int, phase: IOSImportJobPhase, started: ContinuousClock.Instant, result: String, activeJobs: Int, visibleRows: Int, error: Error? = nil) {
+        let elapsed = durationSeconds(started.duration(to: .now))
+        let detail = error.map(errorCategory) ?? "error=none"
+        phaseLogger.info("event=end lane=\(lane, privacy: .public) phase=\(phase.rawValue, privacy: .public) elapsedSeconds=\(elapsed, privacy: .public) result=\(result, privacy: .public) activeJobs=\(activeJobs, privacy: .public) visibleRows=\(visibleRows, privacy: .public) \(detail, privacy: .public)")
+    }
+
+    private static func errorCategory(_ error: Error) -> String {
+        if let failure = error as? IOSUploadFailure { return failure.diagnosticCategory }
+        if let urlError = error as? URLError { return "urlError=\(urlError.code.rawValue)" }
+        if case let UploadError.http(status) = error { return "httpStatus=\(status)" }
+        let nsError = error as NSError
+        return "errorDomain=\(nsError.domain) errorCode=\(nsError.code)"
+    }
+
+    static func putSnapshot(event: String, lane: Int, task: String, expectedBytes: Int64, sentBytes: Int64, lastProgressAt: String, duration: Double, taskState: String, requestTimeout: Double, resourceTimeout: Double, httpStatus: Int?, responseDuration: Double?, error: Error? = nil) {
+        let percent = expectedBytes > 0 ? min(100, max(0, Double(sentBytes) / Double(expectedBytes) * 100)) : 0
+        let transferState = BackgroundPUTObservation.classify(expectedBytes: expectedBytes, sentBytes: sentBytes, responseReceived: httpStatus != nil).rawValue
+        let status = httpStatus.map(String.init) ?? "none"
+        let response = responseDuration.map { String(format: "%.3f", $0) } ?? "none"
+        let failure = error.map(errorCategory) ?? "error=none"
+        putLogger.info("event=\(event, privacy: .public) lane=\(lane, privacy: .public) task=\(task, privacy: .public) transferState=\(transferState, privacy: .public) expectedBytes=\(expectedBytes, privacy: .public) sentBytes=\(sentBytes, privacy: .public) percent=\(percent, privacy: .public) lastProgressAt=\(lastProgressAt, privacy: .public) durationSeconds=\(duration, privacy: .public) taskState=\(taskState, privacy: .public) requestTimeout=\(requestTimeout, privacy: .public) resourceTimeout=\(resourceTimeout, privacy: .public) httpStatus=\(status, privacy: .public) responseDurationSeconds=\(response, privacy: .public) \(failure, privacy: .public)")
     }
 
     static func memory(phase: String, asset: String? = nil, job: Int? = nil, readMiB: Double? = nil) {
@@ -82,6 +122,16 @@ enum IOSImportDiagnostics {
         log(String(format: "APC MEMORY phase=%@%@%@%@ physFootprintMiB=%.1f residentMiB=%.1f", phase, assetPart, jobPart, readPart, Double(info.phys_footprint) / mib, Double(info.resident_size) / mib))
         #endif
     }
+}
+
+enum IOSImportJobPhase: String, Sendable {
+    case photoKitResource = "photokit-resource"
+    case photoKitExport = "photokit-export"
+    case hashing
+    case prepare
+    case put
+    case complete
+    case reconciliation
 }
 
 struct InventoryAssetReply: Decodable, Equatable {
@@ -128,6 +178,7 @@ struct IOSImportProgressAggregation: Sendable {
         jobs[job] = (existing.slot, filename ?? existing.filename, max(0, sent), max(0, total))
     }
     mutating func remove(job: Int) { jobs.removeValue(forKey: job) }
+    func slot(for job: Int) -> Int? { jobs[job]?.slot }
     var activeFraction: Double { jobs.values.reduce(0) { $0 + ($1.total > 0 ? min(1, Double($1.sent) / Double($1.total)) : 0) } }
     var activeEntries: [(slot: Int, job: Int, filename: String?, sent: Int64, total: Int64)] {
         jobs.map { (slot: $0.value.slot, job: $0.key, filename: $0.value.filename, sent: $0.value.sent, total: $0.value.total) }
@@ -540,6 +591,24 @@ struct BackgroundPUTTaskStateAggregation: Equatable, Sendable {
     }
 }
 
+enum BackgroundPUTTaskKey {
+    static func make(sessionIdentifier: String, taskIdentifier: Int) -> String {
+        "\(sessionIdentifier):\(taskIdentifier)"
+    }
+}
+
+enum BackgroundPUTObservation: String, Equatable, Sendable {
+    case sending
+    case awaitingResponse
+    case responseReceived
+
+    static func classify(expectedBytes: Int64, sentBytes: Int64, responseReceived: Bool) -> Self {
+        if responseReceived { return .responseReceived }
+        if expectedBytes > 0, sentBytes >= expectedBytes { return .awaitingResponse }
+        return .sending
+    }
+}
+
 /// Background URLSession adapter for the existing WebDAV PUT contract.
 /// Prepare and Complete remain on the existing DAVTransport path.
 final class BackgroundTransferCoordinator: NSObject, URLSessionTaskDelegate, URLSessionDataDelegate, @unchecked Sendable {
@@ -557,6 +626,20 @@ final class BackgroundTransferCoordinator: NSObject, URLSessionTaskDelegate, URL
     private var completionInFlight = Set<UUID>()
     private var connectivityWaitingHandler: (@Sendable (Bool) -> Void)?
     private var putTaskStates = BackgroundPUTTaskStateAggregation()
+    private struct PUTDiagnosticState {
+        let token: String
+        let lane: Int
+        let startedAt: Date
+        let expectedBytes: Int64
+        let requestTimeout: TimeInterval
+        let resourceTimeout: TimeInterval
+        var sentBytes: Int64
+        var lastProgressAt: Date?
+        var responseAt: Date?
+        var httpStatus: Int?
+    }
+    private var putDiagnostics: [String: PUTDiagnosticState] = [:]
+    private var putDiagnosticMonitors: [String: Task<Void, Never>] = [:]
     private let lifecycleLock = NSLock()
     private var backgroundEventsCompletionHandler: (() -> Void)?
     private var sessions: [String: URLSession] = [:]
@@ -596,9 +679,6 @@ final class BackgroundTransferCoordinator: NSObject, URLSessionTaskDelegate, URL
         sessions[Self.sessionIdentifier] = created
         return created
     }
-    private func taskKey(sessionIdentifier: String, taskIdentifier: Int) -> String {
-        "(sessionIdentifier):(taskIdentifier)"
-    }
     private func updatePUTTaskState(_ update: (inout BackgroundPUTTaskStateAggregation) -> Void) {
         lock.lock()
         let previous = putTaskStates.waitingForConnectivity
@@ -612,7 +692,7 @@ final class BackgroundTransferCoordinator: NSObject, URLSessionTaskDelegate, URL
         self.bindingStore = bindingStore; self.fileStore = fileStore; self.queueStore = queueStore
         IOSImportDiagnostics.log("background session coordinator initialized/reconstructed identifier=\(Self.sessionIdentifier)")
     }
-    func send(_ request: URLRequest, file: URL, queueAssetID: UUID, localRunID: UUID, uploadAttemptID: UUID, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> DAVResponse {
+    func send(_ request: URLRequest, file: URL, queueAssetID: UUID, localRunID: UUID, uploadAttemptID: UUID, diagnosticLane: Int, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> DAVResponse {
         guard let url = request.url, url.scheme == "https", let host = url.host else { throw UploadError.invalidConfiguration }
         IOSImportDiagnostics.memory(phase: "transfer-file-prepare-start", asset: queueAssetID.uuidString)
         let prepared = try await fileStore.prepare(source: file, uploadAttemptID: uploadAttemptID)
@@ -630,8 +710,9 @@ final class BackgroundTransferCoordinator: NSObject, URLSessionTaskDelegate, URL
                 task.taskDescription = uploadAttemptID.uuidString
                 IOSImportDiagnostics.log("[BackgroundPUT] task=\(task.taskIdentifier) asset=\(queueAssetID.uuidString.prefix(8)) bytes=\(preparedBytes) policyCellular=\(IOSTransferNetworkPreferences.useCellularAccess())")
                 let sessionIdentifier = sessionIdentifier(allowsCellular: allowsCellular)
-                let key = taskKey(sessionIdentifier: sessionIdentifier, taskIdentifier: task.taskIdentifier)
+                let key = BackgroundPUTTaskKey.make(sessionIdentifier: sessionIdentifier, taskIdentifier: task.taskIdentifier)
                 updatePUTTaskState { $0.started(key) }
+                startPUTDiagnostics(key: key, task: task, session: activeSession, lane: diagnosticLane, expectedBytes: preparedBytes)
                 IOSImportDiagnostics.log("background task start taskIdentifier=\(task.taskIdentifier) queueAssetID=\(queueAssetID.uuidString.prefix(8)) uploadAttemptID=\(uploadAttemptID.uuidString) session=\(sessionIdentifier)")
                 Task { let binding = BackgroundTaskBinding(queueAssetID: queueAssetID, localRunID: localRunID, uploadAttemptID: uploadAttemptID, sessionIdentifier: sessionIdentifier, taskIdentifier: task.taskIdentifier, relativeTransferPath: prepared.relativePath, expectedHost: host, targetPath: request.url?.path ?? "", createdAt: Date()); try? await bindingStore.upsert(binding); IOSImportDiagnostics.log("binding created taskIdentifier=\(task.taskIdentifier) queueAssetID=\(queueAssetID.uuidString.prefix(8)) uploadAttemptID=\(uploadAttemptID.uuidString)") }
                 task.resume()
@@ -641,6 +722,63 @@ final class BackgroundTransferCoordinator: NSObject, URLSessionTaskDelegate, URL
             IOSImportDiagnostics.log("asset-job swift-task cancellation handler queueAssetID=\(queueAssetID.uuidString.prefix(8)) runID=\(localRunID.uuidString.prefix(8)) phase=put")
             self.cancelAll(for: uploadAttemptID)
         }
+    }
+
+    private func startPUTDiagnostics(key: String, task: URLSessionTask, session: URLSession, lane: Int, expectedBytes: Int64) {
+        let state = PUTDiagnosticState(
+            token: String(UUID().uuidString.prefix(8)).lowercased(),
+            lane: lane,
+            startedAt: Date(),
+            expectedBytes: expectedBytes,
+            requestTimeout: task.currentRequest?.timeoutInterval ?? session.configuration.timeoutIntervalForRequest,
+            resourceTimeout: session.configuration.timeoutIntervalForResource,
+            sentBytes: max(0, task.countOfBytesSent),
+            lastProgressAt: nil,
+            responseAt: nil,
+            httpStatus: nil)
+        lock.lock(); putDiagnostics[key] = state; lock.unlock()
+        logPUTSnapshot(key: key, task: task, event: "start")
+        let monitor = Task { [weak self, weak task] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(10)) }
+                catch { return }
+                guard let self, let task else { return }
+                self.logPUTSnapshot(key: key, task: task, event: "tick")
+            }
+        }
+        lock.lock(); putDiagnosticMonitors[key] = monitor; lock.unlock()
+    }
+
+    private func logPUTSnapshot(key: String, task: URLSessionTask, event: String, error: Error? = nil, remove: Bool = false) {
+        lock.lock()
+        guard let state = putDiagnostics[key] else { lock.unlock(); return }
+        let monitor = remove ? putDiagnosticMonitors.removeValue(forKey: key) : nil
+        if remove { putDiagnostics.removeValue(forKey: key) }
+        lock.unlock()
+        monitor?.cancel()
+        let taskState: String = switch task.state {
+        case .running: "running"
+        case .suspended: "suspended"
+        case .canceling: "canceling"
+        case .completed: "completed"
+        @unknown default: "unknown"
+        }
+        let formatter = ISO8601DateFormatter()
+        let lastProgress = state.lastProgressAt.map(formatter.string(from:)) ?? "none"
+        IOSImportDiagnostics.putSnapshot(
+            event: event,
+            lane: state.lane,
+            task: state.token,
+            expectedBytes: state.expectedBytes,
+            sentBytes: state.sentBytes,
+            lastProgressAt: lastProgress,
+            duration: Date().timeIntervalSince(state.startedAt),
+            taskState: taskState,
+            requestTimeout: state.requestTimeout,
+            resourceTimeout: state.resourceTimeout,
+            httpStatus: state.httpStatus,
+            responseDuration: state.responseAt.map { $0.timeIntervalSince(state.startedAt) },
+            error: error)
     }
     func reconcileTasks(queueStore: ImportQueueStore? = nil) async -> [BackgroundTaskReconciliation] {
         IOSImportDiagnostics.log("reconciliation started sessions=\(Self.wifiSessionIdentifier),\(Self.cellularSessionIdentifier),\(Self.sessionIdentifier)")
@@ -667,7 +805,7 @@ final class BackgroundTransferCoordinator: NSObject, URLSessionTaskDelegate, URL
                 IOSImportDiagnostics.log("asset -> needsReconcile queueAssetID=\(binding.queueAssetID.uuidString.prefix(8)) reason=background-task-missing; binding removed")
                 result.append(.missingTask); continue
             }
-            updatePUTTaskState { $0.started(taskKey(sessionIdentifier: binding.sessionIdentifier, taskIdentifier: binding.taskIdentifier)) }
+            updatePUTTaskState { $0.started(BackgroundPUTTaskKey.make(sessionIdentifier: binding.sessionIdentifier, taskIdentifier: binding.taskIdentifier)) }
             guard task.taskDescription == binding.uploadAttemptID.uuidString,
                   task.originalRequest?.url?.host == binding.expectedHost else {
                 IOSImportDiagnostics.log("conflicting binding taskIdentifier=\(binding.taskIdentifier) queueAssetID=\(binding.queueAssetID.uuidString.prefix(8)) uploadAttemptID=\(binding.uploadAttemptID.uuidString)")
@@ -734,7 +872,21 @@ final class BackgroundTransferCoordinator: NSObject, URLSessionTaskDelegate, URL
     private func isCompleteInFlight(_ uploadAttemptID: UUID) -> Bool { lock.lock(); defer { lock.unlock() }; return completionInFlight.contains(uploadAttemptID) }
     private func completionInFlightSnapshot() -> Set<UUID> { lock.lock(); defer { lock.unlock() }; return completionInFlight }
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) { completionHandler(nil) }
-    func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64, totalBytesExpectedToSend: Int64) { lock.lock(); let handler = progressHandlers[task.taskIdentifier]; lock.unlock(); let identifier = session.configuration.identifier ?? "unknown"; updatePUTTaskState { $0.sending(taskKey(sessionIdentifier: identifier, taskIdentifier: task.taskIdentifier)) }; IOSImportDiagnostics.log("[BackgroundPUT] task=\(task.taskIdentifier) didSendBodyData=\(bytesSent) totalBytesSent=\(totalBytesSent) expected=\(totalBytesExpectedToSend) state=sending"); handler?(totalBytesSent, totalBytesExpectedToSend) }
+    func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
+        let identifier = session.configuration.identifier ?? "unknown"
+        let key = BackgroundPUTTaskKey.make(sessionIdentifier: identifier, taskIdentifier: task.taskIdentifier)
+        lock.lock()
+        let handler = progressHandlers[task.taskIdentifier]
+        if var diagnostic = putDiagnostics[key] {
+            diagnostic.sentBytes = max(diagnostic.sentBytes, totalBytesSent)
+            diagnostic.lastProgressAt = Date()
+            putDiagnostics[key] = diagnostic
+        }
+        lock.unlock()
+        updatePUTTaskState { $0.sending(key) }
+        IOSImportDiagnostics.log("[BackgroundPUT] task=\(task.taskIdentifier) didSendBodyData=\(bytesSent) totalBytesSent=\(totalBytesSent) expected=\(totalBytesExpectedToSend) state=sending")
+        handler?(totalBytesSent, totalBytesExpectedToSend)
+    }
     func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
         guard IOSImportDiagnostics.enabled, task.originalRequest?.httpMethod == "PUT" else { return }
         func seconds(_ start: Date?, _ end: Date?) -> String {
@@ -745,11 +897,36 @@ final class BackgroundTransferCoordinator: NSObject, URLSessionTaskDelegate, URL
             IOSImportDiagnostics.log("[BackgroundPUT] metrics task=\(task.taskIdentifier) transaction=\(index) protocol=\(transaction.networkProtocolName ?? "unknown") queue=\(seconds(transaction.fetchStartDate, transaction.requestStartDate)) request=\(seconds(transaction.requestStartDate, transaction.requestEndDate)) responseWait=\(seconds(transaction.requestEndDate, transaction.responseStartDate)) response=\(seconds(transaction.responseStartDate, transaction.responseEndDate)) bytesSent=\(transaction.countOfRequestBodyBytesSent)")
         }
     }
-    func urlSession(_ session: URLSession, taskIsWaitingForConnectivity task: URLSessionTask) { let identifier = session.configuration.identifier ?? "unknown"; updatePUTTaskState { $0.waiting(taskKey(sessionIdentifier: identifier, taskIdentifier: task.taskIdentifier)) }; IOSImportDiagnostics.log("background-task waitingForConnectivity session=\(identifier) taskIdentifier=\(task.taskIdentifier) state=waiting") }
+    func urlSession(_ session: URLSession, taskIsWaitingForConnectivity task: URLSessionTask) { let identifier = session.configuration.identifier ?? "unknown"; updatePUTTaskState { $0.waiting(BackgroundPUTTaskKey.make(sessionIdentifier: identifier, taskIdentifier: task.taskIdentifier)) }; IOSImportDiagnostics.log("background-task waitingForConnectivity session=\(identifier) taskIdentifier=\(task.taskIdentifier) state=waiting") }
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping @Sendable (URLSession.ResponseDisposition) -> Void) {
+        let identifier = session.configuration.identifier ?? "unknown"
+        let key = BackgroundPUTTaskKey.make(sessionIdentifier: identifier, taskIdentifier: dataTask.taskIdentifier)
+        lock.lock()
+        if var diagnostic = putDiagnostics[key] {
+            diagnostic.responseAt = Date()
+            diagnostic.httpStatus = (response as? HTTPURLResponse)?.statusCode
+            putDiagnostics[key] = diagnostic
+        }
+        if let http = response as? HTTPURLResponse {
+            responses[dataTask.taskIdentifier] = (Data(), http)
+        }
+        lock.unlock()
+        logPUTSnapshot(key: key, task: dataTask, event: "response")
+        completionHandler(.allow)
+    }
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) { lock.lock(); if let current = responses[dataTask.taskIdentifier] { responses[dataTask.taskIdentifier] = (current.0 + data, current.1) }; lock.unlock() }
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         let sessionIdentifier = session.configuration.identifier ?? "unknown"
-        updatePUTTaskState { $0.completed(taskKey(sessionIdentifier: sessionIdentifier, taskIdentifier: task.taskIdentifier)) }
+        let key = BackgroundPUTTaskKey.make(sessionIdentifier: sessionIdentifier, taskIdentifier: task.taskIdentifier)
+        updatePUTTaskState { $0.completed(key) }
+        lock.lock()
+        if var diagnostic = putDiagnostics[key], let http = task.response as? HTTPURLResponse {
+            diagnostic.httpStatus = http.statusCode
+            diagnostic.responseAt = diagnostic.responseAt ?? Date()
+            putDiagnostics[key] = diagnostic
+        }
+        lock.unlock()
+        logPUTSnapshot(key: key, task: task, event: "end", error: error, remove: true)
         lock.lock(); let continuation = continuations.removeValue(forKey: task.taskIdentifier); let response = responses.removeValue(forKey: task.taskIdentifier); progressHandlers.removeValue(forKey: task.taskIdentifier); lock.unlock()
         if let error {
             let nsError = error as NSError
@@ -816,13 +993,16 @@ final class IOSBackgroundDAVTransport: DAVTransport, @unchecked Sendable {
     private let background: BackgroundTransferCoordinator
     private let queueAssetID: UUID
     private let localRunID: UUID
+    private let diagnosticLane: Int
+    private let onPUT: (@Sendable () async -> Void)?
     let uploadAttemptID = UUID()
-    init(base: any DAVTransport, background: BackgroundTransferCoordinator, queueAssetID: UUID, localRunID: UUID) { self.base = base; self.background = background; self.queueAssetID = queueAssetID; self.localRunID = localRunID }
+    init(base: any DAVTransport, background: BackgroundTransferCoordinator, queueAssetID: UUID, localRunID: UUID, diagnosticLane: Int = 0, onPUT: (@Sendable () async -> Void)? = nil) { self.base = base; self.background = background; self.queueAssetID = queueAssetID; self.localRunID = localRunID; self.diagnosticLane = diagnosticLane; self.onPUT = onPUT }
     func send(_ request: URLRequest, file: URL?) async throws -> DAVResponse { try await send(request, file: file, kind: file == nil ? .api : .fileTransfer, progress: nil) }
     func send(_ request: URLRequest, file: URL?, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> DAVResponse { try await send(request, file: file, kind: file == nil ? .api : .fileTransfer, progress: progress) }
     func send(_ request: URLRequest, file: URL?, kind: DAVRequestKind, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> DAVResponse {
         guard kind == .fileTransfer, let file else { return try await base.send(request, file: file, kind: kind, progress: progress) }
-        return try await background.send(request, file: file, queueAssetID: queueAssetID, localRunID: localRunID, uploadAttemptID: uploadAttemptID, progress: progress)
+        await onPUT?()
+        return try await background.send(request, file: file, queueAssetID: queueAssetID, localRunID: localRunID, uploadAttemptID: uploadAttemptID, diagnosticLane: diagnosticLane, progress: progress)
     }
     func cleanup(deleteFile: Bool) async { await background.cleanup(uploadAttemptID: uploadAttemptID, deleteFile: deleteFile) }
 }
@@ -953,13 +1133,46 @@ enum IOSUploadStep: Sendable, Equatable {
 
 struct IOSUploadFailure: LocalizedError, Sendable {
     let step: IOSUploadStep
-    let status: Int
+    let status: Int?
+    let urlErrorCode: Int?
+
+    init(step: IOSUploadStep, status: Int) {
+        self.step = step
+        self.status = status
+        urlErrorCode = nil
+    }
+
+    init(step: IOSUploadStep, urlErrorCode: Int) {
+        self.step = step
+        status = nil
+        self.urlErrorCode = urlErrorCode
+    }
 
     var errorDescription: String? {
-        "\(step.germanName) fehlgeschlagen (HTTP \(status))."
+        if let status { return "\(step.germanName) fehlgeschlagen (HTTP \(status))." }
+        if let urlErrorCode {
+            let code = URLError.Code(rawValue: urlErrorCode)
+            return "\(step.germanName) fehlgeschlagen: \(URLError(code).localizedDescription)"
+        }
+        return "\(step.germanName) fehlgeschlagen."
+    }
+
+    var diagnosticCategory: String {
+        let stepName: String = switch step {
+        case .prepare: "prepare"
+        case .webDAVPut: "put"
+        case .complete: "complete"
+        }
+        if let status { return "step=\(stepName) httpStatus=\(status)" }
+        if let urlErrorCode { return "step=\(stepName) urlError=\(urlErrorCode)" }
+        return "step=\(stepName) error=unknown"
     }
 
     static func preserving(step: IOSUploadStep, from error: Error) -> Error {
+        if error is IOSUploadFailure { return error }
+        if let urlError = error as? URLError {
+            return IOSUploadFailure(step: step, urlErrorCode: urlError.code.rawValue)
+        }
         if case let UploadError.http(status) = error {
             return IOSUploadFailure(step: step, status: status)
         }
@@ -1148,7 +1361,7 @@ struct IOSAssetJobScheduler {
                     } catch {
                         let isFatalServerError: Bool
                         if let failure = error as? IOSUploadFailure {
-                            isFatalServerError = failure.status >= 500
+                            isFatalServerError = (failure.status ?? 0) >= 500
                         } else if case let UploadError.http(status) = error {
                             isFatalServerError = status >= 500
                         } else {
@@ -1199,6 +1412,7 @@ final class IOSForegroundImportCoordinator: ObservableObject {
     private var backgroundActivityMonitor: Task<Void, Never>?
     private var transferProgress = IOSImportProgressAggregation()
     private var pendingCompletion = Set<Int>()
+    private var diagnosticJobPhases: [Int: (phase: IOSImportJobPhase, started: ContinuousClock.Instant, lane: Int)] = [:]
     init(queueStore: ImportQueueStore? = nil) {
         let store = queueStore ?? ImportQueueStore()
         self.queueStore = store
@@ -1330,7 +1544,7 @@ final class IOSForegroundImportCoordinator: ObservableObject {
         let importTransport = IOSImportTransportFactory.make(base: transport) { [weak self] waiting in
             Task { @MainActor in self?.isWaitingForWiFi = waiting && !IOSTransferNetworkPreferences.useCellularAccess() }
         }
-        cancel(); if resumeRun != nil { IOSImportDiagnostics.memory(phase: "resume-after-old-task-cancel") }; isWaitingForWiFi = false; phase = .inventory; failure = nil; progressCounts = IOSImportProgressCounts(completed: resumeRun.map { Self.completedAssetCount(in: $0) } ?? 0); transferProgress = IOSImportProgressAggregation(); pendingCompletion = []; transferSentBytes = 0; transferTotalBytes = 0; total = selection.count
+        cancel(); if resumeRun != nil { IOSImportDiagnostics.memory(phase: "resume-after-old-task-cancel") }; isWaitingForWiFi = false; phase = .inventory; failure = nil; progressCounts = IOSImportProgressCounts(completed: resumeRun.map { Self.completedAssetCount(in: $0) } ?? 0); transferProgress = IOSImportProgressAggregation(); pendingCompletion = []; diagnosticJobPhases = [:]; transferSentBytes = 0; transferTotalBytes = 0; total = selection.count
         let targetRootSnapshot = IOSTargetDirectoryPreferences.normalize(targetRoot)
         task = Task { [weak self] in
             guard let self else { return }
@@ -1477,13 +1691,16 @@ final class IOSForegroundImportCoordinator: ObservableObject {
             IOSImportDiagnostics.memory(phase: "asset-job-start", asset: persistedAssets[index].queueAssetID.uuidString, job: index + 1)
             do {
                 let outcome = try await self.runAssetJob(index: index, selected: selected, asset: asset, entry: entry, reply: reply, library: library, connection: connection, source: source, targetRoot: targetRoot, transport: transport, folderCoordinator: folderCoordinator, runID: runID, queueAsset: persistedAssets[index])
+                await self.finishTransfer(job: index, result: "success")
                 IOSImportDiagnostics.memory(phase: "asset-job-end", asset: persistedAssets[index].queueAssetID.uuidString, job: index + 1)
                 IOSImportDiagnostics.log("asset-job[\(index + 1)] OK elapsed=\(started.duration(to: .now))")
                 return (index, outcome)
             } catch is CancellationError {
+                await self.finishTransfer(job: index, result: "cancelled", error: CancellationError())
                 IOSImportDiagnostics.memory(phase: "asset-job-cancelled", asset: persistedAssets[index].queueAssetID.uuidString, job: index + 1)
                 throw CancellationError()
             } catch {
+                await self.finishTransfer(job: index, result: "failure", error: error)
                 IOSImportDiagnostics.memory(phase: "asset-job-error", asset: persistedAssets[index].queueAssetID.uuidString, job: index + 1)
                 IOSImportDiagnostics.log("asset-job[\(index + 1)] ERROR elapsed=\(started.duration(to: .now)) error=\(String(describing: type(of: error)))")
                 throw error
@@ -1524,9 +1741,12 @@ final class IOSForegroundImportCoordinator: ObservableObject {
         IOSImportDiagnostics.memory(phase: "photo-export-start", asset: queueAssetID.uuidString, job: index + 1)
         let exportPhase = IOSImportDiagnostics.start("asset-job[\(index + 1)] photo-original-export")
         let exported: PhotoLibraryModel.ExportedOriginal
-        do { exported = try await library.exportOriginal(for: selected, diagnosticAssetID: queueAssetID.uuidString, diagnosticJob: index + 1); IOSImportDiagnostics.memory(phase: "photo-export-end", asset: queueAssetID.uuidString, job: index + 1); IOSImportDiagnostics.finish("asset-job[\(index + 1)] photo-original-export", started: exportPhase, detail: "bytes=pending") }
+        do { exported = try await library.exportOriginal(for: selected, diagnosticAssetID: queueAssetID.uuidString, diagnosticJob: index + 1) { [weak self] phase in
+            await self?.transitionJob(index, to: phase)
+        }; IOSImportDiagnostics.memory(phase: "photo-export-end", asset: queueAssetID.uuidString, job: index + 1); IOSImportDiagnostics.finish("asset-job[\(index + 1)] photo-original-export", started: exportPhase, detail: "bytes=pending") }
         catch { IOSImportDiagnostics.failure("asset-job[\(index + 1)] photo-original-export", started: exportPhase, error: error); throw error }
         defer { try? FileManager.default.removeItem(at: exported.url.deletingLastPathComponent()) }
+        transitionJob(index, to: .hashing)
         let hashPhase = IOSImportDiagnostics.start("asset-job[\(index + 1)] sha256"); IOSImportDiagnostics.memory(phase: "sha256-start", asset: queueAssetID.uuidString, job: index + 1)
         let identity: ContentIdentity
         do {
@@ -1549,13 +1769,19 @@ final class IOSForegroundImportCoordinator: ObservableObject {
         let date = selected.creationDate
         guard let uploadPath = IOSUploadPath.folder(base: targetRoot, date: date) else { throw UploadError.invalidConfiguration }
         let folder = uploadPath.folder
-        let provider = IOSUploadTargets(connection: connection, transport: transport, source: source.sourceId.uuidString.lowercased(), runId: reply.runId, uploadId: ticket.uploadId, folder: folder)
+        let provider = IOSUploadTargets(connection: connection, transport: transport, source: source.sourceId.uuidString.lowercased(), runId: reply.runId, uploadId: ticket.uploadId, folder: folder) { [weak self] in
+            await self?.transitionJob(index, to: .prepare)
+        }
+        transitionJob(index, to: .prepare)
         IOSImportDiagnostics.log("asset-job[\(index + 1)] prepare-request START")
         IOSImportDiagnostics.memory(phase: "prepare-start", asset: queueAssetID.uuidString, job: index + 1)
         let putPhase = IOSImportDiagnostics.start("asset-job[\(index + 1)] webdav-transfer")
         try await queueStore.markAsset(runID: runID, assetID: queueAssetID, state: .needsReconcile, lastConfirmedStep: "remote-state-unknown")
         let target: UploadTarget
-        let backgroundTransport = IOSBackgroundDAVTransport(base: transport, background: backgroundTransfer, queueAssetID: queueAssetID, localRunID: runID)
+        let diagnosticLane = (transferProgress.slot(for: index) ?? -1) + 1
+        let backgroundTransport = IOSBackgroundDAVTransport(base: transport, background: backgroundTransfer, queueAssetID: queueAssetID, localRunID: runID, diagnosticLane: diagnosticLane) { [weak self] in
+            await self?.transitionJob(index, to: .put)
+        }
         let backgroundUploader = WebDAVUploader(connection: connection, transport: backgroundTransport, debug: { message in IOSImportDiagnostics.log(message) }, folderCoordinator: folderCoordinator)
         do { target = try await backgroundUploader.uploadWithTarget(file: exported.url, filename: exported.filename, assetId: ticket.assetId, captureDate: date, targets: provider, targetRoot: uploadPath.root, progress: { [weak self] sent, total in
             Task { @MainActor in self?.updateTransferProgress(job: index, filename: exported.filename, sent: sent, total: total) }
@@ -1570,13 +1796,14 @@ final class IOSForegroundImportCoordinator: ObservableObject {
             IOSImportDiagnostics.failure("asset-job[\(index + 1)] webdav-transfer", started: putPhase, error: error)
             throw IOSUploadFailure.preserving(step: .webDAVPut, from: error)
         }
-        if target.state == "contentAlreadyPresent" { try await queueStore.markAsset(runID: runID, assetID: queueAssetID, state: .completed, lastConfirmedStep: "content-reconciled", targetPath: target.path); await backgroundTransport.cleanup(deleteFile: true); return .reconciled }
+        if target.state == "contentAlreadyPresent" { transitionJob(index, to: .reconciliation); try await queueStore.markAsset(runID: runID, assetID: queueAssetID, state: .completed, lastConfirmedStep: "content-reconciled", targetPath: target.path); await backgroundTransport.cleanup(deleteFile: true); return .reconciled }
         pendingCompletion.insert(index)
         transferProgress.remove(job: index)
         transferSentBytes = transferProgress.sentBytes
         transferTotalBytes = transferProgress.totalBytes
         try Task.checkCancellation()
         backgroundTransfer.beginComplete(uploadAttemptID: backgroundTransport.uploadAttemptID)
+        transitionJob(index, to: .complete)
         do {
             try await IOSUploadHTTP.complete(connection: connection, transport: transport, source: source.sourceId.uuidString.lowercased(), runId: reply.runId, uploadId: ticket.uploadId, path: target.path, queueAssetID: queueAssetID, uploadAttemptID: backgroundTransport.uploadAttemptID)
         } catch {
@@ -1594,12 +1821,36 @@ final class IOSForegroundImportCoordinator: ObservableObject {
 
     private func apply(_ outcome: AssetJobOutcome, job: Int) {
         pendingCompletion.remove(job)
-        transferProgress.remove(job: job)
-        transferSentBytes = transferProgress.sentBytes
-        transferTotalBytes = transferProgress.totalBytes
+        clearTransfer(job: job)
         switch outcome {
         case .known, .uploaded, .reconciled, .completed: break
         }
+    }
+
+    private func clearTransfer(job: Int) {
+        transferProgress.remove(job: job)
+        transferSentBytes = transferProgress.sentBytes
+        transferTotalBytes = transferProgress.totalBytes
+    }
+
+    private func transitionJob(_ job: Int, to phase: IOSImportJobPhase) {
+        let activeJobs = diagnosticJobPhases[job] == nil ? diagnosticJobPhases.count + 1 : diagnosticJobPhases.count
+        let visibleRows = transferProgress.activeEntries.count
+        let lane = transferProgress.slot(for: job).map { $0 + 1 } ?? 0
+        if let previous = diagnosticJobPhases[job] {
+            guard previous.phase != phase else { return }
+            IOSImportDiagnostics.jobPhaseFinished(lane: previous.lane, phase: previous.phase, started: previous.started, result: "success", activeJobs: activeJobs, visibleRows: visibleRows)
+        }
+        diagnosticJobPhases[job] = (phase, .now, lane)
+        IOSImportDiagnostics.jobPhaseStarted(lane: lane, phase: phase, activeJobs: activeJobs, visibleRows: visibleRows)
+    }
+
+    private func finishTransfer(job: Int, result: String, error: Error? = nil) {
+        let remainingJobs = max(0, diagnosticJobPhases.count - 1)
+        if let current = diagnosticJobPhases.removeValue(forKey: job) {
+            IOSImportDiagnostics.jobPhaseFinished(lane: current.lane, phase: current.phase, started: current.started, result: result, activeJobs: remainingJobs, visibleRows: max(0, transferProgress.activeEntries.count - 1), error: error)
+        }
+        clearTransfer(job: job)
     }
 
     private func updateTransferProgress(job: Int, filename: String, sent: Int64, total: Int64) {
@@ -1634,7 +1885,9 @@ final class IOSForegroundImportCoordinator: ObservableObject {
 private struct IOSUploadTargets: UploadTargetProvider {
     let connection: ConnectorConnection; let transport: any DAVTransport
     let source: String; let runId: String; let uploadId: String; let folder: String
+    let onPrepare: @Sendable () async -> Void
     func prepare(identity: ContentIdentity) async throws -> UploadTarget {
+        await onPrepare()
         let data: [String: Any] = ["sourceId": source, "runId": runId, "uploadId": uploadId, "bytes": identity.bytes, "sha256": identity.sha256, "folder": folder]
         return try await IOSUploadHTTP.request(connection: connection, transport: transport, endpoint: "uploads/prepare", body: data)
     }
