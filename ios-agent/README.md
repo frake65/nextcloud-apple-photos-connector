@@ -5,7 +5,10 @@ assets, and imports them through the APC inventory, upload, WebDAV, and album
 endpoints. Uploads run in the foreground; client-side resume between import
 starts is not supported. A later import starts unfinished files again from
 byte 0, while the server inventory marks already known assets so their bytes
-are skipped. It uses the shared local Swift package at
+are skipped. Cancelling invalidates the current client-run generation,
+cancels active URLSession and PhotoKit requests, and prevents late callbacks
+from changing a subsequent run. Network failures end the current run and are
+never resumed automatically. It uses the shared local Swift package at
 `../shared/InventoryCore`.
 
 The current iOS release configuration is marketing version `1.0`, build `2`.
@@ -18,7 +21,8 @@ inventory/synchronization. Inventory requests are processed in bounded
 It also contains the gallery and album UI with a
 3/4/5/6-column grid, shared selection markers, long-press drag selection, and
 edge auto-scroll. Background URLSession uploads and interruption recovery are
-not implemented; imports run in the foreground.
+not used; imports run in the foreground and every explicit start begins with
+fresh inventory.
 
 ## Source ID and Mac import history
 

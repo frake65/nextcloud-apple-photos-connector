@@ -4,6 +4,59 @@ import Photos
 import UIKit
 import InventoryCore
 
+private final class IOSPhotoResourceRequestCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var requestID: PHAssetResourceDataRequestID?
+    private var isCancelled = false
+
+    func register(_ requestID: PHAssetResourceDataRequestID) {
+        lock.lock()
+        self.requestID = requestID
+        let shouldCancel = isCancelled
+        lock.unlock()
+        if shouldCancel { PHAssetResourceManager.default().cancelDataRequest(requestID) }
+    }
+
+    func cancel() {
+        lock.lock()
+        isCancelled = true
+        let requestID = requestID
+        lock.unlock()
+        if let requestID { PHAssetResourceManager.default().cancelDataRequest(requestID) }
+    }
+}
+
+private final class IOSPhotoResourceFileSink: @unchecked Sendable {
+    private let lock = NSLock()
+    private var handle: FileHandle?
+    private var writeError: (any Error)?
+
+    init(url: URL) throws {
+        guard FileManager.default.createFile(atPath: url.path, contents: nil) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        handle = try FileHandle(forWritingTo: url)
+    }
+
+    func append(_ data: Data) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard writeError == nil, let handle else { return }
+        do { try handle.write(contentsOf: data) }
+        catch { writeError = error }
+    }
+
+    func finish() throws {
+        lock.lock()
+        let handle = handle
+        self.handle = nil
+        let writeError = writeError
+        lock.unlock()
+        try handle?.close()
+        if let writeError { throw writeError }
+    }
+}
+
 @MainActor
 final class PhotoLibraryModel: ObservableObject {
     @Published private(set) var authorization: PhotoAuthorizationState
@@ -204,19 +257,34 @@ final class PhotoLibraryModel: ObservableObject {
         options.progressHandler = { value in progress?(value) }
         do {
             IOSImportDiagnostics.memory(phase: "photokit-writeData-start", asset: diagnosticAssetID, job: diagnosticJob)
+            let sink = try IOSPhotoResourceFileSink(url: url)
+            let cancellation = IOSPhotoResourceRequestCancellation()
             try await withTaskCancellationHandler {
                 try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
-                    PHAssetResourceManager.default().writeData(for: resource, toFile: url, options: options) { error in
+                    let requestID = PHAssetResourceManager.default().requestData(
+                        for: resource,
+                        options: options,
+                        dataReceivedHandler: { sink.append($0) },
+                        completionHandler: { error in
                         IOSImportDiagnostics.memory(phase: "photokit-writeData-completion", asset: diagnosticAssetID, job: diagnosticJob)
-                        if let error { continuation.resume(throwing: error) } else { continuation.resume() }
-                    }
+                        do {
+                            try sink.finish()
+                            if let error { throw error }
+                            continuation.resume()
+                        } catch {
+                            continuation.resume(throwing: error)
+                        }
+                    })
+                    cancellation.register(requestID)
                 }
-            } onCancel: { }
+            } onCancel: { cancellation.cancel() }
+            try Task.checkCancellation()
             let byteCount = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0
             IOSImportDiagnostics.log("asset-job[\(diagnosticJob ?? 0)] export-file-size bytes=\(byteCount)")
             return ExportedOriginal(url: url, filename: IOSFilenamePolicy.resolved(originalFilename: resource.originalFilename, localIdentifier: localIdentifier, mediaType: type == .video ? "video" : "image"), resourceType: type)
         } catch {
             try? FileManager.default.removeItem(at: directory)
+            if Task.isCancelled { throw CancellationError() }
             throw error
         }
     }

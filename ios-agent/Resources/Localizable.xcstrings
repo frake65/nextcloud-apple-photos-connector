@@ -632,6 +632,7 @@
       }
     },
     "Die Übertragung wurde unterbrochen und kann fortgesetzt werden." : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -831,6 +832,7 @@
       }
     },
     "Fortsetzen" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -1458,6 +1460,7 @@
       }
     },
     "Unterbrochene Übertragung" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {

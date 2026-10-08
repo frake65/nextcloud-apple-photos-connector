@@ -578,6 +578,48 @@ final class IOSCoreFlowTests: XCTestCase {
         XCTAssertEqual(started, 0)
     }
 
+    func testCancelledClientRunRejectsLateCallbacks() {
+        var generation = IOSClientRunGeneration()
+        let cancelledRun = generation.begin()
+
+        generation.cancel()
+
+        XCTAssertFalse(generation.accepts(cancelledRun))
+    }
+
+    func testNewClientRunRejectsCallbacksFromPreviousRun() {
+        var generation = IOSClientRunGeneration()
+        let previousRun = generation.begin()
+        let currentRun = generation.begin()
+
+        XCTAssertFalse(generation.accepts(previousRun))
+        XCTAssertTrue(generation.accepts(currentRun))
+    }
+
+    func testUploadProgressThrottlePublishesFinalProgressWithoutFloodingUI() {
+        let throttle = IOSUploadProgressThrottle(minimumInterval: 1)
+        let start = Date(timeIntervalSince1970: 100)
+
+        XCTAssertTrue(throttle.shouldPublish(sent: 1, total: 100, now: start))
+        XCTAssertFalse(throttle.shouldPublish(sent: 2, total: 100, now: start.addingTimeInterval(0.1)))
+        XCTAssertTrue(throttle.shouldPublish(sent: 100, total: 100, now: start.addingTimeInterval(0.2)))
+    }
+
+    func testNetworkInterruptionIsNotAutomaticallyRetried() async throws {
+        let base = FailingConnectivityTransport()
+        let transport = IOSImportTransportFactory.make(base: base)
+        let request = URLRequest(url: URL(string: "https://cloud.example/status")!)
+
+        do {
+            _ = try await transport.send(request, file: nil)
+            XCTFail("Expected the connectivity error to end the run")
+        } catch let error as URLError {
+            XCTAssertEqual(error.code, .networkConnectionLost)
+        }
+        let requestCount = await base.requestCount
+        XCTAssertEqual(requestCount, 1)
+    }
+
     @MainActor
     func testConnectionPreferencesKeepPasswordOutOfUserDefaults() throws {
         let suite = "apc-ios-tests-\(UUID().uuidString)"
@@ -1216,6 +1258,15 @@ private actor RecordingInventoryTransport: DAVTransport {
     }
 
     func requestSummary() -> (method: String, path: String, providedFile: Bool, body: String) { captured }
+}
+
+private actor FailingConnectivityTransport: DAVTransport {
+    private(set) var requestCount = 0
+
+    func send(_ request: URLRequest, file: URL?) async throws -> DAVResponse {
+        requestCount += 1
+        throw URLError(.networkConnectionLost)
+    }
 }
 
 private struct StaticInventoryTransport: DAVTransport {

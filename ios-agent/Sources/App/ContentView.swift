@@ -66,13 +66,11 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 library.refreshAuthorizationAndLoad()
-                Task { await presentRecoveryIfNeeded() }
             }
         }
         .onAppear {
             IOSImportDiagnostics.log("[Startup] ContentView appeared")
             library.refreshAuthorizationAndLoad()
-            Task { await presentRecoveryIfNeeded() }
             routeToInitialConnectionIfNeeded()
         }
         .onChange(of: library.hasLoadedInitialState) { _, loaded in
@@ -107,26 +105,6 @@ struct ContentView: View {
         }.padding(28).navigationTitle("Photos Connector")
     }
 
-    @MainActor
-    private func presentRecoveryIfNeeded() async {
-        guard !showingInventoryReview,
-              connection.parsedSourceId != nil,
-              !library.assets.isEmpty else { return }
-        let store = ImportQueueStore()
-        let coordinator = BackgroundTransferCoordinator.shared
-        _ = await coordinator.reconcileTasks(queueStore: store)
-        guard await coordinator.activeBindings().isEmpty else { return }
-        let sourceID = connection.parsedSourceId!
-        let hasRecoverableRun = (await store.recoverableRuns()).contains { run in
-            run.sourceID == sourceID &&
-            run.account.serverBaseURL == connection.server &&
-            run.account.username == connection.username &&
-            run.assets.allSatisfy { persistedAsset in
-                library.assets.contains { galleryAsset in galleryAsset.id == persistedAsset.localIdentifier }
-            }
-        }
-        if hasRecoverableRun { showingInventoryReview = true }
-    }
 }
 
 private struct StartupView: View {
@@ -904,7 +882,6 @@ private struct ImportTransferProgressRow: View {
 }
 
 private struct InventoryReviewScreen: View {
-    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var library: PhotoLibraryModel
     @ObservedObject var selection: AssetSelectionModel
@@ -913,7 +890,6 @@ private struct InventoryReviewScreen: View {
     @State private var result: InventoryCheckResult?
     @State private var error: String?
     @StateObject private var importer = IOSForegroundImportCoordinator()
-    @State private var interruptedRun: PersistedImportRun?
     #if DEBUG
     @State private var identityDiagnostics: [PhotoIdentityDiagnostic] = []
     @State private var identityDiagnosticError: String?
@@ -1010,14 +986,6 @@ private struct InventoryReviewScreen: View {
             #endif
             if let error { Section { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red) } }
             Section("Import") {
-                if let interruptedRun {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Unterbrochene Übertragung")
-                        Text("Die Übertragung wurde unterbrochen und kann fortgesetzt werden.").font(.body).foregroundStyle(.secondary)
-                        Button("Fortsetzen") { resumeImport(interruptedRun) }
-                            .disabled(importer.isRunning)
-                    }
-                }
                 let presentation = ImportPresentationPhase.resolve(phase: importer.phase, completed: importer.completed, total: importer.total, isVerifyingCompletedUpload: importer.isVerifyingCompletedUpload)
                 if importer.isWaitingForWiFi {
                     ProgressView(value: importer.overallProgress) {
@@ -1033,7 +1001,7 @@ private struct InventoryReviewScreen: View {
                     Text("Alben werden abgeglichen …").font(.body).foregroundStyle(.secondary)
                 } else if presentation == .completed {
                     Text("Übertragung abgeschlossen")
-                } else if presentation != .idle || importer.hasActiveBackgroundTransfer {
+                } else if presentation != .idle {
                     ProgressView(value: importer.overallProgress) {
                         Text(IOSQuantityLocalization.checked(importer.completed, total: importer.total))
                     }
@@ -1056,7 +1024,7 @@ private struct InventoryReviewScreen: View {
                     if importer.alreadyPresent > 0 { Text(IOSQuantityLocalization.alreadyPresent(importer.alreadyPresent)) }
                     if importer.reconciled > 0 { Text(IOSQuantityLocalization.reconciled(importer.reconciled)) }
                 }
-                if ImportPresentationPhase.allowsStart(phase: presentation, isRunning: importer.isRunning, hasActiveBackgroundTransfer: importer.hasActiveBackgroundTransfer, waitingForWiFi: importer.isWaitingForWiFi, hasRecoverableRun: interruptedRun != nil) {
+                if ImportPresentationPhase.allowsStart(phase: presentation, isRunning: importer.isRunning, hasActiveBackgroundTransfer: false, waitingForWiFi: importer.isWaitingForWiFi) {
                     Button { startImport() } label: {
                         Label("Fotos & Alben übernehmen", systemImage: "icloud.and.arrow.up")
                     }
@@ -1065,7 +1033,7 @@ private struct InventoryReviewScreen: View {
                 if ImportPresentationPhase.showsCancel(isRunning: importer.isRunning, waitingForWiFi: importer.isWaitingForWiFi) {
                     Button("Import abbrechen") { importer.cancel() }
                 }
-                if ImportPresentationPhase.showsIdleHelp(phase: presentation, isRunning: importer.isRunning, hasActiveBackgroundTransfer: importer.hasActiveBackgroundTransfer, waitingForWiFi: importer.isWaitingForWiFi, hasRecoverableRun: interruptedRun != nil) {
+                if ImportPresentationPhase.showsIdleHelp(phase: presentation, isRunning: importer.isRunning, hasActiveBackgroundTransfer: false, waitingForWiFi: importer.isWaitingForWiFi) {
                     Text("Die Übertragung läuft im Vordergrund. Danach werden die betroffenen Alben abgeglichen.")
                         .font(.body).foregroundStyle(.secondary)
                 }
@@ -1087,10 +1055,6 @@ private struct InventoryReviewScreen: View {
         .navigationTitle("Fotos & Videos übertragen")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Fertig") { dismiss() } } }
-        .task { await loadInterruptedRun() }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await loadInterruptedRun() } }
-        }
     }
 
     @ViewBuilder
@@ -1142,36 +1106,9 @@ private struct InventoryReviewScreen: View {
     private func startImport() {
         guard let sourceID = connection.parsedSourceId else { error = InventoryCheckError.invalidSourceIdentifier.localizedDescription; return }
         guard let serverConnection = try? connection.makeConnection() else { error = InventoryCheckError.noServerConfiguration.localizedDescription; return }
-        interruptedRun = nil
-            importer.start(selection: selection.assets, library: library, connection: serverConnection, source: PhotoSource(sourceId: sourceID, name: "Apple Photos"), targetRoot: connection.targetDirectory) { identifier in
-                selection.deselect(identifier: identifier)
-            }
-    }
-
-    @MainActor
-    private func loadInterruptedRun() async {
-        guard let sourceID = connection.parsedSourceId else { return }
-        await importer.reconcileBackgroundTasks()
-        if importer.hasActiveBackgroundTransfer { interruptedRun = nil; return }
-        let runs = await importer.recoverableRuns()
-        interruptedRun = runs.first { run in
-            run.sourceID == sourceID && run.account.serverBaseURL == connection.server && run.account.username == connection.username
-                && run.assets.allSatisfy { persistedAsset in library.assets.contains { galleryAsset in galleryAsset.id == persistedAsset.localIdentifier } }
+        importer.start(selection: selection.assets, library: library, connection: serverConnection, source: PhotoSource(sourceId: sourceID, name: "Apple Photos"), targetRoot: connection.targetDirectory) { identifier in
+            selection.deselect(identifier: identifier)
         }
-    }
-
-    @MainActor
-    private func resumeImport(_ run: PersistedImportRun) {
-        guard let sourceID = connection.parsedSourceId,
-              let serverConnection = try? connection.makeConnection() else { return }
-        let byID = Dictionary(uniqueKeysWithValues: library.assets.map { ($0.id, $0) })
-        let assets = run.assets.compactMap { byID[$0.localIdentifier] }
-        guard assets.count == run.assets.count else { return }
-        interruptedRun = nil
-        IOSImportDiagnostics.memory(phase: "resume-start")
-            importer.start(selection: assets, library: library, connection: serverConnection, source: PhotoSource(sourceId: sourceID, name: "Apple Photos"), targetRoot: connection.targetDirectory, resumeRun: run) { identifier in
-                selection.deselect(identifier: identifier)
-            }
     }
 
     private var connectionHasConfiguration: Bool { connection.parsedSourceId != nil }

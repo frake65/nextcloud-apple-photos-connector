@@ -549,11 +549,11 @@ final class ImportNetworkTransport: @unchecked Sendable, DAVTransport {
 }
 
 enum IOSImportTransportFactory {
-    static func make(base: (any DAVTransport)? = nil, waitingHandler: (@Sendable (Bool) -> Void)? = nil) -> ImportNetworkTransport {
-        let baseTransport = base ?? NetworkTransport(allowsCellularAccess: true, waitsForConnectivity: true, responseDiagnostics: { response in
+    static func make(base: (any DAVTransport)? = nil, waitingHandler: (@Sendable (Bool) -> Void)? = nil) -> any DAVTransport {
+        waitingHandler?(false)
+        return base ?? NetworkTransport(allowsCellularAccess: IOSTransferNetworkPreferences.useCellularAccess(), waitsForConnectivity: false, responseDiagnostics: { response in
             InventoryCheckClient.logInventoryResponse(response)
         })
-        return ImportNetworkTransport(base: baseTransport, waitingHandler: waitingHandler)
     }
 }
 
@@ -988,25 +988,42 @@ final class BackgroundTransferCoordinator: NSObject, URLSessionTaskDelegate, URL
     }
 }
 
-final class IOSBackgroundDAVTransport: DAVTransport, @unchecked Sendable {
+final class IOSPhaseReportingDAVTransport: DAVTransport, @unchecked Sendable {
     private let base: any DAVTransport
-    private let background: BackgroundTransferCoordinator
-    private let queueAssetID: UUID
-    private let localRunID: UUID
-    private let diagnosticLane: Int
     private let onPUT: (@Sendable () async -> Void)?
-    let uploadAttemptID = UUID()
-    init(base: any DAVTransport, background: BackgroundTransferCoordinator, queueAssetID: UUID, localRunID: UUID, diagnosticLane: Int = 0, onPUT: (@Sendable () async -> Void)? = nil) { self.base = base; self.background = background; self.queueAssetID = queueAssetID; self.localRunID = localRunID; self.diagnosticLane = diagnosticLane; self.onPUT = onPUT }
+    init(base: any DAVTransport, onPUT: (@Sendable () async -> Void)? = nil) {
+        self.base = base
+        self.onPUT = onPUT
+    }
     func send(_ request: URLRequest, file: URL?) async throws -> DAVResponse { try await send(request, file: file, kind: file == nil ? .api : .fileTransfer, progress: nil) }
     func send(_ request: URLRequest, file: URL?, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> DAVResponse { try await send(request, file: file, kind: file == nil ? .api : .fileTransfer, progress: progress) }
     func send(_ request: URLRequest, file: URL?, kind: DAVRequestKind, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> DAVResponse {
         guard kind == .fileTransfer, let file else { return try await base.send(request, file: file, kind: kind, progress: progress) }
         await onPUT?()
-        return try await background.send(request, file: file, queueAssetID: queueAssetID, localRunID: localRunID, uploadAttemptID: uploadAttemptID, diagnosticLane: diagnosticLane, progress: progress)
+        return try await base.send(request, file: file, kind: kind, progress: progress)
     }
-    func cleanup(deleteFile: Bool) async { await background.cleanup(uploadAttemptID: uploadAttemptID, deleteFile: deleteFile) }
 }
 
+final class IOSUploadProgressThrottle: @unchecked Sendable {
+    private let lock = NSLock()
+    private let minimumInterval: TimeInterval
+    private var lastUpdate = Date.distantPast
+
+    init(minimumInterval: TimeInterval = 0.2) {
+        self.minimumInterval = minimumInterval
+    }
+
+    func shouldPublish(sent: Int64, total: Int64, now: Date = Date()) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard (total > 0 && sent >= total) || now.timeIntervalSince(lastUpdate) >= minimumInterval else { return false }
+        lastUpdate = now
+        return true
+    }
+}
+
+// Retained only to decode and inspect legacy queue files in tests and future
+// migrations. No production path reads or resumes these records.
 enum ImportRecoveryCoordinator {
     static func action(for run: PersistedImportRun, asset: PersistedImportAsset) -> ImportRecoveryAction {
         switch run.state {
@@ -1057,6 +1074,24 @@ struct IOSImportProgressCounts: Equatable, Sendable {
         guard count > 0 else { return }
         reconciled += count
         completed += count
+    }
+}
+
+struct IOSClientRunGeneration: Equatable, Sendable {
+    private(set) var current: UUID?
+
+    mutating func begin() -> UUID {
+        let id = UUID()
+        current = id
+        return id
+    }
+
+    mutating func cancel() {
+        current = nil
+    }
+
+    func accepts(_ id: UUID) -> Bool {
+        current == id
     }
 }
 
@@ -1403,29 +1438,19 @@ final class IOSForegroundImportCoordinator: ObservableObject {
     @Published private(set) var transferSentBytes: Int64 = 0
     @Published private(set) var transferTotalBytes: Int64 = 0
     @Published private(set) var failure: String?
-    @Published private(set) var hasActiveBackgroundTransfer = false
     @Published private(set) var isWaitingForWiFi = false
     private var task: Task<Void, Never>?
-    private let queueStore: ImportQueueStore
-    private let backgroundTransfer: BackgroundTransferCoordinator
-    private var activeRunID: UUID?
-    private var backgroundActivityMonitor: Task<Void, Never>?
+    private var clientRunGeneration = IOSClientRunGeneration()
     private var transferProgress = IOSImportProgressAggregation()
     private var pendingCompletion = Set<Int>()
     private var diagnosticJobPhases: [Int: (phase: IOSImportJobPhase, started: ContinuousClock.Instant, lane: Int)] = [:]
-    init(queueStore: ImportQueueStore? = nil) {
-        let store = queueStore ?? ImportQueueStore()
-        self.queueStore = store
-        self.backgroundTransfer = queueStore == nil ? BackgroundTransferCoordinator.shared : BackgroundTransferCoordinator(queueStore: store)
-        self.backgroundTransfer.setConnectivityWaitingHandler { [weak self] waiting in
-            Task { @MainActor in self?.isWaitingForWiFi = waiting && !IOSTransferNetworkPreferences.useCellularAccess() }
-        }
-    }
+
     nonisolated static func completedAssetCount(in run: PersistedImportRun) -> Int {
         run.assets.reduce(into: 0) { count, asset in
             if asset.state == .completed { count += 1 }
         }
     }
+
     nonisolated static func resumeInventoryState(localState: ImportAssetState, serverState: InventoryAssetReply.State) -> ImportAssetState? {
         if localState == .completed { return nil }
         return serverState == .known ? .completed : .needsPrepare
@@ -1435,7 +1460,7 @@ final class IOSForegroundImportCoordinator: ObservableObject {
         if completed >= total { return 1 }
         return min(0.999, (Double(completed + pendingCompletion.count) + transferProgress.activeFraction) / Double(total))
     }
-    var isRunning: Bool { hasActiveBackgroundTransfer || ![.idle, .finished, .failed, .cancelled].contains(phase) }
+    var isRunning: Bool { ![.idle, .finished, .failed, .cancelled].contains(phase) }
     var activeTransfers: [(slot: Int, job: Int, filename: String?, sent: Int64, total: Int64)] { transferProgress.activeEntries }
     /// The server-side verification is only the visible phase when no other
     /// asset is still sending PUT bytes.
@@ -1469,97 +1494,41 @@ final class IOSForegroundImportCoordinator: ObservableObject {
     func cancel() {
         IOSImportDiagnostics.memory(phase: "import-cancel-requested")
         IOSImportDiagnostics.log("cancel requested")
+        let cancelledTask = task
+        clientRunGeneration.cancel()
+        task = nil
         phase = .cancelled
-        task?.cancel()
-        backgroundActivityMonitor?.cancel()
-        backgroundActivityMonitor = nil
-        if let runID = activeRunID {
-            backgroundTransfer.cancelAllForRun(runID)
-            hasActiveBackgroundTransfer = false
-            isWaitingForWiFi = false
-            activeRunID = nil
-            IOSImportDiagnostics.log("cancel queue-state=cancelled")
-            Task { try? await queueStore.markRun(runID: runID, state: .cancelled, albumSyncPending: false) }
-        }
+        cancelledTask?.cancel()
+        isWaitingForWiFi = false
+        pendingCompletion.removeAll()
+        diagnosticJobPhases.removeAll()
+        transferProgress = IOSImportProgressAggregation()
+        transferSentBytes = 0
+        transferTotalBytes = 0
+        currentFilename = nil
         IOSImportDiagnostics.log("cancel swift-task")
     }
 
-    func recoverableRuns() async -> [PersistedImportRun] { await queueStore.recoverableRuns() }
-    func reconcileBackgroundTasks() async {
-        let result = await backgroundTransfer.reconcileTasks(queueStore: queueStore)
-        let activeCount = await refreshReattachedBackgroundActivities()
-        if activeCount > 0 { startBackgroundActivityMonitor() }
-        if activeCount > 0 { IOSImportDiagnostics.log("run exposed as active count=\(activeCount)") }
-        else if !result.isEmpty { IOSImportDiagnostics.log("run exposed as recoverable") }
-    }
-
-    @discardableResult
-    private func refreshReattachedBackgroundActivities() async -> Int {
-        let activities = await backgroundTransfer.activeTransferActivities(queueStore: queueStore)
-        hasActiveBackgroundTransfer = !activities.isEmpty
-        if let binding = activities.first?.binding,
-           let run = await queueStore.run(localRunID: binding.localRunID) {
-            activeRunID = run.localRunID
-            total = run.assets.count
-            progressCounts = Self.restoredProgressCounts(in: run)
-            if phase == .idle { phase = .uploading }
-            let assetsByID = Dictionary(uniqueKeysWithValues: run.assets.map { ($0.queueAssetID, $0) })
-            for activity in activities where activity.binding.localRunID == run.localRunID {
-                let activeBinding = activity.binding
-                transferProgress.register(
-                    job: activeBinding.taskIdentifier,
-                    filename: assetsByID[activeBinding.queueAssetID]?.filenameHint)
-                transferProgress.update(
-                    job: activeBinding.taskIdentifier,
-                    sent: activity.sentBytes,
-                    total: activity.expectedBytes)
-            }
-            transferSentBytes = transferProgress.sentBytes
-            transferTotalBytes = transferProgress.totalBytes
-        }
-        return activities.count
-    }
-
-    private func startBackgroundActivityMonitor() {
-        backgroundActivityMonitor?.cancel()
-        backgroundActivityMonitor = Task { [weak self] in
-            while !Task.isCancelled {
-                do { try await Task.sleep(for: .seconds(1)) }
-                catch { return }
-                guard let self else { return }
-                if await self.refreshReattachedBackgroundActivities() == 0 {
-                    self.backgroundActivityMonitor = nil
-                    return
-                }
-            }
-        }
-    }
-
-    func start(selection: [GalleryAsset], library: PhotoLibraryModel, connection: ConnectorConnection, source: PhotoSource, targetRoot: String, transport: (any DAVTransport)? = nil, resumeRun: PersistedImportRun? = nil, onAssetCompleted: @escaping @MainActor (String) -> Void = { _ in }) {
+    func start(selection: [GalleryAsset], library: PhotoLibraryModel, connection: ConnectorConnection, source: PhotoSource, targetRoot: String, transport: (any DAVTransport)? = nil, onAssetCompleted: @escaping @MainActor (String) -> Void = { _ in }) {
         IOSImportDiagnostics.announceIfEnabled()
         IOSImportDiagnostics.memory(phase: "import-start")
-        // The gate applies the current import policy before each request. The
-        // underlying session remains able to use cellular data so AUS → EIN
-        // can release a waiting import without recreating its task/session.
+        cancel()
+        let clientRunID = clientRunGeneration.begin()
+        // A new foreground session is created for every user-started run. It
+        // fails normally when connectivity is lost and is never reattached.
         let importTransport = IOSImportTransportFactory.make(base: transport) { [weak self] waiting in
-            Task { @MainActor in self?.isWaitingForWiFi = waiting && !IOSTransferNetworkPreferences.useCellularAccess() }
+            Task { @MainActor in
+                guard self?.clientRunGeneration.accepts(clientRunID) == true else { return }
+                self?.isWaitingForWiFi = waiting && !IOSTransferNetworkPreferences.useCellularAccess()
+            }
         }
-        cancel(); if resumeRun != nil { IOSImportDiagnostics.memory(phase: "resume-after-old-task-cancel") }; isWaitingForWiFi = false; phase = .inventory; failure = nil; progressCounts = IOSImportProgressCounts(completed: resumeRun.map { Self.completedAssetCount(in: $0) } ?? 0); transferProgress = IOSImportProgressAggregation(); pendingCompletion = []; diagnosticJobPhases = [:]; transferSentBytes = 0; transferTotalBytes = 0; total = selection.count
+        isWaitingForWiFi = false; phase = .inventory; failure = nil; progressCounts = IOSImportProgressCounts(); transferProgress = IOSImportProgressAggregation(); pendingCompletion = []; diagnosticJobPhases = [:]; transferSentBytes = 0; transferTotalBytes = 0; total = selection.count
         let targetRootSnapshot = IOSTargetDirectoryPreferences.normalize(targetRoot)
         task = Task { [weak self] in
             guard let self else { return }
             do {
                 let folderCoordinator = WebDAVFolderCoordinator()
-                let runID = resumeRun?.localRunID ?? UUID()
-                var persistedAssets = resumeRun?.assets ?? selection.map(IOSPersistedInventory.placeholder)
-                let persistedRun = PersistedImportRun(schemaVersion: PersistedImportRun.currentSchemaVersion, localRunID: runID,
-                    account: ImportAccountReference(serverBaseURL: connection.base.absoluteString, username: connection.user), sourceID: source.sourceId,
-                    createdAt: Date(), updatedAt: Date(), state: .assetProcessing, serverRunID: nil, assetOrder: persistedAssets.map(\.queueAssetID),
-                    albumSyncPending: false, assets: persistedAssets)
-                if resumeRun == nil { try await queueStore.save(persistedRun) }
-                else { try await queueStore.markRun(runID: runID, state: .assetProcessing, albumSyncPending: false) }
-                activeRunID = runID
-                let onlySyncAlbums = resumeRun.map { $0.state == .assetsComplete || $0.state == .albumSyncPending } ?? false
+                let jobIDs = selection.map { _ in UUID() }
                 let inventoryBatches = IOSInventoryBatching.plan(count: selection.count)
                 let batchSelections = inventoryBatches.map { batch in batch.indices.map { selection[$0] } }
                 var inventoriedAssets = Array<AssetInventory?>(repeating: nil, count: selection.count)
@@ -1587,34 +1556,9 @@ final class IOSForegroundImportCoordinator: ObservableObject {
                     } : nil
                     for (batchIndex, globalIndex) in batch.indices.enumerated() {
                         inventoriedAssets[globalIndex] = batchAssets[batchIndex]
-                        persistedAssets[globalIndex] = IOSPersistedInventory.merging(persistedAssets[globalIndex], inventory: batchAssets[batchIndex])
                     }
-                    var batchPersistedAssets = batch.indices.map { persistedAssets[$0] }
-                    let inventoryPersistStarted = IOSImportDiagnostics.start("queue.persist.before-inventory batchNumber=\(batchNumber + 1)")
-                    try await queueStore.updateInventory(runID: runID, assets: batchPersistedAssets)
-                    IOSImportDiagnostics.finish("queue.persist.before-inventory batchNumber=\(batchNumber + 1)", started: inventoryPersistStarted)
                     IOSImportDiagnostics.log("inventory-batch index=\(batchNumber + 1)/\(inventoryBatches.count) assets=\(batchAssets.count)")
-
-                    if onlySyncAlbums { continue }
                     let reply = try await InventoryCheckClient.check(connection: connection, source: source, assets: batchAssets, batchNumber: batchNumber + 1, transport: importTransport)
-                    let runPersistStarted = IOSImportDiagnostics.start("queue.persist.inventory-response batchNumber=\(batchNumber + 1)")
-                    try await queueStore.markRun(runID: runID, state: .assetProcessing, serverRunID: reply.runId)
-                    IOSImportDiagnostics.finish("queue.persist.inventory-response batchNumber=\(batchNumber + 1)", started: runPersistStarted)
-                    for (batchIndex, entry) in reply.assets.enumerated() where batchPersistedAssets.indices.contains(batchIndex) {
-                        guard let state = Self.resumeInventoryState(localState: batchPersistedAssets[batchIndex].state, serverState: entry.state) else { continue }
-                        batchPersistedAssets[batchIndex].state = state
-                        batchPersistedAssets[batchIndex].lastConfirmedStep = entry.state == .known ? "inventory-known" : "inventory-ticket"
-                        batchPersistedAssets[batchIndex].serverAssetID = entry.upload?.assetId ?? batchPersistedAssets[batchIndex].serverAssetID
-                        batchPersistedAssets[batchIndex].uploadID = entry.upload?.uploadId ?? batchPersistedAssets[batchIndex].uploadID
-                    }
-                    for (batchIndex, globalIndex) in batch.indices.enumerated() {
-                        persistedAssets[globalIndex] = batchPersistedAssets[batchIndex]
-                    }
-                    // Persist the complete server reply once. Writing the full JSON queue for
-                    // every known asset made large already-imported batches advance one by one.
-                    let knownPersistStarted = IOSImportDiagnostics.start("queue.persist.known-states batchNumber=\(batchNumber + 1)")
-                    try await queueStore.updateInventory(runID: runID, assets: batchPersistedAssets)
-                    IOSImportDiagnostics.finish("queue.persist.known-states batchNumber=\(batchNumber + 1)", started: knownPersistStarted, detail: "persistenceWriteCount=1")
                     let classification = IOSInventoryBatchClassification(reply: reply)
                     IOSImportDiagnostics.log("inventory-classification batchNumber=\(batchNumber + 1) batchCount=\(inventoryBatches.count) requestAssetCount=\(batchAssets.count) responseKnownCount=\(classification.knownIndices.count) responseNewCount=\(classification.newIndices.count) schedulerAssetCount=\(classification.newIndices.count) bulkUpdateCallCount=1 persistenceWriteCount=1")
                     for index in classification.knownIndices {
@@ -1640,44 +1584,36 @@ final class IOSForegroundImportCoordinator: ObservableObject {
                                 targetRoot: targetRootSnapshot,
                                 transport: importTransport,
                                 folderCoordinator: folderCoordinator,
-                                runID: runID,
-                                persistedAssets: batchPersistedAssets,
+                                clientRunID: clientRunID,
+                                jobIDs: batch.indices.map { jobIDs[$0] },
                                 onAssetCompleted: onAssetCompleted)
                         })
                 }
                 let assets = inventoriedAssets.compactMap { $0 }
                 guard assets.count == selection.count else { throw InventoryCheckError.unavailableAsset }
-                if onlySyncAlbums {
-                    try await queueStore.markRun(runID: runID, state: .albumSyncPending, albumSyncPending: true)
-                    self.setPhase(.completing)
-                    let albums = try library.albumInventory()
-                    try await IOSAlbumSyncClient.inventoryAndSync(connection: connection, source: source, albums: albums, selectedAssets: assets, transport: importTransport)
-                    try await queueStore.markRun(runID: runID, state: .completed, albumSyncPending: false)
-                    self.finish()
-                    return
-                }
-
-                try await queueStore.markRun(runID: runID, state: .assetsComplete, albumSyncPending: true)
                 self.setPhase(.completing)
                 let albumBuild = IOSImportDiagnostics.start("album-inventory-build")
                 let albums: [AlbumInventory]
                 do { albums = try library.albumInventory(); IOSImportDiagnostics.finish("album-inventory-build", started: albumBuild, detail: "albums=\(albums.count) memberships=\(albums.reduce(0) { $0 + $1.assetIdentities.count })") }
                 catch { IOSImportDiagnostics.failure("album-inventory-build", started: albumBuild, error: error); throw error }
                 try await IOSAlbumSyncClient.inventoryAndSync(connection: connection, source: source, albums: albums, selectedAssets: assets, transport: importTransport)
-                try await queueStore.markRun(runID: runID, state: .completed, albumSyncPending: false)
+                guard self.clientRunGeneration.accepts(clientRunID) else { return }
                 self.finish()
-            } catch is CancellationError { IOSImportDiagnostics.memory(phase: "import-task-cancelled"); self.cancelled() }
-            catch { self.failed(error.localizedDescription) }
+            } catch is CancellationError {
+                IOSImportDiagnostics.memory(phase: "import-task-cancelled")
+                guard self.clientRunGeneration.accepts(clientRunID) else { return }
+                self.cancelled()
+            } catch {
+                guard self.clientRunGeneration.accepts(clientRunID) else { return }
+                self.failed(error.localizedDescription)
+            }
         }
-        if resumeRun != nil { IOSImportDiagnostics.memory(phase: "resume-new-task-created") }
     }
 
-    private func runAssetJobs(selection: [GalleryAsset], assets: [AssetInventory], reply: InventoryReply, newIndices: [Int], library: PhotoLibraryModel, connection: ConnectorConnection, source: PhotoSource, targetRoot: String, transport: any DAVTransport, folderCoordinator: WebDAVFolderCoordinator, runID: UUID, persistedAssets: [PersistedImportAsset], onAssetCompleted: @escaping @MainActor (String) -> Void) async throws {
+    private func runAssetJobs(selection: [GalleryAsset], assets: [AssetInventory], reply: InventoryReply, newIndices: [Int], library: PhotoLibraryModel, connection: ConnectorConnection, source: PhotoSource, targetRoot: String, transport: any DAVTransport, folderCoordinator: WebDAVFolderCoordinator, clientRunID: UUID, jobIDs: [UUID], onAssetCompleted: @escaping @MainActor (String) -> Void) async throws {
         guard newIndices.allSatisfy(selection.indices.contains) else { throw InventoryCheckError.invalidResponse }
-        for index in newIndices where persistedAssets[index].state == .completed {
-            onAssetCompleted(selection[index].id)
-        }
-        let jobIndices = newIndices.filter { persistedAssets[$0].state != .completed }
+        guard jobIDs.count == selection.count else { throw InventoryCheckError.invalidResponse }
+        let jobIndices = newIndices
         IOSImportDiagnostics.log("asset-scheduler START jobs=\(jobIndices.count) new=\(newIndices.count)")
         let outcomes = try await IOSAssetJobScheduler.runCollectingFailures(count: jobIndices.count, maxConcurrent: 2) { [weak self] jobIndex in
             guard let self else { throw CancellationError() }
@@ -1685,23 +1621,24 @@ final class IOSForegroundImportCoordinator: ObservableObject {
             let selected = selection[index]
             let asset = assets[index]
             let entry = reply.assets[index]
+            guard await self.isCurrentRun(clientRunID) else { throw CancellationError() }
             await self.beginTransfer(job: index, asset: selected.asset, filename: asset.filename)
             IOSImportDiagnostics.log("asset-job[\(index + 1)] START")
             let started = ContinuousClock.now
-            IOSImportDiagnostics.memory(phase: "asset-job-start", asset: persistedAssets[index].queueAssetID.uuidString, job: index + 1)
+            IOSImportDiagnostics.memory(phase: "asset-job-start", asset: jobIDs[index].uuidString, job: index + 1)
             do {
-                let outcome = try await self.runAssetJob(index: index, selected: selected, asset: asset, entry: entry, reply: reply, library: library, connection: connection, source: source, targetRoot: targetRoot, transport: transport, folderCoordinator: folderCoordinator, runID: runID, queueAsset: persistedAssets[index])
-                await self.finishTransfer(job: index, result: "success")
-                IOSImportDiagnostics.memory(phase: "asset-job-end", asset: persistedAssets[index].queueAssetID.uuidString, job: index + 1)
+                let outcome = try await self.runAssetJob(index: index, selected: selected, asset: asset, entry: entry, reply: reply, library: library, connection: connection, source: source, targetRoot: targetRoot, transport: transport, folderCoordinator: folderCoordinator, clientRunID: clientRunID, jobID: jobIDs[index])
+                await self.finishTransfer(job: index, clientRunID: clientRunID, result: "success")
+                IOSImportDiagnostics.memory(phase: "asset-job-end", asset: jobIDs[index].uuidString, job: index + 1)
                 IOSImportDiagnostics.log("asset-job[\(index + 1)] OK elapsed=\(started.duration(to: .now))")
                 return (index, outcome)
             } catch is CancellationError {
-                await self.finishTransfer(job: index, result: "cancelled", error: CancellationError())
-                IOSImportDiagnostics.memory(phase: "asset-job-cancelled", asset: persistedAssets[index].queueAssetID.uuidString, job: index + 1)
+                await self.finishTransfer(job: index, clientRunID: clientRunID, result: "cancelled", error: CancellationError())
+                IOSImportDiagnostics.memory(phase: "asset-job-cancelled", asset: jobIDs[index].uuidString, job: index + 1)
                 throw CancellationError()
             } catch {
-                await self.finishTransfer(job: index, result: "failure", error: error)
-                IOSImportDiagnostics.memory(phase: "asset-job-error", asset: persistedAssets[index].queueAssetID.uuidString, job: index + 1)
+                await self.finishTransfer(job: index, clientRunID: clientRunID, result: "failure", error: error)
+                IOSImportDiagnostics.memory(phase: "asset-job-error", asset: jobIDs[index].uuidString, job: index + 1)
                 IOSImportDiagnostics.log("asset-job[\(index + 1)] ERROR elapsed=\(started.duration(to: .now)) error=\(String(describing: type(of: error)))")
                 throw error
             }
@@ -1714,13 +1651,11 @@ final class IOSForegroundImportCoordinator: ObservableObject {
                 onAssetCompleted(selection[result.0].id)
                 if case .reconciled = result.1 { reconciledCount += 1 }
             } else {
-                let assetIndex = jobIndices[outcome.index]
                 var message = outcome.errorDescription ?? "Asset-Import fehlgeschlagen."
                 if outcome.isFatalServerError {
                     message += " Andere bereits laufende Übertragungen werden noch beendet; der Import wird anschließend angehalten."
                 }
                 failures.append(message)
-                try await queueStore.markAsset(runID: runID, assetID: persistedAssets[assetIndex].queueAssetID, state: .failed, lastConfirmedStep: "asset-failed")
             }
         }
         self.markReconciled(count: reconciledCount)
@@ -1730,11 +1665,11 @@ final class IOSForegroundImportCoordinator: ObservableObject {
         IOSImportDiagnostics.log("asset-scheduler END jobs=\(jobIndices.count) completed=\(outcomes.count)")
     }
 
-    private func runAssetJob(index: Int, selected: GalleryAsset, asset: AssetInventory, entry: InventoryAssetReply, reply: InventoryReply, library: PhotoLibraryModel, connection: ConnectorConnection, source: PhotoSource, targetRoot: String, transport: any DAVTransport, folderCoordinator: WebDAVFolderCoordinator, runID: UUID, queueAsset: PersistedImportAsset) async throws -> AssetJobOutcome {
+    private func runAssetJob(index: Int, selected: GalleryAsset, asset: AssetInventory, entry: InventoryAssetReply, reply: InventoryReply, library: PhotoLibraryModel, connection: ConnectorConnection, source: PhotoSource, targetRoot: String, transport: any DAVTransport, folderCoordinator: WebDAVFolderCoordinator, clientRunID: UUID, jobID: UUID) async throws -> AssetJobOutcome {
         try Task.checkCancellation()
+        guard clientRunGeneration.accepts(clientRunID) else { throw CancellationError() }
         guard reply.assets.indices.contains(index) else { throw InventoryCheckError.invalidResponse }
-        if queueAsset.state == .completed { return .completed }
-        let queueAssetID = queueAsset.queueAssetID
+        let queueAssetID = jobID
         if entry.state == .known { throw InventoryCheckError.invalidResponse }
         guard let ticket = entry.upload else { throw InventoryCheckError.invalidResponse }
         IOSImportDiagnostics.log("asset-job[\(index + 1)] resource-selection START")
@@ -1742,15 +1677,18 @@ final class IOSForegroundImportCoordinator: ObservableObject {
         let exportPhase = IOSImportDiagnostics.start("asset-job[\(index + 1)] photo-original-export")
         let exported: PhotoLibraryModel.ExportedOriginal
         do { exported = try await library.exportOriginal(for: selected, diagnosticAssetID: queueAssetID.uuidString, diagnosticJob: index + 1) { [weak self] phase in
+            guard await self?.isCurrentRun(clientRunID) == true else { return }
             await self?.transitionJob(index, to: phase)
         }; IOSImportDiagnostics.memory(phase: "photo-export-end", asset: queueAssetID.uuidString, job: index + 1); IOSImportDiagnostics.finish("asset-job[\(index + 1)] photo-original-export", started: exportPhase, detail: "bytes=pending") }
         catch { IOSImportDiagnostics.failure("asset-job[\(index + 1)] photo-original-export", started: exportPhase, error: error); throw error }
         defer { try? FileManager.default.removeItem(at: exported.url.deletingLastPathComponent()) }
+        try Task.checkCancellation()
+        guard clientRunGeneration.accepts(clientRunID) else { throw CancellationError() }
         transitionJob(index, to: .hashing)
         let hashPhase = IOSImportDiagnostics.start("asset-job[\(index + 1)] sha256"); IOSImportDiagnostics.memory(phase: "sha256-start", asset: queueAssetID.uuidString, job: index + 1)
         let identity: ContentIdentity
         do {
-            identity = try await Task.detached {
+            let hashTask = Task.detached {
                 #if DEBUG
                 return try ContentIdentity.read(exported.url) { event in
                     switch event {
@@ -1762,29 +1700,41 @@ final class IOSForegroundImportCoordinator: ObservableObject {
                 #else
                 return try ContentIdentity.read(exported.url)
                 #endif
-            }.value
+            }
+            identity = try await withTaskCancellationHandler {
+                try await hashTask.value
+            } onCancel: {
+                hashTask.cancel()
+            }
             IOSImportDiagnostics.memory(phase: "sha256-end", asset: queueAssetID.uuidString, job: index + 1); IOSImportDiagnostics.finish("asset-job[\(index + 1)] sha256", started: hashPhase, detail: "bytes=\(identity.bytes)")
         }
         catch { IOSImportDiagnostics.failure("asset-job[\(index + 1)] sha256", started: hashPhase, error: error); throw error }
+        try Task.checkCancellation()
+        guard clientRunGeneration.accepts(clientRunID) else { throw CancellationError() }
         let date = selected.creationDate
         guard let uploadPath = IOSUploadPath.folder(base: targetRoot, date: date) else { throw UploadError.invalidConfiguration }
         let folder = uploadPath.folder
         let provider = IOSUploadTargets(connection: connection, transport: transport, source: source.sourceId.uuidString.lowercased(), runId: reply.runId, uploadId: ticket.uploadId, folder: folder) { [weak self] in
+            guard await self?.isCurrentRun(clientRunID) == true else { return }
             await self?.transitionJob(index, to: .prepare)
         }
         transitionJob(index, to: .prepare)
         IOSImportDiagnostics.log("asset-job[\(index + 1)] prepare-request START")
         IOSImportDiagnostics.memory(phase: "prepare-start", asset: queueAssetID.uuidString, job: index + 1)
         let putPhase = IOSImportDiagnostics.start("asset-job[\(index + 1)] webdav-transfer")
-        try await queueStore.markAsset(runID: runID, assetID: queueAssetID, state: .needsReconcile, lastConfirmedStep: "remote-state-unknown")
         let target: UploadTarget
-        let diagnosticLane = (transferProgress.slot(for: index) ?? -1) + 1
-        let backgroundTransport = IOSBackgroundDAVTransport(base: transport, background: backgroundTransfer, queueAssetID: queueAssetID, localRunID: runID, diagnosticLane: diagnosticLane) { [weak self] in
+        let uploadTransport = IOSPhaseReportingDAVTransport(base: transport) { [weak self] in
+            guard await self?.isCurrentRun(clientRunID) == true else { return }
             await self?.transitionJob(index, to: .put)
         }
-        let backgroundUploader = WebDAVUploader(connection: connection, transport: backgroundTransport, debug: { message in IOSImportDiagnostics.log(message) }, folderCoordinator: folderCoordinator)
-        do { target = try await backgroundUploader.uploadWithTarget(file: exported.url, filename: exported.filename, assetId: ticket.assetId, captureDate: date, targets: provider, targetRoot: uploadPath.root, progress: { [weak self] sent, total in
-            Task { @MainActor in self?.updateTransferProgress(job: index, filename: exported.filename, sent: sent, total: total) }
+        let progressThrottle = IOSUploadProgressThrottle()
+        let uploader = WebDAVUploader(connection: connection, transport: uploadTransport, debug: { message in IOSImportDiagnostics.log(message) }, folderCoordinator: folderCoordinator)
+        do { target = try await uploader.uploadWithTarget(file: exported.url, filename: exported.filename, assetId: ticket.assetId, captureDate: date, targets: provider, targetRoot: uploadPath.root, progress: { [weak self] sent, total in
+            guard progressThrottle.shouldPublish(sent: sent, total: total) else { return }
+            Task { @MainActor in
+                guard self?.clientRunGeneration.accepts(clientRunID) == true else { return }
+                self?.updateTransferProgress(job: index, filename: exported.filename, sent: sent, total: total)
+            }
         }, contentIdentityDiagnostics: { event in
             switch event {
             case .begin: IOSImportDiagnostics.memory(phase: "sha256-read-begin", asset: queueAssetID.uuidString, job: index + 1)
@@ -1796,25 +1746,22 @@ final class IOSForegroundImportCoordinator: ObservableObject {
             IOSImportDiagnostics.failure("asset-job[\(index + 1)] webdav-transfer", started: putPhase, error: error)
             throw IOSUploadFailure.preserving(step: .webDAVPut, from: error)
         }
-        if target.state == "contentAlreadyPresent" { transitionJob(index, to: .reconciliation); try await queueStore.markAsset(runID: runID, assetID: queueAssetID, state: .completed, lastConfirmedStep: "content-reconciled", targetPath: target.path); await backgroundTransport.cleanup(deleteFile: true); return .reconciled }
+        try Task.checkCancellation()
+        guard clientRunGeneration.accepts(clientRunID) else { throw CancellationError() }
+        if target.state == "contentAlreadyPresent" { transitionJob(index, to: .reconciliation); return .reconciled }
         pendingCompletion.insert(index)
         transferProgress.remove(job: index)
         transferSentBytes = transferProgress.sentBytes
         transferTotalBytes = transferProgress.totalBytes
         try Task.checkCancellation()
-        backgroundTransfer.beginComplete(uploadAttemptID: backgroundTransport.uploadAttemptID)
         transitionJob(index, to: .complete)
         do {
-            try await IOSUploadHTTP.complete(connection: connection, transport: transport, source: source.sourceId.uuidString.lowercased(), runId: reply.runId, uploadId: ticket.uploadId, path: target.path, queueAssetID: queueAssetID, uploadAttemptID: backgroundTransport.uploadAttemptID)
+            try await IOSUploadHTTP.complete(connection: connection, transport: transport, source: source.sourceId.uuidString.lowercased(), runId: reply.runId, uploadId: ticket.uploadId, path: target.path, queueAssetID: queueAssetID)
         } catch {
-            backgroundTransfer.endComplete(uploadAttemptID: backgroundTransport.uploadAttemptID)
             pendingCompletion.remove(index)
             throw error
         }
-        backgroundTransfer.endComplete(uploadAttemptID: backgroundTransport.uploadAttemptID)
         pendingCompletion.remove(index)
-        try await queueStore.markAsset(runID: runID, assetID: queueAssetID, state: .completed, lastConfirmedStep: "complete-confirmed", targetPath: target.path)
-        await backgroundTransport.cleanup(deleteFile: true)
         self.markUploaded()
         return .uploaded
     }
@@ -1833,6 +1780,10 @@ final class IOSForegroundImportCoordinator: ObservableObject {
         transferTotalBytes = transferProgress.totalBytes
     }
 
+    private func isCurrentRun(_ clientRunID: UUID) -> Bool {
+        clientRunGeneration.accepts(clientRunID)
+    }
+
     private func transitionJob(_ job: Int, to phase: IOSImportJobPhase) {
         let activeJobs = diagnosticJobPhases[job] == nil ? diagnosticJobPhases.count + 1 : diagnosticJobPhases.count
         let visibleRows = transferProgress.activeEntries.count
@@ -1845,7 +1796,8 @@ final class IOSForegroundImportCoordinator: ObservableObject {
         IOSImportDiagnostics.jobPhaseStarted(lane: lane, phase: phase, activeJobs: activeJobs, visibleRows: visibleRows)
     }
 
-    private func finishTransfer(job: Int, result: String, error: Error? = nil) {
+    private func finishTransfer(job: Int, clientRunID: UUID, result: String, error: Error? = nil) {
+        guard clientRunGeneration.accepts(clientRunID) else { return }
         let remainingJobs = max(0, diagnosticJobPhases.count - 1)
         if let current = diagnosticJobPhases.removeValue(forKey: job) {
             IOSImportDiagnostics.jobPhaseFinished(lane: current.lane, phase: current.phase, started: current.started, result: result, activeJobs: remainingJobs, visibleRows: max(0, transferProgress.activeEntries.count - 1), error: error)
@@ -1878,8 +1830,8 @@ final class IOSForegroundImportCoordinator: ObservableObject {
         IOSImportDiagnostics.log("progress.reconciled-bulk increment=\(count) reconciled=\(reconciled) completed=\(completed) progressPublishCount=1")
     }
     private func finish() { phase = .finished }
-    private func cancelled() { phase = .cancelled; if let runID = activeRunID { Task { try? await queueStore.markRun(runID: runID, state: .cancelled, albumSyncPending: false) } } }
-    private func failed(_ message: String) { failure = message; phase = .failed; if let runID = activeRunID { Task { try? await queueStore.markRun(runID: runID, state: .failed) } } }
+    private func cancelled() { phase = .cancelled }
+    private func failed(_ message: String) { failure = message; phase = .failed }
 }
 
 private struct IOSUploadTargets: UploadTargetProvider {
