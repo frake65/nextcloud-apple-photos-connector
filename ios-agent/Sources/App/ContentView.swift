@@ -188,6 +188,8 @@ private struct GalleryScreen: View {
     let canImport: Bool
     let onCheck: () -> Void
     @AppStorage("apc.ios.gallery.columnCount") private var columnCount = 3
+    @AppStorage("apc.ios.gallery.sortCriterion") private var sortCriterionRaw = GallerySortCriterion.creationDate.rawValue
+    @AppStorage("apc.ios.gallery.sortDirection") private var sortDirectionRaw = GallerySortDirection.descending.rawValue
     private var columns: [GridItem] {
         Array(repeating: GridItem(.flexible(minimum: 0), spacing: 2), count: columnCount)
     }
@@ -196,6 +198,22 @@ private struct GalleryScreen: View {
     @State private var galleryScrollView: UIScrollView?
     @State private var autoScrollDriver: ContinuousScrollDriver?
     @State private var dragLocation: CGPoint?
+
+    private var sortCriterion: GallerySortCriterion {
+        GallerySortCriterion(rawValue: sortCriterionRaw) ?? .creationDate
+    }
+
+    private var sortDirection: GallerySortDirection {
+        GallerySortDirection(rawValue: sortDirectionRaw) ?? .descending
+    }
+
+    private var sortedAssets: [GalleryAsset] {
+        let byID = Dictionary(uniqueKeysWithValues: assets.map { ($0.id, $0) })
+        let values = assets.map {
+            GalleryAssetSortValue(identifier: $0.id, creationDate: $0.creationDate, byteSize: library.assetByteSizes[$0.id])
+        }
+        return GalleryAssetSorting.sorted(values, criterion: sortCriterion, direction: sortDirection).compactMap { byID[$0.identifier] }
+    }
 
     private struct CellFramesKey: PreferenceKey {
         static let defaultValue: [String: CGRect] = [:]
@@ -213,7 +231,7 @@ private struct GalleryScreen: View {
             else if assets.isEmpty { ContentUnavailableView("Keine Medien", systemImage: "photo.on.rectangle.angled", description: Text(library.authorization == .limited ? "Für diese Ansicht sind keine freigegebenen Fotos oder Videos verfügbar." : "Es wurden keine Fotos oder Videos gefunden.")) }
             else {
                 LazyVGrid(columns: columns, spacing: 2) {
-                    ForEach(assets) { item in
+                    ForEach(sortedAssets) { item in
                         Button { selection.toggle(item) } label: {
                             GeometryReader { proxy in
                                 let side = proxy.size.width
@@ -248,11 +266,15 @@ private struct GalleryScreen: View {
             cellFrames = frames
             gestureData.frames = frames
         }
-        .onChange(of: assets.count) { _, _ in
-            gestureData.assets = assets
+        .onChange(of: sortedAssets.map(\.id)) { _, _ in
+            gestureData.assets = sortedAssets
+        }
+        .onChange(of: sortCriterionRaw) { _, _ in
+            if sortCriterion == .fileSize { library.resolveByteSizes(for: assets) }
         }
         .onAppear {
-            gestureData.assets = assets
+            gestureData.assets = sortedAssets
+            if sortCriterion == .fileSize { library.resolveByteSizes(for: assets) }
             debugLog("SELECT GALLERY SCREEN ACTIVE")
         }
         .onDisappear { stopAutoScroll(); selection.endDrag() }
@@ -274,6 +296,18 @@ private struct GalleryScreen: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
+                    Picker("Sortierkriterium", selection: $sortCriterionRaw) {
+                        Text("Erstelldatum").tag(GallerySortCriterion.creationDate.rawValue)
+                        Text("Dateigröße").tag(GallerySortCriterion.fileSize.rawValue)
+                    }
+                    Picker("Sortierrichtung", selection: $sortDirectionRaw) {
+                        Label("Aufsteigend", systemImage: "arrow.up").tag(GallerySortDirection.ascending.rawValue)
+                        Label("Absteigend", systemImage: "arrow.down").tag(GallerySortDirection.descending.rawValue)
+                    }
+                    if sortCriterion == .fileSize && library.isResolvingAssetByteSizes {
+                        Label("Dateigrößen werden ermittelt …", systemImage: "hourglass")
+                    }
+                    Divider()
                     Text("Darstellung")
                     ForEach([3, 4, 5, 6], id: \.self) { count in
                         Button { columnCount = count } label: {
@@ -281,7 +315,7 @@ private struct GalleryScreen: View {
                         }
                     }
                 } label: {
-                    Label("Darstellung", systemImage: "square.grid.3x3")
+                    Label(sortCriterion == .creationDate ? "Erstelldatum" : "Dateigröße", systemImage: sortDirection == .ascending ? "arrow.up" : "arrow.down")
                 }
             }
         }
@@ -295,7 +329,7 @@ private struct GalleryScreen: View {
             .font(.footnote).foregroundStyle(.secondary).padding()
     }
 
-    private var allSelected: Bool { selection.allSelected(in: assets) }
+    private var allSelected: Bool { selection.allSelected(in: sortedAssets) }
 
     private var importAction: some View {
         HStack(spacing: 12) {
@@ -316,8 +350,8 @@ private struct GalleryScreen: View {
     }
 
     private func toggleAll() {
-        if allSelected { selection.deselectAll(in: assets) }
-        else { selection.selectAll(in: assets) }
+        if allSelected { selection.deselectAll(in: sortedAssets) }
+        else { selection.selectAll(in: sortedAssets) }
     }
 
     private func selectionIndicator(for item: GalleryAsset) -> some View {
@@ -902,7 +936,11 @@ private struct InventoryReviewScreen: View {
     var body: some View {
         List {
             Section("Auswahl") {
-                Text(IOSQuantityLocalization.selected(selection.count))
+                Text(IOSQuantityLocalization.selected(ImportSelectionCountPresentation.displayedCount(
+                    currentSelectionCount: selection.count,
+                    transferSelectionCount: importer.total,
+                    isTransferActive: importer.isRunning || importer.isWaitingForWiFi
+                )))
                 if let result {
                     LabeledContent("Bereits in Nextcloud", value: "\(result.known)")
                     LabeledContent("Neu", value: "\(result.new)")

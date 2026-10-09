@@ -57,6 +57,23 @@ private final class IOSPhotoResourceFileSink: @unchecked Sendable {
     }
 }
 
+private final class IOSPhotoResourceByteCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Int64 = 0
+
+    func add(_ count: Int) {
+        lock.lock()
+        value += Int64(count)
+        lock.unlock()
+    }
+
+    func result() -> Int64 {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+}
+
 @MainActor
 final class PhotoLibraryModel: ObservableObject {
     @Published private(set) var authorization: PhotoAuthorizationState
@@ -65,9 +82,13 @@ final class PhotoLibraryModel: ObservableObject {
     @Published private(set) var isLoading = false
     @Published private(set) var hasLoadedInitialState = false
     @Published private(set) var errorMessage: String?
+    @Published private(set) var assetByteSizes: [String: Int64] = [:]
+    @Published private(set) var resolvedAssetByteSizeIDs: Set<String> = []
+    @Published private(set) var isResolvingAssetByteSizes = false
 
     private let imageManager = PHCachingImageManager()
     private var refreshTask: Task<Void, Never>?
+    private var byteSizeTask: Task<Void, Never>?
 
     init() {
         IOSImportDiagnostics.log("[Startup] PhotoKit model init")
@@ -144,6 +165,58 @@ final class PhotoLibraryModel: ObservableObject {
             assets.append(GalleryAsset(asset: asset))
         }
         return assets.sorted { $0.creationDate > $1.creationDate }
+    }
+
+    func resolveByteSizes(for galleryAssets: [GalleryAsset]) {
+        let identifiers = galleryAssets.map(\.id).filter { !resolvedAssetByteSizeIDs.contains($0) }
+        guard !identifiers.isEmpty else { return }
+        byteSizeTask?.cancel()
+        byteSizeTask = Task { [weak self] in
+            guard let self else { return }
+            self.isResolvingAssetByteSizes = true
+            defer { self.isResolvingAssetByteSizes = false }
+            var sizes: [String: Int64] = [:]
+            var resolved = Set<String>()
+            for identifier in identifiers {
+                guard !Task.isCancelled else { return }
+                if let size = try? await Self.originalByteSize(localIdentifier: identifier) {
+                    sizes[identifier] = size
+                }
+                resolved.insert(identifier)
+            }
+            guard !Task.isCancelled else { return }
+            self.assetByteSizes.merge(sizes, uniquingKeysWith: { _, new in new })
+            self.resolvedAssetByteSizeIDs.formUnion(resolved)
+        }
+    }
+
+    nonisolated private static func originalByteSize(localIdentifier: String) async throws -> Int64 {
+        let fetched = PHAsset.fetchAssets(withLocalIdentifiers: [localIdentifier], options: nil)
+        guard let asset = fetched.firstObject else { throw InventoryCheckError.unavailableAsset }
+        let preferredType: PHAssetResourceType = asset.mediaType == .video ? .video : .photo
+        guard let resource = PHAssetResource.assetResources(for: asset).first(where: { $0.type == preferredType }) else {
+            throw InventoryCheckError.unavailableAsset
+        }
+        let options = PHAssetResourceRequestOptions()
+        options.isNetworkAccessAllowed = false
+        let cancellation = IOSPhotoResourceRequestCancellation()
+        let counter = IOSPhotoResourceByteCounter()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let requestID = PHAssetResourceManager.default().requestData(
+                    for: resource,
+                    options: options,
+                    dataReceivedHandler: { counter.add($0.count) },
+                    completionHandler: { error in
+                        if let error { continuation.resume(throwing: error) }
+                        else { continuation.resume(returning: counter.result()) }
+                    }
+                )
+                cancellation.register(requestID)
+            }
+        } onCancel: {
+            cancellation.cancel()
+        }
     }
 
     func inventory(for selection: [GalleryAsset]) throws -> [AssetInventory] {

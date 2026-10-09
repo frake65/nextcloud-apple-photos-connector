@@ -144,6 +144,40 @@
         }
       }
     },
+    "Absteigend" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Descending"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Descendente"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Décroissant"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Aflopend"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Descendente"
+          }
+        }
+      }
+    },
     "Alben" : {
       "localizations" : {
         "en" : {
@@ -412,6 +446,40 @@
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Palavra-passe da aplicação"
+          }
+        }
+      }
+    },
+    "Aufsteigend" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Ascending"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Ascendente"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Croissant"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Oplopend"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Ascendente"
           }
         }
       }
@@ -824,6 +892,74 @@
         }
       }
     },
+    "Dateigröße" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "File Size"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Tamaño del archivo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Taille du fichier"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Bestandsgrootte"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Tamanho do ficheiro"
+          }
+        }
+      }
+    },
+    "Dateigrößen werden ermittelt …" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Determining file sizes…"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Calculando tamaños de archivo…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Calcul de la taille des fichiers…"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Bestandsgroottes bepalen…"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "A determinar o tamanho dos ficheiros…"
+          }
+        }
+      }
+    },
     "Der Zugriff auf Fotos ist für dieses Gerät oder Konto eingeschränkt." : {
       "localizations" : {
         "en" : {
@@ -1230,6 +1366,40 @@
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Verificar novamente"
+          }
+        }
+      }
+    },
+    "Erstelldatum" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Creation Date"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Fecha de creación"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Date de création"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Aanmaakdatum"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Data de criação"
           }
         }
       }
@@ -2288,6 +2458,74 @@
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "URL do servidor"
+          }
+        }
+      }
+    },
+    "Sortierkriterium" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Sort By"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Ordenar por"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Critère de tri"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Sorteercriterium"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Ordenar por"
+          }
+        }
+      }
+    },
+    "Sortierrichtung" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Sort Order"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Orden"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Ordre de tri"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Sorteervolgorde"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Ordem"
           }
         }
       }

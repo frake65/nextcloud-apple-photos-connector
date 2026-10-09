@@ -31,6 +31,61 @@ struct GalleryAsset: Identifiable {
     var durationLabel: String { VideoDurationFormatter.string(from: asset.duration) }
 }
 
+enum GallerySortCriterion: String, CaseIterable {
+    case creationDate
+    case fileSize
+}
+
+enum GallerySortDirection: String, CaseIterable {
+    case ascending
+    case descending
+}
+
+struct GalleryAssetSortValue: Equatable {
+    let identifier: String
+    let creationDate: Date
+    let byteSize: Int64?
+}
+
+enum GalleryAssetSorting {
+    static func sorted(
+        _ values: [GalleryAssetSortValue],
+        criterion: GallerySortCriterion,
+        direction: GallerySortDirection
+    ) -> [GalleryAssetSortValue] {
+        values.sorted { lhs, rhs in
+            switch criterion {
+            case .creationDate:
+                if lhs.creationDate != rhs.creationDate {
+                    return direction == .ascending
+                        ? lhs.creationDate < rhs.creationDate
+                        : lhs.creationDate > rhs.creationDate
+                }
+            case .fileSize:
+                switch (lhs.byteSize, rhs.byteSize) {
+                case let (left?, right?) where left != right:
+                    return direction == .ascending ? left < right : left > right
+                case (_?, nil):
+                    return true
+                case (nil, _?):
+                    return false
+                default:
+                    if lhs.creationDate != rhs.creationDate {
+                        return lhs.creationDate > rhs.creationDate
+                    }
+                }
+            }
+            return lhs.identifier < rhs.identifier
+        }
+    }
+}
+
+enum ImportSelectionCountPresentation {
+    static func displayedCount(currentSelectionCount: Int, transferSelectionCount: Int, isTransferActive: Bool) -> Int {
+        isTransferActive ? transferSelectionCount : currentSelectionCount
+    }
+}
+
 enum VideoDurationFormatter {
     static func string(from duration: TimeInterval) -> String {
         let totalSeconds = max(0, Int(duration.rounded()))

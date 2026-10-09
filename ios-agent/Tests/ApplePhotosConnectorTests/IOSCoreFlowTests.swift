@@ -4,6 +4,33 @@ import XCTest
 import InventoryCore
 
 final class IOSCoreFlowTests: XCTestCase {
+    func testGallerySortsCreationDateInBothDirectionsWithStableIdentifierTieBreak() {
+        let values = [
+            GalleryAssetSortValue(identifier: "b", creationDate: Date(timeIntervalSince1970: 20), byteSize: 10),
+            GalleryAssetSortValue(identifier: "a", creationDate: Date(timeIntervalSince1970: 20), byteSize: 30),
+            GalleryAssetSortValue(identifier: "c", creationDate: Date(timeIntervalSince1970: 10), byteSize: 20)
+        ]
+
+        XCTAssertEqual(GalleryAssetSorting.sorted(values, criterion: .creationDate, direction: .ascending).map(\.identifier), ["c", "a", "b"])
+        XCTAssertEqual(GalleryAssetSorting.sorted(values, criterion: .creationDate, direction: .descending).map(\.identifier), ["a", "b", "c"])
+    }
+
+    func testGallerySortsFileSizeInBothDirectionsAndKeepsUnavailableSizesLast() {
+        let values = [
+            GalleryAssetSortValue(identifier: "unknown", creationDate: Date(timeIntervalSince1970: 30), byteSize: nil),
+            GalleryAssetSortValue(identifier: "large", creationDate: Date(timeIntervalSince1970: 10), byteSize: 30),
+            GalleryAssetSortValue(identifier: "small", creationDate: Date(timeIntervalSince1970: 20), byteSize: 10)
+        ]
+
+        XCTAssertEqual(GalleryAssetSorting.sorted(values, criterion: .fileSize, direction: .ascending).map(\.identifier), ["small", "large", "unknown"])
+        XCTAssertEqual(GalleryAssetSorting.sorted(values, criterion: .fileSize, direction: .descending).map(\.identifier), ["large", "small", "unknown"])
+    }
+
+    func testTransferSelectionCountRemainsCapturedOnlyWhileTransferIsActive() {
+        XCTAssertEqual(ImportSelectionCountPresentation.displayedCount(currentSelectionCount: 7, transferSelectionCount: 20, isTransferActive: true), 20)
+        XCTAssertEqual(ImportSelectionCountPresentation.displayedCount(currentSelectionCount: 7, transferSelectionCount: 20, isTransferActive: false), 7)
+    }
+
     func testInventoryBatchesNeverExceed100AndCover201AssetsExactlyOnce() {
         let plan = IOSInventoryBatching.plan(count: 201)
 
