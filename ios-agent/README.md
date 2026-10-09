@@ -11,7 +11,7 @@ from changing a subsequent run. Network failures end the current run and are
 never resumed automatically. It uses the shared local Swift package at
 `../shared/InventoryCore`.
 
-The current iOS release configuration is marketing version `1.0`, build `2`.
+The current iOS release configuration is marketing version `1.0.7`, build `8`.
 
 The iOS 17 target provides a foreground PhotoKit import path: inventory,
 original export, SHA-256/byte-size calculation, upload prepare, WebDAV PUT
@@ -66,7 +66,7 @@ ticket, and no file bytes are sent.
    **Signing & Capabilities**. Turn on **Automatically manage signing** and
    choose your Apple **Development Team**. No distribution certificate or
    App Store setup is required.
-4. Keep the bundle identifier `de.applephotosconnector.iosagent`. If Xcode
+4. Keep the bundle identifier `de.kettenbeil.photosconnector`. If Xcode
    reports that it is already registered to another team, use a unique
    development bundle identifier for your team before running; the intended
    project identifier remains the default shown above.
@@ -77,7 +77,7 @@ ticket, and no file bytes are sent.
 
 The app uses `NSPhotoLibraryUsageDescription` from `Resources/Info.plist`.
 PhotoKit does not require an additional iOS Photos entitlement or capability
-for this read-only proof of concept.
+for the app's read access to the photo library.
 
 ## Album import semantics
 
@@ -100,12 +100,23 @@ falls back to `local:<localIdentifier>`.
 Album cloud-identifier resolution is batched to avoid a per-member fetch. Some
 public PhotoKit fetches remain synchronous on the MainActor because the current
 UI model is MainActor-bound; no private PhotoKit APIs are used. Large-library
-performance, background uploads, and resume after interruption remain backlog
-items.
+performance and background uploads remain backlog items. An interrupted or
+cancelled import is intentionally not resumed: every explicit start creates a
+fresh client run and uses server inventory to skip assets that were already
+imported successfully.
 
 ## Verification
 
-The current tree is covered by 15 iOS tests, 24 shared-core tests, 125 macOS
-tests, and the standalone PHP/SQLite server suite. Debug and Release builds
-include the APC icon copied from the macOS artwork and the Photos usage
-description.
+Use the shared Xcode schemes to run the iOS and `InventoryCore` regression
+tests. Debug and Release builds include the APC icon copied from the macOS
+artwork and the Photos usage description.
+
+## Release 1.0.7
+
+Version 1.0.7 consolidates foreground imports around a single, cancellable
+client run. Cancelling an import invalidates that run, cancels active PhotoKit
+and URLSession work, prevents queued jobs from starting, and ignores late
+callbacks. The next import always starts with fresh server inventory instead
+of resuming persisted run IDs or upload tickets. Files already committed by
+the server remain protected by content identity and inventory checks, and
+album synchronization still runs only after successful file processing.

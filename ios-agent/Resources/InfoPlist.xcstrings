@@ -22,6 +22,24 @@
             "state" : "machine_translated",
             "value" : "Photos Connector"
           }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Photos Connector"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Photos Connector"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Photos Connector"
+          }
         }
       }
     },
@@ -42,6 +60,24 @@
           }
         },
         "es" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "ApplePhotosConnector"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "ApplePhotosConnector"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "ApplePhotosConnector"
+          }
+        },
+        "pt" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "ApplePhotosConnector"
@@ -69,6 +105,24 @@
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Photos Connector necesita acceder a tu fototeca para poder importar fotos, vídeos y álbumes de Fotos de Apple a Nextcloud."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Photos Connector doit accéder à votre photothèque pour vous permettre d’importer des photos, des vidéos et des albums de Photos dans Nextcloud."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Photos Connector heeft toegang nodig tot je fotobibliotheek, zodat je foto’s, video’s en albums uit Apple Foto’s in Nextcloud kunt importeren."
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Photos Connector necessita de acesso à sua fototeca para que possa importar fotografias, vídeos e álbuns da app Fotografias da Apple para o Nextcloud."
           }
         }
       }

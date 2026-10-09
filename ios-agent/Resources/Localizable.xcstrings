@@ -16,7 +16,19 @@
             "value" : " "
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : " "
+          }
+        },
         "nl" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : " "
+          }
+        },
+        "pt" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : " "
@@ -38,7 +50,19 @@
             "value" : "/Photos/Photos Connector"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "/Photos/Photos Connector"
+          }
+        },
         "nl" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "/Photos/Photos Connector"
+          }
+        },
+        "pt" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "/Photos/Photos Connector"
@@ -66,10 +90,22 @@
             "value" : "%1$@ de %2$@"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "%1$@ sur %2$@"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "%1$@ van %2$@"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "%1$@ de %2$@"
           }
         }
       }
@@ -88,10 +124,22 @@
             "value" : "Cancelar"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Annuler"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Annuleer"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Cancelar"
           }
         }
       }
@@ -110,10 +158,22 @@
             "value" : "Álbumes"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Albums"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Albums"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Álbuns"
           }
         }
       }
@@ -132,10 +192,22 @@
             "value" : "Sincronizando álbumes…"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Synchronisation des albums…"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Albums synchroniseren…"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "A sincronizar álbuns…"
           }
         }
       }
@@ -154,10 +226,22 @@
             "value" : "Cargando álbumes…"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Chargement des albums…"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Albums laden…"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "A carregar álbuns…"
           }
         }
       }
@@ -176,10 +260,22 @@
             "value" : "Deseleccionar todo"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Tout désélectionner"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Deselecteer alles"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Desmarcar tudo"
           }
         }
       }
@@ -198,10 +294,22 @@
             "value" : "Seleccionar todo"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Tout sélectionner"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Selecteer alles"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Selecionar tudo"
           }
         }
       }
@@ -220,10 +328,22 @@
             "value" : "También puedes introducir manualmente el nombre de usuario y la contraseña de aplicación."
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Vous pouvez également saisir manuellement votre nom d’utilisateur et votre mot de passe d’application."
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Je kunt ook de gebruikersnaam en het appwachtwoord handmatig invoeren."
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Em alternativa, pode introduzir manualmente o nome de utilizador e a palavra-passe da aplicação."
           }
         }
       }
@@ -242,10 +362,22 @@
             "value" : "Iniciando sesión en el navegador…"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Connexion dans le navigateur…"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Aanmelden via browser…"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "A iniciar sessão no navegador…"
           }
         }
       }
@@ -264,10 +396,22 @@
             "value" : "Contraseña de aplicación"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Mot de passe d’application"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Appwachtwoord"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Palavra-passe da aplicação"
           }
         }
       }
@@ -286,10 +430,22 @@
             "value" : "Selección"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Sélection"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Selectie"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Seleção"
           }
         }
       }
@@ -308,10 +464,22 @@
             "value" : "Anular selección"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Désélectionner la photo"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Deselecteer foto"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Desmarcar fotografia"
           }
         }
       }
@@ -330,10 +498,22 @@
             "value" : "Con el acceso limitado, es posible que no se vean todos los álbumes."
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Avec un accès limité, certains albums peuvent ne pas être visibles."
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Bij beperkte toegang zijn mogelijk niet alle albums zichtbaar."
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Com acesso limitado, alguns álbuns poderão não estar visíveis."
           }
         }
       }
@@ -352,10 +532,22 @@
             "value" : "Con vídeos grandes, este proceso puede tardar un poco."
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Cette opération peut prendre un certain temps pour les vidéos volumineuses."
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Bij grote video’s kan dit even duren."
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "No caso de vídeos grandes, isto pode demorar algum tempo."
           }
         }
       }
@@ -374,10 +566,22 @@
             "value" : "Nombre de usuario"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Nom d’utilisateur"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Gebruikersnaam"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Nome de utilizador"
           }
         }
       }
@@ -396,10 +600,22 @@
             "value" : "Ya está en Nextcloud"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Déjà dans Nextcloud"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Al aanwezig in Nextcloud"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Já no Nextcloud"
           }
         }
       }
@@ -418,10 +634,22 @@
             "value" : "Introduce un UUID válido."
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Saisissez un UUID valide."
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Voer een geldige UUID in."
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Introduza um UUID válido."
           }
         }
       }
@@ -440,10 +668,22 @@
             "value" : "Visualización"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Disposition"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Weergave"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Disposição"
           }
         }
       }
@@ -462,16 +702,59 @@
             "value" : "La contraseña de aplicación se guarda en el llavero de iOS. La dirección del servidor, el nombre de usuario y el ID de origen se guardan en los ajustes de la app."
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Le mot de passe d’application est stocké dans le trousseau iOS. L’adresse du serveur, le nom d’utilisateur et l’identifiant Source-ID figurent dans les réglages de l’app."
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Het appwachtwoord wordt bewaard in de iOS-sleutelhanger. Het serveradres, de gebruikersnaam en Source-ID staan in de appinstellingen."
           }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "A palavra-passe da aplicação é guardada no Porta-chaves do iOS. O endereço do servidor, o nome de utilizador e a Source-ID são guardados nas definições da aplicação."
+          }
         }
       }
     },
     "Datei" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "File"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Archivo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Fichier"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Bestand"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Ficheiro"
+          }
+        }
+      }
     },
     "Datei wird in Nextcloud überprüft …" : {
       "localizations" : {
@@ -487,16 +770,59 @@
             "value" : "Comprobando el archivo en Nextcloud…"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Vérification du fichier dans Nextcloud…"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Bestand wordt in Nextcloud gecontroleerd…"
           }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "A verificar o ficheiro no Nextcloud…"
+          }
         }
       }
     },
     "Datei wird vorbereitet …" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Preparing file…"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Preparando archivo…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Préparation du fichier…"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Bestand wordt voorbereid…"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "A preparar o ficheiro…"
+          }
+        }
+      }
     },
     "Der Zugriff auf Fotos ist für dieses Gerät oder Konto eingeschränkt." : {
       "localizations" : {
@@ -512,10 +838,22 @@
             "value" : "El acceso a las fotos está restringido para este dispositivo o cuenta."
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "L’accès aux photos est restreint pour cet appareil ou ce compte."
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "De toegang tot foto’s is beperkt voor dit apparaat of deze account."
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "O acesso às fotografias está limitado neste dispositivo ou conta."
           }
         }
       }
@@ -534,10 +872,22 @@
             "value" : "Se ha denegado el acceso. Puedes cambiarlo en Ajustes del iPhone, en Privacidad y seguridad → Fotos."
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "L’accès aux photos a été refusé. Vous pouvez le modifier dans Réglages sur l’iPhone, sous Confidentialité et sécurité > Photos."
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "De toegang is geweigerd. Je kunt dit wijzigen in de iPhone-instellingen onder Privacy en beveiliging > Foto’s."
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "O acesso foi recusado. Pode alterá-lo nas Definições do iPhone em Privacidade e segurança → Fotografias."
           }
         }
       }
@@ -556,10 +906,22 @@
             "value" : "No se ha podido completar el inicio de sesión."
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Impossible de terminer la connexion."
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Aanmelden kon niet worden voltooid."
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Não foi possível concluir o início de sessão."
           }
         }
       }
@@ -578,10 +940,22 @@
             "value" : "La transferencia se realiza en primer plano. Después se sincronizarán los álbumes afectados."
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Le transfert s’effectue au premier plan. Les albums concernés sont ensuite synchronisés."
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "De overdracht wordt op de voorgrond uitgevoerd. Daarna worden de betrokken albums gesynchroniseerd."
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "A transferência decorre em primeiro plano. Em seguida, os álbuns afetados são sincronizados."
           }
         }
       }
@@ -601,10 +975,22 @@
             "value" : "La transferencia continúa."
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Le transfert se poursuit."
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "De overdracht gaat door."
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "A transferência continua."
           }
         }
       }
@@ -623,10 +1009,22 @@
             "value" : "La transferencia se reanudará en cuanto haya una red Wi‑Fi disponible."
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Le transfert reprendra dès qu’une connexion Wi‑Fi sera disponible."
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "De overdracht wordt hervat zodra wifi beschikbaar is."
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "A transferência será retomada quando o Wi‑Fi estiver disponível."
           }
         }
       }
@@ -646,10 +1044,22 @@
             "value" : "La transferencia se ha interrumpido y se puede reanudar."
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Le transfert a été interrompu et peut être repris."
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "De overdracht is onderbroken en kan worden hervat."
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "A transferência foi interrompida e pode ser retomada."
           }
         }
       }
@@ -668,10 +1078,22 @@
             "value" : "Acceso limitado"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Accès limité"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Beperkte toegang"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Acesso limitado"
           }
         }
       }
@@ -690,10 +1112,22 @@
             "value" : "Acceso limitado: solo se muestran las fotos y los vídeos a los que has dado acceso."
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Accès limité : seules les photos et vidéos autorisées sont affichées."
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Beperkte toegang: Alleen foto’s en video’s waartoe je toegang hebt gegeven, worden weergegeven."
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Acesso limitado: são apresentadas apenas as fotografias e os vídeos autorizados."
           }
         }
       }
@@ -712,10 +1146,22 @@
             "value" : "Ajustes"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Réglages"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Instellingen"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Definições"
           }
         }
       }
@@ -734,10 +1180,22 @@
             "value" : "No se han podido guardar los ajustes"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Impossible d’enregistrer les réglages"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Instellingen konden niet worden bewaard"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Não foi possível guardar as definições"
           }
         }
       }
@@ -756,10 +1214,22 @@
             "value" : "Comprobar de nuevo"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Vérifier à nouveau"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Controleer opnieuw"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Verificar novamente"
           }
         }
       }
@@ -778,10 +1248,22 @@
             "value" : "No se han encontrado fotos ni vídeos."
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Aucune photo ni vidéo n’a été trouvée."
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Er zijn geen foto’s of video’s gevonden."
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Não foram encontradas fotografias nem vídeos."
           }
         }
       }
@@ -800,10 +1282,22 @@
             "value" : "Listo"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Terminé"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Gereed"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Concluído"
           }
         }
       }
@@ -823,10 +1317,22 @@
             "value" : "Progreso de %@"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Progression de %@"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Voortgang van %@"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Progresso de %@"
           }
         }
       }
@@ -846,10 +1352,22 @@
             "value" : "Reanudar"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Reprendre"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Hervat"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Retomar"
           }
         }
       }
@@ -868,10 +1386,22 @@
             "value" : "Seleccionar foto"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Sélectionner la photo"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Selecteer foto"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Selecionar fotografia"
           }
         }
       }
@@ -890,10 +1420,22 @@
             "value" : "Fotos"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Photos"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Foto’s"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Fotografias"
           }
         }
       }
@@ -912,10 +1454,22 @@
             "value" : "Importar fotos y álbumes"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Importer les photos et les albums"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Importeer foto’s en albums"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Importar fotografias e álbuns"
           }
         }
       }
@@ -934,10 +1488,22 @@
             "value" : "Transferir fotos y vídeos"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Transférer les photos et les vidéos"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Draag foto’s en video’s over"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Transferir fotografias e vídeos"
           }
         }
       }
@@ -956,10 +1522,22 @@
             "value" : "No hay fotos ni vídeos a los que hayas dado acceso disponibles en esta vista."
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Aucune photo ni vidéo autorisée n’est disponible dans cette vue."
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Voor deze weergave zijn geen foto’s of video’s beschikbaar waartoe je toegang hebt gegeven."
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Não existem fotografias nem vídeos autorizados disponíveis nesta vista."
           }
         }
       }
@@ -978,10 +1556,22 @@
             "value" : "Para que las importaciones del Mac se consideren aquí “ya existentes en Nextcloud”, debe indicarse la misma Source-ID que en el Mac. Se guarda en el archivo source.json de la carpeta Application Support de Apple Photos Connector. Una nueva ID crea un espacio de nombres independiente en el servidor. Usa una ID propia para una fototeca independiente."
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Pour que les imports du Mac soient reconnus ici comme « déjà dans Nextcloud », l’identifiant Source-ID doit être identique à celui du Mac. Il est stocké dans le fichier source.json du dossier Application Support associé à Apple Photos Connector. Un nouvel ID crée un espace de noms distinct sur le serveur. Utilisez un ID distinct pour une photothèque indépendante."
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Om Mac-imports hier als 'al in Nextcloud' te herkennen, moet hier dezelfde Source-ID staan als op de Mac. Deze is opgeslagen in het bestand source.json in de Application Support-map van Apple Photos Connector. Een nieuwe ID maakt een afzonderlijke servernaamruimte. Gebruik voor een zelfstandige fotobibliotheek een eigen ID."
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Para que as importações do Mac sejam reconhecidas aqui como «já no Nextcloud», a Source-ID tem de corresponder à do Mac. Está guardada no ficheiro source.json da pasta Application Support do Apple Photos Connector. Uma nova ID cria um espaço de nomes separado no servidor. Utilize uma ID distinta para uma fototeca independente."
           }
         }
       }
@@ -1000,10 +1590,22 @@
             "value" : "Progreso total"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Progression globale"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Totale voortgang"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Progresso geral"
           }
         }
       }
@@ -1022,10 +1624,22 @@
             "value" : "Importación"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Importation"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Import"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Importação"
           }
         }
       }
@@ -1044,10 +1658,22 @@
             "value" : "Cancelar importación"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Annuler l’importation"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Annuleer import"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Cancelar importação"
           }
         }
       }
@@ -1066,16 +1692,60 @@
             "value" : "No se han encontrado álbumes del usuario en la fototeca."
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Aucun album utilisateur n’a été trouvé dans la photothèque."
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Er zijn geen gebruikersalbums gevonden in de fotobibliotheek."
           }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Não foram encontrados álbuns do utilizador na fototeca."
+          }
         }
       }
     },
     "ios.files.checked" : {
-      "comment" : "Inventory progress"
+      "comment" : "Inventory progress",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "ios.files.checked"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "ios.files.checked"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "ios.files.checked"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "ios.files.checked"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "ios.files.checked"
+          }
+        }
+      }
     },
     "Keine Alben" : {
       "localizations" : {
@@ -1091,16 +1761,59 @@
             "value" : "No hay álbumes"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Aucun album"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Geen albums"
           }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Sem álbuns"
+          }
         }
       }
     },
     "Keine Medien" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "No Media"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "No hay contenido multimedia"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Aucun média"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Geen media"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Sem conteúdos"
+          }
+        }
+      }
     },
     "Manuell anmelden" : {
       "localizations" : {
@@ -1116,10 +1829,22 @@
             "value" : "Iniciar sesión manualmente"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Connexion manuelle"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Log handmatig in"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Iniciar sessão manualmente"
           }
         }
       }
@@ -1138,10 +1863,22 @@
             "value" : "Cargando fototeca…"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Chargement de la photothèque…"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Fotobibliotheek wordt geladen…"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "A carregar fototeca…"
           }
         }
       }
@@ -1160,10 +1897,22 @@
             "value" : "Cargando fototeca…"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Chargement de la photothèque…"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Fotobibliotheek wordt geladen…"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "A carregar fototeca…"
           }
         }
       }
@@ -1182,10 +1931,22 @@
             "value" : "Iniciar sesión en Nextcloud"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Se connecter à Nextcloud"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Log in bij Nextcloud"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Iniciar sessão no Nextcloud"
           }
         }
       }
@@ -1204,10 +1965,22 @@
             "value" : "Usar datos móviles para las transferencias"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Utiliser les données cellulaires pour les transferts"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Gebruik mobiele data voor overdrachten"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Usar dados móveis para transferências"
           }
         }
       }
@@ -1226,10 +1999,22 @@
             "value" : "Nuevo"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Nouveaux"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Nieuw"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Novos"
           }
         }
       }
@@ -1248,7 +2033,19 @@
             "value" : "Nextcloud"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Nextcloud"
+          }
+        },
         "nl" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Nextcloud"
+          }
+        },
+        "pt" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Nextcloud"
@@ -1270,7 +2067,19 @@
             "value" : "Aceptar"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "OK"
+          }
+        },
         "nl" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "OK"
+          }
+        },
+        "pt" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "OK"
@@ -1292,7 +2101,19 @@
             "value" : "Photos Connector"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Photos Connector"
+          }
+        },
         "nl" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Photos Connector"
+          }
+        },
+        "pt" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Photos Connector"
@@ -1315,16 +2136,59 @@
             "value" : "Photos Connector necesita acceder a tu fototeca para que puedas ver en Nextcloud las fotos, los vídeos y los álbumes de Fotos de Apple."
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Photos Connector doit accéder à votre photothèque pour vous permettre de consulter dans Nextcloud les photos, vidéos et albums de Photos."
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Photos Connector heeft toegang nodig tot je fotobibliotheek, zodat je foto’s, video’s en albums uit Apple Foto’s in Nextcloud kunt bekijken."
           }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "O Photos Connector precisa de aceder à sua fototeca para que possa ver fotografias, vídeos e álbuns das Fotografias da Apple no Nextcloud."
+          }
         }
       }
     },
     "Photos Connector benötigt Zugriff auf deine Fotomediathek, damit du Fotos, Videos und Alben aus Apple Fotos zur Nextcloud hochladen kannst." : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Photos Connector needs access to your photo library so you can upload photos, videos, and albums from Apple Photos to Nextcloud."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Photos Connector necesita acceder a tu fototeca para que puedas subir fotos, vídeos y álbumes de Fotos de Apple a Nextcloud."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Photos Connector doit accéder à votre photothèque pour vous permettre de transférer les photos, vidéos et albums de Photos vers Nextcloud."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Photos Connector heeft toegang nodig tot je fotobibliotheek, zodat je foto’s, video’s en albums uit Apple Foto’s naar Nextcloud kunt uploaden."
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "O Photos Connector precisa de aceder à sua fototeca para que possa carregar fotografias, vídeos e álbuns das Fotografias da Apple para o Nextcloud."
+          }
+        }
+      }
     },
     "Prüfe Serveradresse, Benutzername und App-Passwort." : {
       "localizations" : {
@@ -1340,10 +2204,22 @@
             "value" : "Comprueba la dirección del servidor, el nombre de usuario y la contraseña de aplicación."
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Vérifiez l’adresse du serveur, le nom d’utilisateur et le mot de passe d’application."
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Controleer het serveradres, de gebruikersnaam en het appwachtwoord."
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Verifique o endereço do servidor, o nome de utilizador e a palavra-passe da aplicação."
           }
         }
       }
@@ -1362,7 +2238,19 @@
             "value" : "Source-ID"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Identifiant Source-ID"
+          }
+        },
         "nl" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Source-ID"
+          }
+        },
+        "pt" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Source-ID"
@@ -1384,10 +2272,22 @@
             "value" : "URL del servidor"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "URL du serveur"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Server-URL"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "URL do servidor"
           }
         }
       }
@@ -1406,10 +2306,22 @@
             "value" : "Transferencia completada"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Transfert terminé"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Overdracht voltooid"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Transferência concluída"
           }
         }
       }
@@ -1429,10 +2341,22 @@
             "value" : "Transferencia en curso…"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Transfert en cours…"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Bezig met overdragen…"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Transferência em curso…"
           }
         }
       }
@@ -1451,10 +2375,22 @@
             "value" : "Transferencias"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Transferts"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Overdrachten"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Transferências"
           }
         }
       }
@@ -1474,16 +2410,27 @@
             "value" : "Transferencia interrumpida"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Transfert interrompu"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Onderbroken overdracht"
           }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Transferência interrompida"
+          }
         }
       }
     },
     "Upload wird vorbereitet …" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -1497,16 +2444,60 @@
             "value" : "Preparando la subida…"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Préparation du transfert…"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Upload voorbereiden…"
           }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "A preparar o carregamento…"
+          }
         }
       }
     },
     "Upload wird vorbereitet oder im Hintergrund fortgesetzt …" : {
-
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Preparing upload or continuing in the background…"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Preparando la subida o continuándola en segundo plano…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Préparation du transfert ou poursuite en arrière-plan…"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Upload voorbereiden of op de achtergrond voortzetten…"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "A preparar o carregamento ou a continuar em segundo plano…"
+          }
+        }
+      }
     },
     "Upload-Ziel" : {
       "localizations" : {
@@ -1522,10 +2513,22 @@
             "value" : "Destino de subida"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Destination du transfert"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Uploadbestemming"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Destino do carregamento"
           }
         }
       }
@@ -1544,10 +2547,22 @@
             "value" : "UUID de la fototeca lógica"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "UUID de la photothèque logique"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "UUID van de logische fotobibliotheek"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "UUID da fototeca lógica"
           }
         }
       }
@@ -1566,10 +2581,22 @@
             "value" : "Probar conexión"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Tester la connexion"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Test verbinding"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Testar ligação"
           }
         }
       }
@@ -1588,10 +2615,22 @@
             "value" : "Desconectar"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Se déconnecter"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Verbreek verbinding"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Desligar"
           }
         }
       }
@@ -1610,10 +2649,22 @@
             "value" : "Conectado como %@"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Connecté en tant que %@"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Verbonden als %@"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Ligado como %@"
           }
         }
       }
@@ -1632,10 +2683,22 @@
             "value" : "Esperando la autorización en Nextcloud…"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Attente de l’autorisation dans Nextcloud…"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Wachten op goedkeuring in Nextcloud…"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "A aguardar autorização no Nextcloud…"
           }
         }
       }
@@ -1654,16 +2717,59 @@
             "value" : "Esperando a que haya una red Wi‑Fi…"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "En attente du Wi‑Fi…"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Wachten op wifi…"
           }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "À espera de Wi‑Fi…"
+          }
         }
       }
     },
     "Wenn deaktiviert, werden Fotos und Videos ausschließlich über WLAN übertragen." : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "When disabled, photos and videos are transferred only over Wi‑Fi."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Si se desactiva, las fotos y los vídeos solo se transferirán mediante Wi‑Fi."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Si cette option est désactivée, les photos et vidéos sont transférées uniquement via Wi‑Fi."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Als dit is uitgeschakeld, worden foto’s en video’s alleen via wifi overgedragen."
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Quando desativado, as fotografias e os vídeos são transferidos apenas por Wi‑Fi."
+          }
+        }
+      }
     },
     "Wenn deaktiviert, werden Fotos und Videos nur über WLAN übertragen." : {
       "extractionState" : "stale",
@@ -1680,10 +2786,22 @@
             "value" : "Si se desactiva, las fotos y los vídeos solo se transferirán mediante Wi‑Fi."
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Si cette option est désactivée, les photos et vidéos sont transférées uniquement via Wi‑Fi."
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Als dit is uitgeschakeld, worden foto’s en video’s alleen via wifi overgedragen."
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Quando desativado, as fotografias e os vídeos são transferidos apenas por Wi‑Fi."
           }
         }
       }
@@ -1702,10 +2820,22 @@
             "value" : "Carpeta de destino"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Dossier de destination"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Doelmap"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Pasta de destino"
           }
         }
       }
@@ -1724,10 +2854,22 @@
             "value" : "Acceso a tus fotos"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Accès à vos photos"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Toegang tot je foto’s"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Acesso às suas fotografias"
           }
         }
       }
@@ -1746,10 +2888,22 @@
             "value" : "Permitir acceso a las fotos"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Autoriser l’accès aux photos"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "Geef toegang tot foto’s"
+          }
+        },
+        "pt" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Permitir acesso às fotografias"
           }
         }
       }

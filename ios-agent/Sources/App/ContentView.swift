@@ -867,7 +867,7 @@ private struct ImportTransferProgressRow: View {
                 case .preparing:
                     Text("Datei wird vorbereitet …")
                 case .indeterminate:
-                    Text("Upload wird vorbereitet oder im Hintergrund fortgesetzt …")
+                    Text("Upload wird vorbereitet …")
                 case .hidden:
                     Text("Datei")
                 }
