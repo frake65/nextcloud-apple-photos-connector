@@ -1,8 +1,61 @@
 import Foundation
 import Darwin
 
-private enum DAVDiagnostics {
+enum DAVDiagnostics {
     static let enabled = ProcessInfo.processInfo.environment["APC_UPLOAD_DIAGNOSTICS"] == "1"
+
+    static func sanitizedPath(_ url: URL?, user: String) -> String {
+        guard let url else { return "<missing>" }
+        var components = url.path.split(separator: "/").map(String.init)
+        if let filesIndex = components.firstIndex(of: "files"), filesIndex + 1 < components.count {
+            components[filesIndex + 1] = "<user>"
+        } else if !user.isEmpty {
+            components = components.map { $0 == user ? "<user>" : $0 }
+        }
+        return "/" + components.joined(separator: "/")
+    }
+
+    static func safeHeaders(_ headers: [String: String]) -> String {
+        let allowed = Set(["content-type", "content-length", "location", "server", "dav"])
+        return headers.compactMap { key, value in
+            guard allowed.contains(key.lowercased()) else { return nil }
+            let safeValue: String
+            if key.lowercased() == "location", let components = URLComponents(string: value) {
+                var sanitized = components
+                sanitized.user = nil
+                sanitized.password = nil
+                sanitized.query = nil
+                sanitized.fragment = nil
+                safeValue = sanitized.string ?? "<redacted>"
+            } else {
+                safeValue = value
+            }
+            return "\(key)=\(safeValue)"
+        }.sorted().joined(separator: ",")
+    }
+
+    static func safeBody(_ data: Data, limit: Int = 4096) -> String {
+        guard !data.isEmpty else { return "<empty>" }
+        guard var body = String(data: data, encoding: .utf8) else { return "<non-utf8 bytes=\(data.count)>" }
+        body = body.replacingOccurrences(of: "(?i)(authorization|password|token|cookie|secret)(\\s*[:=]\\s*)([^\\s,;\"'<>]+)", with: "$1$2<redacted>", options: [.regularExpression, .caseInsensitive])
+        body = body.replacingOccurrences(of: "(?i)Basic\\s+[A-Za-z0-9+/=]+", with: "Basic <redacted>", options: [.regularExpression, .caseInsensitive])
+        let normalized = body.replacingOccurrences(of: "\\r", with: "\\\\r").replacingOccurrences(of: "\\n", with: "\\\\n")
+        return normalized.count > limit ? String(normalized.prefix(limit)) + "…<truncated>" : normalized
+    }
+
+    static func errorDetail(_ error: Error) -> String {
+        if case let UploadError.http(status) = error {
+            return "httpStatus=\(status)"
+        }
+        let nsError = error as NSError
+        if let urlError = error as? URLError {
+            let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError
+            let underlyingDetail = underlying.map { " underlyingDomain=\($0.domain) underlyingCode=\($0.code)" } ?? ""
+            return "transport=URLError urlError=\(urlError.code.rawValue) domain=\(nsError.domain) code=\(nsError.code)\(underlyingDetail)"
+        }
+        return "transport=error domain=\(nsError.domain) code=\(nsError.code)"
+    }
+
     static func log(_ phase: String, bytes: Int64? = nil) {
         guard enabled else { return }
         var info = mach_task_basic_info(); var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
@@ -372,27 +425,27 @@ public struct WebDAVUploader: Sendable {
             request.setValue("*", forHTTPHeaderField: "If-None-Match")
             request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
             request.setValue(String(Int(captureDate.timeIntervalSince1970)), forHTTPHeaderField: "X-OC-MTime")
-            debug?("Request PUT · path=\(request.url?.path ?? "") · fileBytes=\(identity.bytes)")
+            let diagnosticPath = DAVDiagnostics.sanitizedPath(request.url, user: connection.user)
+            debug?("Request PUT · path=\(diagnosticPath) · fileBytes=\(identity.bytes)")
             debug?("upload.put.start")
             let putStarted = ContinuousClock.now
             debug?("APC IMPORT webdav.put START bytes=\(identity.bytes)")
             let response: DAVResponse
             do {
                 response = try await transport.send(request, file: file, progress: progress)
-                debug?("APC IMPORT webdav.put OK status=\(response.status) elapsed=\(putStarted.duration(to: .now)) bytes=\(identity.bytes)")
+                debug?("APC IMPORT webdav.put RESPONSE method=PUT path=\(diagnosticPath) status=\(response.status) headers=\(DAVDiagnostics.safeHeaders(response.headers)) responseBytes=\(response.data.count) elapsed=\(putStarted.duration(to: .now)) bytes=\(identity.bytes)")
             } catch let error {
-                let detail: String
-                if let urlError = error as? URLError { detail = "urlError=\(urlError.code.rawValue)" }
-                else if case let UploadError.http(status) = error { detail = "httpStatus=\(status)" }
-                else { detail = "error=\(String(describing: type(of: error)))" }
-                debug?("APC IMPORT webdav.put ERROR elapsed=\(putStarted.duration(to: .now)) \(detail)")
+                debug?("APC IMPORT webdav.put ERROR method=PUT path=\(diagnosticPath) bytes=\(identity.bytes) elapsed=\(putStarted.duration(to: .now)) \(DAVDiagnostics.errorDetail(error))")
                 throw error
             }
             debug?("upload.put.status=\(response.status)")
-            debug?("Response PUT · status=\(response.status) · responseBytes=\(response.data.count)")
-            if response.status == 201 { return target }
+            if [200, 201, 204].contains(response.status) { return target }
             // A concurrent successful PUT is rechecked by prepare. No speculative next filename.
-            if response.status != 412 { throw UploadError.http(response.status) }
+            if response.status != 412 {
+                debug?("APC IMPORT webdav.put HTTP_ERROR method=PUT path=\(diagnosticPath) status=\(response.status) headers=\(DAVDiagnostics.safeHeaders(response.headers)) responseBytes=\(response.data.count) responseBody=\(DAVDiagnostics.safeBody(response.data))")
+                throw UploadError.http(response.status)
+            }
+            debug?("APC IMPORT webdav.put CONFLICT method=PUT path=\(diagnosticPath) status=412 responseBytes=\(response.data.count)")
         }
         throw UploadError.collisions
     }

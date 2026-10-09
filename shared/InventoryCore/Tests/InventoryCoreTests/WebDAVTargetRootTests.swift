@@ -96,6 +96,93 @@ final class WebDAVTargetRootTests: XCTestCase {
         let calls = await counter.value
         XCTAssertEqual(calls, 4)
     }
+
+    func testUploadAcceptsSuccessfulWebDAVPutStatuses() async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data("file contents".utf8).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let supplied = ContentIdentity(bytes: 12, sha256: String(repeating: "b", count: 64))
+
+        for status in [200, 201, 204] {
+            let uploader = WebDAVUploader(
+                connection: try ConnectorConnection(server: "https://example.com", user: "user", password: "password"),
+                transport: StatusDAVTransport(putStatus: status)
+            )
+            _ = try await uploader.uploadWithTarget(
+                file: file,
+                filename: "video.mov",
+                assetId: "7",
+                captureDate: Date(timeIntervalSince1970: 1),
+                targets: CapturingUploadTargets(identity: supplied),
+                contentIdentity: supplied
+            )
+        }
+
+        let rejected = WebDAVUploader(
+            connection: try ConnectorConnection(server: "https://example.com", user: "user", password: "password"),
+            transport: StatusDAVTransport(putStatus: 202)
+        )
+        do {
+            _ = try await rejected.uploadWithTarget(
+                file: file,
+                filename: "video.mov",
+                assetId: "7",
+                captureDate: Date(timeIntervalSince1970: 1),
+                targets: CapturingUploadTargets(identity: supplied),
+                contentIdentity: supplied
+            )
+            XCTFail("expected unsupported PUT status")
+        } catch UploadError.http(let status) {
+            XCTAssertEqual(status, 202)
+        }
+    }
+
+    func testUploadPropagatesHTTP413FromPut() async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data("large file placeholder".utf8).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let identity = ContentIdentity(bytes: 22, sha256: String(repeating: "c", count: 64))
+        let uploader = WebDAVUploader(
+            connection: try ConnectorConnection(server: "https://example.com", user: "user", password: "password"),
+            transport: StatusDAVTransport(putStatus: 413)
+        )
+
+        do {
+            _ = try await uploader.uploadWithTarget(
+                file: file,
+                filename: "video.mov",
+                assetId: "7",
+                captureDate: Date(timeIntervalSince1970: 1),
+                targets: CapturingUploadTargets(identity: identity),
+                contentIdentity: identity
+            )
+            XCTFail("expected HTTP 413")
+        } catch UploadError.http(let status) {
+            XCTAssertEqual(status, 413)
+        }
+    }
+
+    func testWebDAVDiagnosticsRedactUsernamesAndSecrets() {
+        let url = URL(string: "https://example.com/remote.php/dav/files/alice/Photos/photo.jpg?token=secret")!
+        XCTAssertEqual(
+            DAVDiagnostics.sanitizedPath(url, user: "alice"),
+            "/remote.php/dav/files/<user>/Photos/photo.jpg"
+        )
+
+        let headers = DAVDiagnostics.safeHeaders([
+            "Location": "https://alice:password@example.com/next?token=secret",
+            "Server": "Nextcloud",
+            "Content-Type": "text/plain"
+        ])
+        XCTAssertFalse(headers.contains("alice"))
+        XCTAssertFalse(headers.contains("password"))
+
+        let body = DAVDiagnostics.safeBody(Data("Authorization: Bearer secret password=top-secret token=abc".utf8))
+        XCTAssertFalse(body.contains("Bearer secret"))
+        XCTAssertFalse(body.contains("top-secret"))
+        XCTAssertFalse(body.contains("token=abc"))
+        XCTAssertTrue(body.contains("<redacted>"))
+    }
 }
 
 private actor CapturingUploadTargets: UploadTargetProvider {
@@ -117,6 +204,18 @@ private struct SuccessfulDAVTransport: DAVTransport {
 
     func send(_ request: URLRequest, file: URL?, kind: DAVRequestKind, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> DAVResponse {
         DAVResponse(status: request.httpMethod == "PUT" ? 201 : 405)
+    }
+}
+
+private struct StatusDAVTransport: DAVTransport {
+    let putStatus: Int
+
+    func send(_ request: URLRequest, file: URL?) async throws -> DAVResponse {
+        DAVResponse(status: request.httpMethod == "PUT" ? putStatus : 405)
+    }
+
+    func send(_ request: URLRequest, file: URL?, kind: DAVRequestKind, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> DAVResponse {
+        DAVResponse(status: request.httpMethod == "PUT" ? putStatus : 405)
     }
 }
 

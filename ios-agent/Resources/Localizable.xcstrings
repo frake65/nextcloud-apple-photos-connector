@@ -859,6 +859,7 @@
       }
     },
     "Datei wird vorbereitet …" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {

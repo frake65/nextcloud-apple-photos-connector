@@ -90,6 +90,33 @@ final class IOSCoreFlowTests: XCTestCase {
         XCTAssertEqual(IOSUploadFailure(step: .complete, status: 500).localizedDescription, "Upload-Abschluss fehlgeschlagen (HTTP 500).")
     }
 
+    func testHTTP413UsesSizeLimitMessageWithoutAssumingFileIsTooLarge() {
+        XCTAssertEqual(
+            IOSUploadFailure(step: .webDAVPut, status: 413).localizedDescription,
+            "Der Server oder ein Proxy hat die Übertragung wegen einer Größenbegrenzung abgelehnt (HTTP 413)."
+        )
+    }
+
+    func testActiveUploadsKeepFailedSideRequestFromShowingServerUnreachable() {
+        let error = InventoryCheckError.network
+        XCTAssertEqual(
+            IOSImportServerStatusPolicy.message(for: error, activeUploadProgress: true),
+            IOSImportServerStatusPolicy.sideRequestFailureMessage)
+        XCTAssertTrue(IOSImportServerStatusPolicy.shouldClearUnreachableStatus(activeUploadProgress: true, successfulResponse: false))
+    }
+
+    func testSuccessfulPutEvidenceClearsPreviouslySetOfflineStatus() {
+        XCTAssertTrue(IOSImportServerStatusPolicy.shouldClearUnreachableStatus(activeUploadProgress: false, successfulResponse: true))
+    }
+
+    func testOfflineWithoutSuccessfulRequestKeepsServerUnreachableMessage() {
+        let error = InventoryCheckError.network
+        XCTAssertEqual(
+            IOSImportServerStatusPolicy.message(for: error, activeUploadProgress: false),
+            error.localizedDescription)
+        XCTAssertFalse(IOSImportServerStatusPolicy.shouldClearUnreachableStatus(activeUploadProgress: false, successfulResponse: false))
+    }
+
     func testUploadFailurePreservesOriginatingHTTPPhase() {
         XCTAssertEqual(
             IOSUploadFailure.preserving(step: .prepare, from: UploadError.http(500)).localizedDescription,
@@ -329,6 +356,8 @@ final class IOSCoreFlowTests: XCTestCase {
 
     func testImportProgressAggregationIsMonotoneAndByteBased() {
         var progress = IOSImportProgressAggregation()
+        progress.register(job: 0, filename: "first.heic")
+        progress.register(job: 1, filename: "second.mov")
         progress.update(job: 0, sent: 40, total: 100)
         XCTAssertEqual(progress.sentBytes, 40)
         progress.update(job: 0, sent: 100, total: 100)
@@ -340,6 +369,8 @@ final class IOSCoreFlowTests: XCTestCase {
 
     func testImportProgressAggregationRemovesCompletedJobs() {
         var progress = IOSImportProgressAggregation()
+        progress.register(job: 0, filename: "first.heic")
+        progress.register(job: 1, filename: "second.mov")
         progress.update(job: 0, sent: 50, total: 100)
         progress.update(job: 1, sent: 20, total: 100)
         XCTAssertEqual(progress.activeFraction, 0.7, accuracy: 0.0001)
@@ -348,8 +379,101 @@ final class IOSCoreFlowTests: XCTestCase {
         XCTAssertEqual(progress.activeEntries.map(\.job), [1])
     }
 
+    func testImportProgressIgnoresLateUpdateAfterJobRemovalAndReusesBothSlots() {
+        var progress = IOSImportProgressAggregation()
+        let largeFileBytes: Int64 = 256 * 1024 * 1024
+        progress.register(job: 10, filename: "large.mov")
+        progress.register(job: 11, filename: "small.heic")
+        progress.update(job: 10, sent: largeFileBytes / 2, total: largeFileBytes)
+        progress.update(job: 11, sent: 227, total: 227)
+
+        progress.remove(job: 10)
+        progress.remove(job: 11)
+        progress.update(job: 10, filename: "large.mov", sent: largeFileBytes, total: largeFileBytes)
+        progress.update(job: 11, filename: "small.heic", sent: 227, total: 227)
+
+        XCTAssertTrue(progress.activeEntries.isEmpty)
+        progress.register(job: 12, filename: "next-large.mov")
+        progress.register(job: 13, filename: "next-small.heic")
+        progress.update(job: 12, sent: largeFileBytes / 4, total: largeFileBytes)
+        progress.update(job: 13, sent: 64, total: 128)
+
+        XCTAssertEqual(progress.activeEntries.map(\.job), [12, 13])
+        XCTAssertEqual(progress.activeEntries.map(\.slot), [0, 1])
+        XCTAssertEqual(progress.activeEntries.map(\.total), [largeFileBytes, 128])
+    }
+
+    func testImportProgressShowsPreparedSecondLaneDuringLargePut() {
+        var progress = IOSImportProgressAggregation()
+        let largeFileBytes: Int64 = 256 * 1024 * 1024
+        progress.register(job: 20, filename: "large.mov")
+        progress.setPhase(job: 20, phase: .put)
+        progress.update(job: 20, sent: largeFileBytes / 2, total: largeFileBytes)
+        progress.register(job: 21, filename: "waiting.heic")
+        let entries = progress.activeEntries
+        XCTAssertEqual(entries.map(\.job), [20, 21])
+        XCTAssertEqual(entries.map(\.phase), [.put, .photoKitResource])
+        XCTAssertEqual(
+            ImportTransferRowPresentation.resolve(phase: .uploading, jobPhase: entries[0].phase, totalBytes: entries[0].total),
+            .determinate
+        )
+        for phase in [IOSImportJobPhase.photoKitResource, .photoKitExport, .hashing, .prepare] {
+            progress.setPhase(job: 21, phase: phase)
+            let slots = progress.slotEntries()
+            XCTAssertEqual(slots.map(\.slot), [0, 1])
+            XCTAssertEqual(slots.map(\.job), [20, 21])
+            XCTAssertEqual(slots[1].lane, 2)
+            XCTAssertEqual(slots[1].phase, phase)
+            XCTAssertEqual(
+                ImportTransferRowPresentation.resolve(phase: .uploading, jobPhase: slots[1].phase, totalBytes: slots[1].total),
+                .preparing)
+        }
+    }
+
+    func testImportTransferSlotsReserveBothRowsWhenOneLaneIsFree() {
+        var progress = IOSImportProgressAggregation()
+        progress.register(job: 20, filename: "large.mov")
+        progress.register(job: 21, filename: "waiting.heic")
+        progress.setPhase(job: 20, phase: .put)
+        progress.setPhase(job: 21, phase: .hashing)
+        progress.remove(job: 20)
+
+        let slots = progress.slotEntries()
+        XCTAssertEqual(slots.map(\.slot), [0, 1])
+        XCTAssertFalse(slots[0].isOccupied)
+        XCTAssertNil(slots[0].filename)
+        XCTAssertNil(slots[0].mediaType)
+        XCTAssertEqual(slots[0].lane, 1)
+        XCTAssertEqual(slots[1].job, 21)
+        XCTAssertEqual(slots[1].phase, .hashing)
+    }
+
+    func testImportTransferActiveSlotKeepsVisiblePreparationPresentation() {
+        XCTAssertEqual(
+            ImportTransferRowPresentation.resolve(
+                phase: .uploading,
+                jobPhase: .photoKitExport,
+                totalBytes: 0),
+            .preparing)
+    }
+
+    func testImportTransferPreparationLabelUsesPhotoMediaType() {
+        XCTAssertEqual(ImportTransferPreparationLabel.text(mediaType: "image"), "Foto wird vorbereitet …")
+    }
+
+    func testImportTransferPreparationLabelUsesVideoMediaType() {
+        XCTAssertEqual(ImportTransferPreparationLabel.text(mediaType: "video"), "Video wird vorbereitet …")
+    }
+
+    func testImportTransferPreparationLabelFallsBackForUnknownMediaType() {
+        XCTAssertEqual(ImportTransferPreparationLabel.text(mediaType: nil), "Datei wird vorbereitet …")
+        XCTAssertEqual(ImportTransferPreparationLabel.text(mediaType: "audio"), "Datei wird vorbereitet …")
+    }
+
     func testImportProgressKeepsParallelPutDenominatorsPerAsset() {
         var progress = IOSImportProgressAggregation()
+        progress.register(job: 0, filename: "first.heic")
+        progress.register(job: 1, filename: "second.mov")
         progress.update(job: 0, sent: 30, total: 100)
         progress.update(job: 1, sent: 200, total: 1000)
         XCTAssertEqual(progress.activeEntries.map(\.total), [100, 1000])
@@ -358,6 +482,8 @@ final class IOSCoreFlowTests: XCTestCase {
 
     func testImportProgressKeepsFilenameForEachParallelTransfer() {
         var progress = IOSImportProgressAggregation()
+        progress.register(job: 0, filename: "IMG_0001.HEIC")
+        progress.register(job: 1, filename: "IMG_0002.MOV")
         progress.update(job: 0, filename: "IMG_0001.HEIC", sent: 30, total: 100)
         progress.update(job: 1, filename: "IMG_0002.MOV", sent: 200, total: 1000)
         progress.update(job: 0, sent: 60, total: 100)
@@ -420,6 +546,31 @@ final class IOSCoreFlowTests: XCTestCase {
         XCTAssertEqual(results, Array(0..<6))
         let maximum = await probe.maximum
         XCTAssertLessThanOrEqual(maximum, 2)
+    }
+
+    func testImportWorkerLimiterStartsSecondUploadWhileFirstIsStillRunning() async {
+        let limiter = IOSImportWorkerLimiter(limit: 2)
+        let firstStarted = expectation(description: "first upload started")
+        let secondStarted = expectation(description: "second upload started")
+        let firstGate = WorkerTestGate()
+
+        let first = Task {
+            await limiter.acquire()
+            firstStarted.fulfill()
+            await firstGate.wait()
+            await limiter.release()
+        }
+        await fulfillment(of: [firstStarted], timeout: 1)
+
+        let second = Task {
+            await limiter.acquire()
+            secondStarted.fulfill()
+            await limiter.release()
+        }
+        await fulfillment(of: [secondStarted], timeout: 1)
+        await firstGate.open()
+        await first.value
+        await second.value
     }
 
     func testAssetJobSchedulerFailsFastAndDoesNotReturnPartialResults() async {
@@ -1052,6 +1203,44 @@ final class IOSCoreFlowTests: XCTestCase {
         XCTAssertTrue(output.contains("Server error: TEST_ERROR"), output)
     }
 
+    func testInventoryDiagnosticsPreserveTransportDomainCodeEndpointAndDuration() async throws {
+        let key = IOSImportDiagnostics.defaultsKey
+        let previous = UserDefaults.standard.object(forKey: key)
+        UserDefaults.standard.set(true, forKey: key)
+        var lines: [String] = []
+        IOSImportDiagnostics.testLogHandler = { lines.append($0) }
+        defer {
+            IOSImportDiagnostics.testLogHandler = nil
+            if let previous { UserDefaults.standard.set(previous, forKey: key) }
+            else { UserDefaults.standard.removeObject(forKey: key) }
+        }
+
+        let connection = try ConnectorConnection(server: "https://cloud.example", user: "alice", password: "secret-password")
+        let source = PhotoSource(sourceId: UUID(), name: "Apple Photos")
+        let asset = AssetInventory(localIdentifier: "local", cloudIdentifier: "cloud", mediaType: "image", creationDate: nil, filename: "photo.jpg")
+
+        do {
+            _ = try await InventoryCheckClient.check(
+                connection: connection,
+                source: source,
+                assets: [asset],
+                batchNumber: 2,
+                transport: FailingConnectivityTransport())
+            XCTFail("Expected inventory transport failure")
+        } catch let error as InventoryCheckError {
+            if case .network = error {} else { XCTFail("Expected network error, got \(error)") }
+        }
+
+        let output = lines.joined(separator: "\n")
+        XCTAssertTrue(output.contains("inventory.request method=POST"), output)
+        XCTAssertTrue(output.contains("endpoint=/index.php/apps/apple_photos_connector/api/v1/inventory"), output)
+        XCTAssertTrue(output.contains("errorDomain=NSURLErrorDomain"), output)
+        XCTAssertTrue(output.contains("errorCode=-1005"), output)
+        XCTAssertTrue(output.contains("duration="), output)
+        XCTAssertFalse(output.contains("secret-password"), output)
+        XCTAssertFalse(output.contains("alice"), output)
+    }
+
     func testInventoryBatchClassificationSkipsAllKnownAssetsAsOneGroup() {
         let known = (0..<100).map { _ in InventoryAssetReply(cloudIdentifier: "known", state: .known, upload: nil) }
         let reply = InventoryReply(runId: "run", summary: .init(seen: 100, new: 0, known: 100), assets: known)
@@ -1243,6 +1432,22 @@ private actor SchedulerProbe {
     private(set) var maximum = 0
     func enter() { active += 1; started += 1; maximum = max(maximum, active) }
     func leave() { active -= 1 }
+}
+
+private actor WorkerTestGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if isOpen { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func open() {
+        isOpen = true
+        waiters.forEach { $0.resume() }
+        waiters.removeAll()
+    }
 }
 
 private actor StartedJobRecorder {

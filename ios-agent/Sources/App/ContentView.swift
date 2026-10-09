@@ -200,7 +200,8 @@ private struct GalleryScreen: View {
     @State private var dragLocation: CGPoint?
 
     private var sortCriterion: GallerySortCriterion {
-        GallerySortCriterion(rawValue: sortCriterionRaw) ?? .creationDate
+        guard #available(iOS 27.0, *) else { return .creationDate }
+        return GallerySortCriterion(rawValue: sortCriterionRaw) ?? .creationDate
     }
 
     private var sortDirection: GallerySortDirection {
@@ -298,7 +299,9 @@ private struct GalleryScreen: View {
                 Menu {
                     Picker("Sortierkriterium", selection: $sortCriterionRaw) {
                         Text("Erstelldatum").tag(GallerySortCriterion.creationDate.rawValue)
-                        Text("Dateigröße").tag(GallerySortCriterion.fileSize.rawValue)
+                        if #available(iOS 27.0, *) {
+                            Text("Dateigröße").tag(GallerySortCriterion.fileSize.rawValue)
+                        }
                     }
                     Picker("Sortierrichtung", selection: $sortDirectionRaw) {
                         Label("Aufsteigend", systemImage: "arrow.up").tag(GallerySortDirection.ascending.rawValue)
@@ -860,13 +863,33 @@ enum ImportTransferRowPresentation: Equatable {
     case indeterminate
     case determinate
 
-    static func resolve(phase: IOSForegroundImportCoordinator.Phase, totalBytes: Int64) -> Self {
-        if phase == .inventory { return .hidden }
-        if totalBytes > 0 { return .determinate }
-        switch phase {
-        case .exporting, .hashing, .preparing: return .preparing
-        case .uploading, .completing: return .indeterminate
-        default: return .hidden
+    static func resolve(phase: IOSForegroundImportCoordinator.Phase, jobPhase: IOSImportJobPhase? = nil, totalBytes: Int64) -> Self {
+        // An active lane's phase is authoritative even while inventory is
+        // being updated for another batch.
+        if jobPhase == nil, phase == .inventory { return .hidden }
+        if jobPhase == .put, totalBytes > 0 { return .determinate }
+        switch jobPhase {
+        case .photoKitResource, .photoKitExport, .hashing, .prepare:
+            return .preparing
+        case .put, .complete, .reconciliation:
+            return .indeterminate
+        case nil:
+            if totalBytes > 0 { return .determinate }
+            switch phase {
+            case .exporting, .hashing, .preparing: return .preparing
+            case .uploading, .completing: return .indeterminate
+            default: return .hidden
+            }
+        }
+    }
+}
+
+enum ImportTransferPreparationLabel {
+    static func text(mediaType: String?) -> String {
+        switch mediaType?.lowercased() {
+        case "image", "photo": return "Foto wird vorbereitet …"
+        case "video": return "Video wird vorbereitet …"
+        default: return "Datei wird vorbereitet …"
         }
     }
 }
@@ -876,13 +899,36 @@ private struct ImportTransferProgressRow: View {
     let filename: String?
     let sentBytes: Int64
     let totalBytes: Int64
+    let mediaType: String?
+    let jobPhase: IOSImportJobPhase?
     let isOccupied: Bool
 
-    private var isVisible: Bool {
-        isOccupied && presentation != .hidden
+    private var preparingText: String {
+        switch jobPhase {
+        case .photoKitResource: ImportTransferPreparationLabel.text(mediaType: mediaType)
+        case .photoKitExport: "Datei wird aus Fotos exportiert …"
+        case .hashing: "Datei wird geprüft …"
+        case .prepare: "Upload wird vorbereitet …"
+        default: "Datei wird vorbereitet …"
+        }
     }
 
     var body: some View {
+        Group {
+            if isOccupied {
+                occupiedBody
+            } else {
+                // Keep the same row in the layout without exposing a free-slot
+                // label. This preserves the transfer area's height for one or
+                // two active workers.
+                occupiedBody
+                    .hidden()
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+
+    private var occupiedBody: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(filename ?? "Datei")
                 .lineLimit(1)
@@ -899,7 +945,7 @@ private struct ImportTransferProgressRow: View {
                 case .determinate:
                     Text("\(ByteCountFormatter.string(fromByteCount: sentBytes, countStyle: .file)) von \(ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file))")
                 case .preparing:
-                    Text("Datei wird vorbereitet …")
+                    Text(preparingText)
                 case .indeterminate:
                     Text("Upload wird vorbereitet …")
                 case .hidden:
@@ -910,8 +956,7 @@ private struct ImportTransferProgressRow: View {
             .foregroundStyle(.secondary)
             .lineLimit(1)
         }
-        .opacity(isVisible ? 1 : 0)
-        .accessibilityHidden(!isVisible)
+        .accessibilityHidden(presentation == .hidden)
     }
 }
 
@@ -1097,18 +1142,21 @@ private struct InventoryReviewScreen: View {
 
     @ViewBuilder
     private var transferProgressRows: some View {
-        let transfers = importer.activeTransfers
-        ForEach(0..<2, id: \.self) { slot in
-            let transfer = transfers.first(where: { $0.slot == slot })
-            let totalBytes = transfer?.total ?? 0
+        ForEach(importer.transferSlots) { transfer in
             ImportTransferProgressRow(
                 presentation: ImportTransferRowPresentation.resolve(
                     phase: importer.phase,
-                    totalBytes: totalBytes),
-                filename: transfer?.filename,
-                sentBytes: transfer?.sent ?? 0,
-                totalBytes: totalBytes,
-                isOccupied: transfer != nil)
+                    jobPhase: transfer.phase,
+                    totalBytes: transfer.total),
+                filename: transfer.filename,
+                sentBytes: transfer.sent,
+                totalBytes: transfer.total,
+                mediaType: transfer.mediaType,
+                jobPhase: transfer.phase,
+                isOccupied: transfer.isOccupied)
+        }
+        .onChange(of: importer.transferSlots) { _, _ in
+            importer.logRenderedTransferSlotsIfChanged()
         }
     }
 
@@ -1142,6 +1190,7 @@ private struct InventoryReviewScreen: View {
 
     @MainActor
     private func startImport() {
+        error = nil
         guard let sourceID = connection.parsedSourceId else { error = InventoryCheckError.invalidSourceIdentifier.localizedDescription; return }
         guard let serverConnection = try? connection.makeConnection() else { error = InventoryCheckError.noServerConfiguration.localizedDescription; return }
         importer.start(selection: selection.assets, library: library, connection: serverConnection, source: PhotoSource(sourceId: sourceID, name: "Apple Photos"), targetRoot: connection.targetDirectory) { identifier in
