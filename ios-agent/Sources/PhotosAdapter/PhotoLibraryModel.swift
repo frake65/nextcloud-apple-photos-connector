@@ -197,6 +197,11 @@ final class PhotoLibraryModel: ObservableObject {
         guard let resource = PHAssetResource.assetResources(for: asset).first(where: { $0.type == preferredType }) else {
             throw InventoryCheckError.unavailableAsset
         }
+        if #available(iOS 27.0, *) {
+            if let dataSize = resource.dataSize, dataSize >= 0 {
+                return Int64(dataSize)
+            }
+        }
         let options = PHAssetResourceRequestOptions()
         options.isNetworkAccessAllowed = false
         let cancellation = IOSPhotoResourceRequestCancellation()
