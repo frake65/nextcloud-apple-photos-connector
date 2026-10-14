@@ -14,11 +14,23 @@ public struct NextcloudConnectionClient: Sendable {
     public init(connection: ConnectorConnection, transport: any DAVTransport = NetworkTransport()) { self.connection = connection; self.transport = transport }
     public func statusRequest() -> URLRequest { connection.request(path: ["status.php"], method: "GET") }
     public func validate() async -> ConnectionValidation {
+        let statusRequest = statusRequest()
+        Self.logValidationRequest(statusRequest)
         let response: DAVResponse
-        do { response = try await transport.send(statusRequest(), file: nil) }
-        catch let UploadError.http(status) { return Self.validation(for: status) }
-        catch let error as URLError where error.code == .secureConnectionFailed || error.code == .serverCertificateUntrusted { return ConnectionValidation(result: .tlsOrNetworkError) }
-        catch { return ConnectionValidation(result: .unreachable) }
+        do { response = try await transport.send(statusRequest, file: nil) }
+        catch let UploadError.http(status) {
+            Self.logValidationResponse(path: statusRequest.url?.path, status: status, data: nil, summary: "transport-http")
+            return Self.validation(for: status)
+        }
+        catch let error as URLError where error.code == .secureConnectionFailed || error.code == .serverCertificateUntrusted {
+            Self.logValidationFailure(path: statusRequest.url?.path, error: error)
+            return ConnectionValidation(result: .tlsOrNetworkError)
+        }
+        catch {
+            Self.logValidationFailure(path: statusRequest.url?.path, error: error)
+            return ConnectionValidation(result: .unreachable)
+        }
+        Self.logValidationResponse(path: statusRequest.url?.path, status: response.status, data: response.data, summary: "nextcloud-status")
         do {
             guard (200..<300).contains(response.status) else {
                 if response.status == 401 || response.status == 403 { return ConnectionValidation(result: .authenticationFailed, statusCode: response.status) }
@@ -26,21 +38,54 @@ public struct NextcloudConnectionClient: Sendable {
                 return ConnectionValidation(result: .unexpectedResponse, statusCode: response.status)
             }
             guard let object = try? JSONSerialization.jsonObject(with: response.data) as? [String: Any], object["installed"] != nil else { return ConnectionValidation(result: .unexpectedResponse, statusCode: response.status) }
+            let appRequest = connection.request(path: ["index.php", "apps", "apple_photos_connector", "api", "v1", "status"], method: "GET")
+            Self.logValidationRequest(appRequest)
             let appResponse: DAVResponse
-            do { appResponse = try await transport.send(connection.request(path: ["index.php", "apps", "apple_photos_connector", "api", "v1", "status"], method: "GET"), file: nil) }
+            do { appResponse = try await transport.send(appRequest, file: nil) }
             catch let UploadError.http(status) {
+                Self.logValidationResponse(path: appRequest.url?.path, status: status, data: nil, summary: "transport-http")
                 if status == 401 || status == 403 { return ConnectionValidation(result: .authenticationFailed, statusCode: status, appStatusCode: status) }
                 if status == 404 { return ConnectionValidation(result: .appMissing, statusCode: response.status, appStatusCode: status) }
                 if status >= 500 { return ConnectionValidation(result: .unavailable, statusCode: response.status, appStatusCode: status) }
                 return ConnectionValidation(result: .unexpectedResponse, statusCode: response.status, appStatusCode: status)
             }
+            Self.logValidationResponse(path: appRequest.url?.path, status: appResponse.status, data: appResponse.data, summary: "connector-status")
             if appResponse.status == 401 || appResponse.status == 403 { return ConnectionValidation(result: .authenticationFailed, statusCode: appResponse.status, appStatusCode: appResponse.status) }
             if appResponse.status == 404 { return ConnectionValidation(result: .appMissing, statusCode: appResponse.status, appStatusCode: appResponse.status) }
             if appResponse.status >= 500 { return ConnectionValidation(result: .unavailable, statusCode: appResponse.status, appStatusCode: appResponse.status) }
             guard (200..<300).contains(appResponse.status), let app = try? JSONSerialization.jsonObject(with: appResponse.data) as? [String: Any], app["app"] as? String == "apple_photos_connector" else { return ConnectionValidation(result: .unexpectedResponse, statusCode: appResponse.status, appStatusCode: appResponse.status) }
             return ConnectionValidation(result: .success, statusCode: response.status, appStatusCode: appResponse.status)
-        } catch let error as URLError where error.code == .secureConnectionFailed || error.code == .serverCertificateUntrusted { return ConnectionValidation(result: .tlsOrNetworkError) }
-        catch { return ConnectionValidation(result: .unreachable) }
+        } catch let error as URLError where error.code == .secureConnectionFailed || error.code == .serverCertificateUntrusted {
+            Self.logValidationFailure(path: nil, error: error)
+            return ConnectionValidation(result: .tlsOrNetworkError)
+        }
+        catch {
+            Self.logValidationFailure(path: nil, error: error)
+            return ConnectionValidation(result: .unreachable)
+        }
+    }
+    private static func logValidationRequest(_ request: URLRequest) {
+        print("APC LOGIN validation.request method=\(request.httpMethod ?? "GET") path=\(request.url?.path ?? "<none>")")
+    }
+    private static func logValidationResponse(path: String?, status: Int, data: Data?, summary: String) {
+        let responseSummary = data.map(safeResponseSummary) ?? "no-body"
+        print("APC LOGIN validation.response phase=\(summary) path=\(path ?? "<none>") status=\(status) body=\(responseSummary)")
+    }
+    private static func logValidationFailure(path: String?, error: Error) {
+        let nsError = error as NSError
+        print("APC LOGIN validation.failure path=\(path ?? "<none>") domain=\(nsError.domain) code=\(nsError.code)")
+    }
+    private static func safeResponseSummary(_ data: Data) -> String {
+        guard let object = try? JSONSerialization.jsonObject(with: data) else { return "bytes=\(data.count) format=non-json" }
+        guard let dictionary = object as? [String: Any] else { return "bytes=\(data.count) format=json-non-object" }
+        let keys = dictionary.keys.sorted().joined(separator: ",")
+        let recognized = ["installed", "app"].compactMap { key -> String? in
+            guard let value = dictionary[key] else { return nil }
+            if let boolean = value as? Bool { return "\(key)=\(boolean)" }
+            if let string = value as? String, key == "app" { return "\(key)=\(string)" }
+            return "\(key)=present"
+        }.joined(separator: ",")
+        return "bytes=\(data.count) jsonKeys=[\(keys)] fields=[\(recognized)]"
     }
     private static func validation(for status: Int) -> ConnectionValidation {
         if status == 401 || status == 403 { return ConnectionValidation(result: .authenticationFailed, statusCode: status) }
