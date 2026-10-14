@@ -5,6 +5,33 @@ import XCTest
 @testable import MacAgentSupport
 
 final class InventoryTransportMockTests: XCTestCase {
+    private struct StubResponse: Sendable { let status: Int; let data: Data }
+    private final class StubResponseQueue: @unchecked Sendable {
+        private let lock = NSLock()
+        private var responses: [StubResponse] = []
+        private(set) var requests = 0
+        func reset(_ responses: [StubResponse]) { lock.lock(); self.responses = responses; requests = 0; lock.unlock() }
+        func next() -> StubResponse { lock.lock(); defer { lock.unlock() }; requests += 1; return responses.isEmpty ? StubResponse(status: 500, data: Data()) : responses.removeFirst() }
+        func requestCount() -> Int { lock.lock(); defer { lock.unlock() }; return requests }
+    }
+    private final class StubbedURLProtocol: URLProtocol {
+        static let queue = StubResponseQueue()
+        override class func canInit(with request: URLRequest) -> Bool { true }
+        override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+        override func startLoading() {
+            let stub = Self.queue.next()
+            guard let url = request.url,
+                  let response = HTTPURLResponse(url: url, statusCode: stub.status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"]) else {
+                client?.urlProtocol(self, didFailWithError: UploadError.invalidResponse)
+                return
+            }
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: stub.data)
+            client?.urlProtocolDidFinishLoading(self)
+        }
+        override func stopLoading() {}
+    }
+
     func testAlbumRecoveryRunsForKnownAssetSelection() {
         XCTAssertTrue(AlbumInventoryCoordinator.shouldSyncAfterUpload(selectedAlbumIDs: [], selectedAssetIDs: ["cloud:x"]))
         XCTAssertTrue(AlbumInventoryCoordinator.shouldSyncAfterUpload(selectedAlbumIDs: ["local:album"], selectedAssetIDs: []))
@@ -61,10 +88,63 @@ final class InventoryTransportMockTests: XCTestCase {
         ]
         let result = try InventoryJSON.deduplicating(InventoryJSON.encode(assets, source: source))
         XCTAssertEqual(result.summary.totalAssets, 2)
+        XCTAssertEqual(result.summary.duplicatesSkipped, 1)
         let decoded = try JSONDecoder().decode(ProbeDocument.self, from: Data(result.json.utf8))
         XCTAssertEqual(decoded.assets.map(\.localIdentifier), ["local-1", "local-3"])
     }
     private func connection() throws -> ConnectorConnection { try ConnectorConnection(server: "https://example.invalid", user: "test", password: "x") }
+
+    func testActualNetworkTransportDoesNotRetryAmbiguousInventory503() async throws {
+        StubbedURLProtocol.queue.reset([StubResponse(status: 503, data: Data(#"{"error":"internal traceback /srv/private"}"#.utf8))])
+        let network = NetworkTransport(allowsCellularAccess: true, waitsForConnectivity: false, protocolClasses: [StubbedURLProtocol.self])
+        let log = Log()
+        let coordinator = UploadCoordinator(exporter: FakeExporter(failing: false), transport: network, legacyReceiptURL: receiptURL())
+        do {
+            _ = try await coordinator.run(json: inventoryJSON(), connection: try connection(), debug: { log.add($0) })
+            XCTFail("expected HTTP error")
+        } catch let UploadError.http(status) {
+            XCTAssertEqual(status, 503)
+        }
+        XCTAssertEqual(StubbedURLProtocol.queue.requestCount(), 1)
+        XCTAssertFalse(log.values.contains { $0.contains("internal traceback") || $0.contains("/srv/private") })
+    }
+
+    func testActualNetworkTransportRetriesInventory409Once() async throws {
+        StubbedURLProtocol.queue.reset([
+            StubResponse(status: 409, data: Data(#"{"error":"conflict detail"}"#.utf8)),
+            StubResponse(status: 200, data: Data(#"{"runId":"run","assets":[{"state":"known"}]}"#.utf8))
+        ])
+        let network = NetworkTransport(allowsCellularAccess: true, waitsForConnectivity: false, protocolClasses: [StubbedURLProtocol.self])
+        let coordinator = UploadCoordinator(exporter: FakeExporter(failing: false), transport: network, legacyReceiptURL: receiptURL())
+        let summary = try await coordinator.run(json: inventoryJSON(), connection: try connection())
+        XCTAssertEqual(StubbedURLProtocol.queue.requestCount(), 2)
+        XCTAssertEqual(summary.alreadyInCloudImages, 1)
+    }
+
+    func testActualNetworkTransportDoesNotRetryNonRetryableInventoryStatus() async throws {
+        StubbedURLProtocol.queue.reset([StubResponse(status: 500, data: Data(#"{"error":"internal traceback"}"#.utf8))])
+        let network = NetworkTransport(allowsCellularAccess: true, waitsForConnectivity: false, protocolClasses: [StubbedURLProtocol.self])
+        let coordinator = UploadCoordinator(exporter: FakeExporter(failing: false), transport: network, legacyReceiptURL: receiptURL())
+        do {
+            _ = try await coordinator.run(json: inventoryJSON(), connection: try connection())
+            XCTFail("expected HTTP error")
+        } catch let UploadError.http(status) {
+            XCTAssertEqual(status, 500)
+        }
+        XCTAssertEqual(StubbedURLProtocol.queue.requestCount(), 1)
+    }
+
+    func testDuplicateSelectionsAreReportedInRunSummary() async throws {
+        let source = PhotoSource(sourceId: UUID(uuidString: "00000000-0000-4000-8000-000000000001")!, name: "Test")
+        let duplicates = [
+            AssetInventory(localIdentifier: "local-a", cloudIdentifier: "same-cloud", mediaType: "image", creationDate: nil, filename: "a.jpg"),
+            AssetInventory(localIdentifier: "local-b", cloudIdentifier: "same-cloud", mediaType: "image", creationDate: nil, filename: "b.jpg")
+        ]
+        let selected = try InventoryJSON.filteringByStableIdentity(InventoryJSON.encode(duplicates, source: source), allowed: ["cloud:same-cloud"])
+        let coordinator = UploadCoordinator(exporter: FakeExporter(failing: false), transport: CoordinatorSpy(.known), legacyReceiptURL: receiptURL())
+        let summary = try await coordinator.run(json: selected.json, connection: try connection(), skippedDuplicateAssets: selected.summary.duplicatesSkipped)
+        XCTAssertEqual(summary.skippedDuplicateAssets, 1)
+    }
 
     func testH4NewAssetRunsExportPreparePutAndComplete() async throws {
         let spy = CoordinatorSpy(.new); let c = UploadCoordinator(exporter: FakeExporter(failing: false), transport: spy, legacyReceiptURL: receiptURL())

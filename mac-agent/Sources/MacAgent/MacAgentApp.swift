@@ -608,12 +608,14 @@ private struct InventoryView: View {
                         }
                         model.json = result.json
                         var uploadJSON = result.json
-                        uploadJSON = try InventoryJSON.filteringByStableIdentity(uploadJSON, allowed: selectionSnapshot).json
+                        let selectedInventory = try InventoryJSON.filteringByStableIdentity(uploadJSON, allowed: selectionSnapshot)
+                        uploadJSON = selectedInventory.json
                         model.debugLog.append("Photo inventory ready · assets=\(result.summary.totalAssets) · endpoint=/index.php/apps/apple_photos_connector/api/v1/inventory")
                         model.debugLog.append("Inventory request pending")
                         model.logDebug("Selection snapshot created assets=\(selectionSnapshot.count)")
                         model.debugLog.append("Progress entries pending")
-                        let summary = try await model.uploader.run(json: uploadJSON, connection: connection, targetRoot: targetRoot, progress: { progress in
+                        let summary = try await model.uploader.run(json: uploadJSON, connection: connection, targetRoot: targetRoot,
+                            skippedDuplicateAssets: selectedInventory.summary.duplicatesSkipped, progress: { progress in
                             Task { @MainActor in
                                 guard model.isCurrentUploadRun(clientRunID) else { return }
                                 guard model.uploadState == .running || model.uploadState == .cancelling else { return }
@@ -820,7 +822,12 @@ private struct InventoryView: View {
         if summary.alreadyInCloudImages > 0 { parts.append(L10n.format("alreadyInCloudCount", summary.alreadyInCloudImages, L10n.text(summary.alreadyInCloudImages == 1 ? "photoCountOne" : "photoCountMany"))) }
         if summary.alreadyInCloudVideos > 0 { parts.append(L10n.format("alreadyInCloudCount", summary.alreadyInCloudVideos, L10n.text(summary.alreadyInCloudVideos == 1 ? "videoCountOne" : "videoCountMany"))) }
         if summary.failed > 0 { parts.append(L10n.format("transferFailuresCount", summary.failed)) }
-        if let albums { parts.append("\(albums.membershipsCreated + albums.membershipsReused) Albumzuordnungen durchgeführt") }
+        if summary.skippedDuplicateAssets > 0 { parts.append(L10n.format("duplicatesSkippedCount", summary.skippedDuplicateAssets)) }
+        if let albums {
+            parts.append("\(albums.membershipsCreated + albums.membershipsReused) Albumzuordnungen durchgeführt")
+            if albums.foldersSkipped > 0 { parts.append(L10n.format("albumFoldersSkippedCount", albums.foldersSkipped)) }
+            if albums.membershipsSkippedNotImported > 0 { parts.append(L10n.format("albumMembershipsSkippedCount", albums.membershipsSkippedNotImported)) }
+        }
         return parts.joined(separator: " · ")
     }
 

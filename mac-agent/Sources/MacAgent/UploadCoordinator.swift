@@ -27,6 +27,7 @@ actor UploadCoordinator {
         let uploadedImages: Int; let uploadedVideos: Int; let uploadedOther: Int
         let alreadyInCloudImages: Int; let alreadyInCloudVideos: Int; let alreadyInCloudOther: Int
         let failed: Int
+        let skippedDuplicateAssets: Int
         let finalProgress: Progress
         var shouldCloseProgressSheet: Bool { failed == 0 }
     }
@@ -122,6 +123,12 @@ actor UploadCoordinator {
         // inventory, whose content identity check safely recognizes completed PUTs.
         try? FileManager.default.removeItem(at: legacyReceiptURL)
     }
+    private func shouldRetryHTTP(status: Int, endpoint: String, attempt: Int) -> Bool {
+        guard attempt == 0,
+              ["inventory", "uploads/prepare", "uploads/complete"].contains(endpoint) else { return false }
+        if endpoint == "inventory" { return status == 409 }
+        return status == 503
+    }
     private func post(_ body: [String: Any], endpoint: String, connection: ConnectorConnection) async throws -> Data {
         var request = connection.request(path: ["index.php", "apps", "apple_photos_connector", "api", "v1"] + endpoint.split(separator: "/").map(String.init), method: "POST")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -145,6 +152,13 @@ actor UploadCoordinator {
             let nsError = error as NSError
             if case let UploadError.http(status) = error {
                 debugLog("NETWORK_HTTP_ERROR kind=\(endpoint) status=\(status)")
+                if shouldRetryHTTP(status: status, endpoint: endpoint, attempt: attempt) {
+                    attempt += 1
+                    UploadDiagnostics.log("inventory.retry", retry: attempt, status: status)
+                    debugLog("NETWORK_RETRY kind=\(endpoint) status=\(status) attempt=\(attempt + 1)")
+                    try await Task.sleep(for: .milliseconds(150))
+                    continue
+                }
             } else if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorTimedOut {
                 debugLog("NETWORK_TIMEOUT kind=\(endpoint)")
             } else {
@@ -154,7 +168,7 @@ actor UploadCoordinator {
                 if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorTimedOut {
                     debugLog("inventory.request.timeout")
                 }
-                debugLog("inventory.request.error category=network")
+                debugLog("inventory.request.error category=\(error is UploadError ? "http" : "network")")
             }
             throw error
         }
@@ -166,9 +180,7 @@ actor UploadCoordinator {
         if endpoint == "uploads/prepare" { debugLog("upload.prepare.status=\(response.status)") }
         if endpoint == "uploads/complete" { debugLog("upload.complete.status=\(response.status)") }
         if response.status != 200 {
-            let retryable = response.status == 503 || (response.status == 409 && endpoint == "inventory")
-            if retryable, attempt == 0,
-               (endpoint == "inventory" || endpoint == "uploads/prepare" || endpoint == "uploads/complete") {
+            if shouldRetryHTTP(status: response.status, endpoint: endpoint, attempt: attempt) {
                 attempt += 1
                 UploadDiagnostics.log("inventory.retry", retry: attempt, status: response.status)
                 try await Task.sleep(for: .milliseconds(150))
@@ -179,18 +191,17 @@ actor UploadCoordinator {
                ["invalid_folder", "content_changed", "invalid_ticket", "target_conflict", "invalid_request", "unknown"].contains(code) {
                 debugLog("upload.prepare.error=\(code)")
             }
-            let detail = String(data: response.data, encoding: .utf8) ?? "<non-UTF8 response>"
-            debugLog("Response error · endpoint=/\(endpoint) · body=\(detail)")
+            debugLog("Response error · endpoint=/\(endpoint) · status=\(response.status)")
             if endpoint == "uploads/complete" { debugLog("upload.complete.error category=http") }
             let object = (try? JSONDecoder().decode(ServerErrorBody.self, from: response.data))
-            throw UploadError.server(ServerErrorInfo(status: response.status, message: object?.error, code: object?.code, runId: object?.runId))
+            throw UploadError.server(ServerErrorInfo(status: response.status, code: object?.code, runId: object?.runId))
         }
         if endpoint == "uploads/complete" { debugLog("upload.complete.http.success") }
         return response.data
         }
     }
 
-    private struct ServerErrorBody: Decodable { let error: String?; let code: String?; let runId: String? }
+    private struct ServerErrorBody: Decodable { let code: String?; let runId: String? }
     private func confirm(sourceId: String, runId: String, uploadId: String, path: String, connection: ConnectorConnection) async throws {
         _ = try await post(["sourceId": sourceId, "runId": runId, "uploadId": uploadId,
                            "status": "uploaded", "path": path], endpoint: "uploads/complete", connection: connection)
@@ -266,10 +277,10 @@ actor UploadCoordinator {
         }
     }
 
-    func run(json: String, connection: ConnectorConnection, targetRoot: String? = nil, progress: (@Sendable (Progress) -> Void)? = nil, debug: (@Sendable (String) -> Void)? = nil, onUploaded: (@Sendable (String) -> Void)? = nil) async throws -> RunSummary {
+    func run(json: String, connection: ConnectorConnection, targetRoot: String? = nil, skippedDuplicateAssets: Int = 0, progress: (@Sendable (Progress) -> Void)? = nil, debug: (@Sendable (String) -> Void)? = nil, onUploaded: (@Sendable (String) -> Void)? = nil) async throws -> RunSummary {
         guard !running else { throw RunError.alreadyRunning }
         do {
-            return try await performRun(json: json, connection: connection, targetRoot: targetRoot, progress: progress, debug: debug, onUploaded: onUploaded)
+            return try await performRun(json: json, connection: connection, targetRoot: targetRoot, skippedDuplicateAssets: skippedDuplicateAssets, progress: progress, debug: debug, onUploaded: onUploaded)
             } catch is CancellationError { throw CancellationError() }
         catch {
             // Inventory failures happen before per-asset jobs exist.
@@ -287,7 +298,7 @@ actor UploadCoordinator {
         }
     }
 
-    private func performRun(json: String, connection: ConnectorConnection, targetRoot: String?, progress: (@Sendable (Progress) -> Void)?, debug: (@Sendable (String) -> Void)?, onUploaded: (@Sendable (String) -> Void)?) async throws -> RunSummary {
+    private func performRun(json: String, connection: ConnectorConnection, targetRoot: String?, skippedDuplicateAssets: Int, progress: (@Sendable (Progress) -> Void)?, debug: (@Sendable (String) -> Void)?, onUploaded: (@Sendable (String) -> Void)?) async throws -> RunSummary {
         guard !running else { throw RunError.alreadyRunning }
         running = true
         defer { running = false }
@@ -295,7 +306,8 @@ actor UploadCoordinator {
         try await gate.checkpoint()
         let targetRoot = targetRoot ?? TargetDirectoryPreferences().path
         UploadDiagnostics.log("inventory.encode.begin", bytes: Int64(json.utf8.count))
-        let canonicalJSON = try InventoryJSON.deduplicating(json).json
+        let deduplicated = try InventoryJSON.deduplicating(json)
+        let canonicalJSON = deduplicated.json
         UploadDiagnostics.log("inventory.encode.end", bytes: Int64(canonicalJSON.utf8.count))
         debugSink = debug
         debug?("upload.coordinator.entered")
@@ -483,7 +495,9 @@ actor UploadCoordinator {
         debug?("upload.counter.uploaded=\(uploaded)")
         debug?("upload.outcome=\(failed > 0 ? "failed" : (uploaded > 0 ? "success" : "nothingToDo"))")
         return RunSummary(uploadedImages: uploadedImages, uploadedVideos: uploadedVideos, uploadedOther: uploadedOther,
-            alreadyInCloudImages: alreadyInCloudImages, alreadyInCloudVideos: alreadyInCloudVideos, alreadyInCloudOther: alreadyInCloudOther, failed: failed, finalProgress: await displayState.snapshot())
+            alreadyInCloudImages: alreadyInCloudImages, alreadyInCloudVideos: alreadyInCloudVideos, alreadyInCloudOther: alreadyInCloudOther,
+            failed: failed, skippedDuplicateAssets: max(0, skippedDuplicateAssets) + deduplicated.summary.duplicatesSkipped,
+            finalProgress: await displayState.snapshot())
     }
 }
 

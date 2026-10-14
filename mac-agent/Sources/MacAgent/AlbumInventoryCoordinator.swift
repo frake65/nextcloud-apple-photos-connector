@@ -16,7 +16,8 @@ actor AlbumInventoryCoordinator {
             throw AlbumOperationFailure(stage: .sync, technicalDetail: "stage=album.sync HTTP \(status)")
         }
         guard reply.status == "completed", reply.summary.errors.isEmpty else {
-            throw AlbumOperationFailure(stage: .sync, technicalDetail: "stage=album.sync status=\(reply.status) errors=\(reply.summary.errors.count)")
+            let errorTypes = Set(reply.summary.errors.compactMap(\.type).filter { $0 == "album" || $0 == "membership" }).sorted().joined(separator: ",")
+            throw AlbumOperationFailure(stage: .sync, technicalDetail: "stage=album.sync status=\(reply.status) errors=\(reply.summary.errors.count) errorTypes=\(errorTypes) foldersSkipped=\(reply.summary.foldersSkipped) membershipsSkippedNotImported=\(reply.summary.membershipsSkippedNotImported)")
         }
         let s = reply.summary
         return SyncResult(albumsCreated: s.albumsCreated, albumsReused: s.albumsReused, foldersSkipped: s.foldersSkipped, membershipsCreated: s.membershipsCreated, membershipsReused: s.membershipsReused, membershipsSkippedNotImported: s.membershipsSkippedNotImported)
@@ -75,7 +76,7 @@ actor AlbumInventoryCoordinator {
         catch { throw AlbumOperationFailure.capture(error, stage: .sync) }
         let s=decoded.summary
         let errorTypes = Set(s.errors.compactMap(\.type).filter { $0 == "album" || $0 == "membership" }).sorted().joined(separator: ",")
-        GalleryDebug.log("album.sync.summary source=\(sourceId) albumsCreated=\(s.albumsCreated) albumsReused=\(s.albumsReused) membershipsCreated=\(s.membershipsCreated) membershipsReused=\(s.membershipsReused) skippedNotImported=\(s.membershipsSkippedNotImported) errors=\(s.errors.count) errorTypes=\(errorTypes)", category: s.errors.isEmpty ? "album" : "warning")
+        GalleryDebug.log("album.sync.summary source=\(sourceId) albumsCreated=\(s.albumsCreated) albumsReused=\(s.albumsReused) foldersSkipped=\(s.foldersSkipped) membershipsCreated=\(s.membershipsCreated) membershipsReused=\(s.membershipsReused) membershipsSkippedNotImported=\(s.membershipsSkippedNotImported) errors=\(s.errors.count) errorTypes=\(errorTypes)", category: s.errors.isEmpty ? "album" : "warning")
         do { return try Self.interpret(status: response.status, reply: decoded) }
         catch let failure as AlbumOperationFailure { throw failure }
         catch { throw AlbumOperationFailure.capture(error, stage: .sync) }

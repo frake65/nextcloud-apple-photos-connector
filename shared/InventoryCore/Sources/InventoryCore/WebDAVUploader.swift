@@ -140,21 +140,24 @@ public final class NetworkTransport: NSObject, DAVTransport, URLSessionTaskDeleg
         self.init(allowsCellularAccess: true, waitsForConnectivity: false, responseDiagnostics: nil)
     }
 
-    public init(allowsCellularAccess: Bool, waitsForConnectivity: Bool, responseDiagnostics: (@Sendable (DAVResponse) -> Void)? = nil) {
+    public init(allowsCellularAccess: Bool, waitsForConnectivity: Bool, responseDiagnostics: (@Sendable (DAVResponse) -> Void)? = nil, protocolClasses: [AnyClass]? = nil) {
         self.responseDiagnostics = responseDiagnostics
         let apiConfiguration = URLSessionConfiguration.ephemeral
+        apiConfiguration.protocolClasses = protocolClasses ?? apiConfiguration.protocolClasses
         apiConfiguration.httpCookieStorage = nil
         apiConfiguration.timeoutIntervalForRequest = Self.timeout(for: .api).request
         apiConfiguration.timeoutIntervalForResource = Self.timeout(for: .api).resource
         apiConfiguration.allowsCellularAccess = allowsCellularAccess
         apiConfiguration.waitsForConnectivity = waitsForConnectivity
         let transferConfiguration = URLSessionConfiguration.ephemeral
+        transferConfiguration.protocolClasses = protocolClasses ?? transferConfiguration.protocolClasses
         transferConfiguration.httpCookieStorage = nil
         transferConfiguration.timeoutIntervalForRequest = Self.timeout(for: .fileTransfer).request
         transferConfiguration.timeoutIntervalForResource = Self.timeout(for: .fileTransfer).resource
         transferConfiguration.allowsCellularAccess = allowsCellularAccess
         transferConfiguration.waitsForConnectivity = waitsForConnectivity
         let verificationConfiguration = URLSessionConfiguration.ephemeral
+        verificationConfiguration.protocolClasses = protocolClasses ?? verificationConfiguration.protocolClasses
         verificationConfiguration.httpCookieStorage = nil
         verificationConfiguration.timeoutIntervalForRequest = Self.timeout(for: .longRunningVerification).request
         verificationConfiguration.timeoutIntervalForResource = Self.timeout(for: .longRunningVerification).resource

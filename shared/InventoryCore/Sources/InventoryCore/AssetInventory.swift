@@ -58,19 +58,20 @@ public enum InventoryJSON {
         let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
         let document = try decoder.decode(ScanDocument.self, from: Data(json.utf8))
         var seen = Set<String>()
-        let assets = document.assets.filter {
-            guard allowedLocalIdentifiers.contains($0.localIdentifier) else { return false }
-            return seen.insert($0.stableIdentity).inserted
-        }
-        return (try encode(assets, source: PhotoSource(sourceId: document.source.sourceId, name: document.source.name)), ScanSummary(assets: assets))
+        let candidates = document.assets.filter { allowedLocalIdentifiers.contains($0.localIdentifier) }
+        let assets = candidates.filter { seen.insert($0.stableIdentity).inserted }
+        return (try encode(assets, source: PhotoSource(sourceId: document.source.sourceId, name: document.source.name)),
+                ScanSummary(assets: assets, duplicatesSkipped: candidates.count - assets.count))
     }
 
     public static func filteringByStableIdentity(_ json: String, allowed: Set<String>) throws -> (json: String, summary: ScanSummary) {
         let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
         let document = try decoder.decode(ScanDocument.self, from: Data(json.utf8))
         var seen = Set<String>()
-        let assets = document.assets.filter { allowed.contains($0.stableIdentity) && seen.insert($0.stableIdentity).inserted }
-        return (try encode(assets, source: PhotoSource(sourceId: document.source.sourceId, name: document.source.name)), ScanSummary(assets: assets))
+        let candidates = document.assets.filter { allowed.contains($0.stableIdentity) }
+        let assets = candidates.filter { seen.insert($0.stableIdentity).inserted }
+        return (try encode(assets, source: PhotoSource(sourceId: document.source.sourceId, name: document.source.name)),
+                ScanSummary(assets: assets, duplicatesSkipped: candidates.count - assets.count))
     }
 
     /// Removes duplicate stable identities while preserving the first PhotoKit
@@ -81,7 +82,9 @@ public enum InventoryJSON {
         let document = try decoder.decode(ScanDocument.self, from: Data(json.utf8))
         var seen = Set<String>()
         let assets = document.assets.filter { seen.insert($0.stableIdentity).inserted }
-        return (try encode(assets, source: PhotoSource(sourceId: document.source.sourceId, name: document.source.name)), ScanSummary(assets: assets))
+        let skippedDuplicates = document.assets.count - assets.count
+        return (try encode(assets, source: PhotoSource(sourceId: document.source.sourceId, name: document.source.name)),
+                ScanSummary(assets: assets, duplicatesSkipped: skippedDuplicates))
     }
 }
 
@@ -91,12 +94,14 @@ public struct ScanSummary: Sendable {
     public let withoutCloudIdentifier: Int
     public let images: Int
     public let videos: Int
+    public let duplicatesSkipped: Int
 
-    public init(assets: [AssetInventory]) {
+    public init(assets: [AssetInventory], duplicatesSkipped: Int = 0) {
         totalAssets = assets.count
         withCloudIdentifier = assets.filter { $0.cloudIdentifier != nil }.count
         withoutCloudIdentifier = totalAssets - withCloudIdentifier
         images = assets.filter { $0.mediaType == "image" }.count
         videos = assets.filter { $0.mediaType == "video" }.count
+        self.duplicatesSkipped = duplicatesSkipped
     }
 }
